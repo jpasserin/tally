@@ -80,6 +80,35 @@
   .herosub{font-size:12px;color:var(--muted);margin-top:3px}
   .neg{color:var(--bad)!important} .pos{color:var(--good)}
   .row .v.neg,.row .v.pos{font-weight:700}
+  /* The operations filter, Bench's pattern: one round button, a panel that
+     drops under it, chips for what is active. */
+  .fbar{display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0}
+  .fdrop{position:relative}
+  .fbtn{width:34px;height:28px;border-radius:999px;background:var(--bg2);border:1px solid var(--line);color:var(--txt);cursor:pointer;
+    display:inline-flex;align-items:center;justify-content:center;font-size:14px;padding:0}
+  .fbtn.act{border-color:var(--accent);color:var(--accent2)}
+  .fscrim{position:fixed;inset:0;z-index:8}
+  .fmenu{position:absolute;right:0;top:100%;z-index:9;margin-top:6px;width:min(320px,88vw);display:flex;flex-direction:column;
+    background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:8px;box-shadow:0 8px 24px -8px rgba(0,0,0,.6);
+    text-align:left;font-weight:400}
+  .fsearch{position:relative;margin-bottom:6px}
+  .fsearch input{padding-right:30px}
+  .fsearch .fx{position:absolute;right:9px;top:50%;transform:translateY(-50%);color:var(--muted);cursor:pointer;font-size:16px}
+  .ovf-addf,.ovf-exclf{display:block;width:100%;text-align:left;background:none;border:none;font-size:13px;font-weight:600;padding:7px 9px;
+    border-radius:7px;cursor:pointer;font-family:inherit}
+  .ovf-addf{color:#4a9eff} .ovf-exclf{color:#ff5c6c}
+  .fpick{max-height:180px;overflow:auto;border:1px solid var(--line);border-radius:8px;margin:2px 0 6px}
+  .fpick button{display:block;width:100%;text-align:left;background:none;border:none;color:var(--txt);font-size:12.5px;padding:6px 9px;cursor:pointer;font-family:inherit}
+  .fpick button.cat{font-weight:700}
+  .fpick button.tag{padding-left:22px;color:var(--muted)}
+  .ovf-seg{padding:6px 2px 8px;border-top:1px solid var(--line)}
+  .ovf-sort{display:flex;align-items:center;gap:6px;padding:8px 2px 2px;border-top:1px solid var(--line);font-size:12.5px;color:var(--muted)}
+  .ovf-sort select{flex:1;min-width:0}
+  .fchips{display:flex;flex-wrap:wrap;gap:5px;margin:2px 0 8px}
+  .fchip{display:inline-flex;align-items:center;gap:5px;background:var(--accent);color:#fff;border-radius:999px;padding:2px 9px;font-size:11.5px;font-weight:600}
+  .fchip.exc{background:#ff5c6c}
+  .fchip.plain{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+  .fchip b{cursor:pointer;opacity:.75;font-weight:700}
   table.fx{border-collapse:collapse;width:100%;font-size:12.5px}
   table.fx th,table.fx td{padding:5px 4px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
   table.fx th{color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
@@ -176,9 +205,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=30"></script>
+<script src="backend.js?v=31"></script>
 <script>
-const APP_VERSION="30";
+const APP_VERSION="31";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -189,7 +218,11 @@ const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null,
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{} };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null };
+/* The operations filter, per visit of an account page. */
+const blankFilter = () => ({ q:'', min:'', max:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
+const opFilter = () => state.opf || (state.opf = blankFilter());
+const filterActive = (f) => !!(f.q || f.min || f.max || f.dir || f.inc.length || f.exc.length);
 
 /* ------------------------------------------------------------- the model --
    Categories: a unique name, a type, and tags that are unique across ALL
@@ -612,10 +645,77 @@ function tabAccount(){
 /* One account: its balance and its operations, newest first. Edit (top
    right) opens the widget where only the owners and open/closed can change;
    + opens a new operation. */
+/* An operation's tags, main and secondary, and whether a filter names one
+   of them - by tag or by the category the tag sits in. */
+const opTags = (o) => [o.tag].concat(o.splits.map((sp)=>sp.tag)).filter(Boolean);
+const opHits = (o, f) => opTags(o).some((t)=> f.kind==='tag' ? same(t, f.name) : (catOfTag(t)||{}).name===f.name);
+function filterOps(ops, f){
+  const q = f.q.trim().toLowerCase(), min = num(f.min), max = num(f.max);
+  return ops.filter((o)=>{
+    if (q && !(o.name.toLowerCase().includes(q) || (o.note||'').toLowerCase().includes(q) || opTags(o).some((t)=>t.toLowerCase().includes(q)))) return false;
+    if (isFinite(min) && Math.abs(o.amount) < min) return false;
+    if (isFinite(max) && Math.abs(o.amount) > max) return false;
+    if (f.dir==='in' && o.amount <= 0) return false;
+    if (f.dir==='out' && o.amount >= 0) return false;
+    if (f.inc.length && !f.inc.some((x)=>opHits(o, x))) return false;
+    if (f.exc.some((x)=>opHits(o, x))) return false;
+    return true;
+  }).sort((x,y)=>{
+    let v = 0;
+    if (f.sort==='name') v = x.name.localeCompare(y.name);
+    else if (f.sort==='amount') v = Math.abs(x.amount) - Math.abs(y.amount);
+    else if (f.sort==='tag') v = (((catOfTag(x.tag)||{}).name||'~') + '|' + x.tag).localeCompare(((catOfTag(y.tag)||{}).name||'~') + '|' + y.tag);
+    if (v===0) v = x.date < y.date ? -1 : x.date > y.date ? 1 : 0;
+    return f.desc ? -v : v;
+  });
+}
+const SORTS = [['date','Date'],['name','Name'],['amount','Amount'],['tag','Category / Tag']];
+function filterMenu(f){
+  const pick = f.picking ? `<div class="fpick">${store.categories.map((c)=>
+    `<button class="cat" data-fadd="${f.picking}|cat|${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)};margin-right:7px"></span>${esc(c.name)}</button>`
+    + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-fadd="${f.picking}|tag|${esc(t)}">${esc(t)}</button>`).join('')).join('')
+    || '<button class="tag" disabled>No categories yet</button>'}</div>` : '';
+  return `
+  <div class="fscrim" data-fopen="1"></div>
+  <div class="fmenu">
+    <div class="fsearch"><input id="fq" placeholder="Search…" value="${esc(f.q)}" autocapitalize="off"><span class="fx" data-fclear="q">×</span></div>
+    <button class="ovf-addf" data-fpick="inc">+ Filter</button>
+    <button class="ovf-exclf" data-fpick="exc">− Filter</button>
+    ${pick}
+    <div class="ovf-seg">
+      <div class="btnrow"><input id="fmin" placeholder="Min" inputmode="decimal" value="${esc(f.min)}"><input id="fmax" placeholder="Max" inputmode="decimal" value="${esc(f.max)}"></div>
+      <div class="chips" style="margin-top:6px">${[['','All'],['in','Credits'],['out','Debits']].map(([k,l])=>`<button class="chip ${f.dir===k?'on':''}" data-fdir="${k}">${l}</button>`).join('')}</div>
+    </div>
+    <div class="ovf-sort">Sort <select id="fsort">${SORTS.map(([k,l])=>`<option value="${k}" ${f.sort===k?'selected':''}>${l}</option>`).join('')}</select>
+      <button class="chip" data-fdesc="1">${f.desc?'↓ Desc':'↑ Asc'}</button></div>
+  </div>`;
+}
+function filterChips(f){
+  const chips = [];
+  if (f.q) chips.push(['plain','q','“'+esc(f.q)+'”']);
+  if (f.min || f.max) chips.push(['plain','amt',(f.min?'≥ '+esc(f.min):'')+(f.min&&f.max?' ':'')+(f.max?'≤ '+esc(f.max):'')]);
+  if (f.dir) chips.push(['plain','dir',f.dir==='in'?'Credits':'Debits']);
+  f.inc.forEach((x,i)=>chips.push(['','inc'+i,esc(x.name)]));
+  f.exc.forEach((x,i)=>chips.push(['exc','exc'+i,'− '+esc(x.name)]));
+  return chips.length ? `<div class="fchips">${chips.map(([cls,key,label])=>`<span class="fchip ${cls}">${label}<b data-funfilter="${key}">×</b></span>`).join('')}</div>` : '';
+}
+function opRows(a, ops){
+  return ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap" data-opedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0">
+          <div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
+          <div class="sub">${esc(o.date)} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
+        </div>
+        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${under(o.amount, a.currency, o.date.slice(0,7))}</span>
+      </div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">${filterActive(opFilter())?'Nothing matches.':'Nothing in '+theYear()+'.'}</div>`;
+}
 function accountPage(a){
   const p = state.page;
   const Y = theYear();
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const f = opFilter();
+  const yearOps = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y));
+  const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
   return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
@@ -627,16 +727,12 @@ function accountPage(a){
     <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
   </div>
   <div class="card">
-    <h2>Operations <button class="gbtn" data-opnew="1">+</button></h2>
-    ${ops.length ? `<div class="rows">${ops.map((o)=>`
-      <div class="row tap" data-opedit="${esc(o.id)}">
-        <div style="flex:1;min-width:0">
-          <div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
-          <div class="sub">${esc(o.date)} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
-        </div>
-        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${under(o.amount, a.currency, o.date.slice(0,7))}</span>
-      </div>`).join('')}</div>`
-    : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+    <h2>Operations
+      <span class="fbar"><span class="muted" id="opCount">${ops.length}</span>
+        <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
+        <button class="gbtn" data-opnew="1">+</button></span></h2>
+    ${filterChips(f)}
+    <div id="opsList">${opRows(a, ops)}</div>
   </div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
@@ -1196,8 +1292,35 @@ function wire(){
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>openAcc(null));
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>openAcc(+el.dataset.accedit));
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; render(); });
-  document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
+
+  /* the operations filter */
+  const F = opFilter();
+  const acctNow = () => store.accounts.find((a)=>a.key===state.account);
+  /* Typing redraws the list alone, so the field keeps the finger. */
+  const refreshOps = () => { const a=acctNow(); if (!a) return;
+    const ops = filterOps(opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(theYear())), F);
+    const l=document.getElementById('opsList'); if (l) l.innerHTML = opRows(a, ops);
+    const c=document.getElementById('opCount'); if (c) c.textContent = String(ops.length);
+    document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOpById(el.dataset.opedit)); };
+  document.querySelectorAll('[data-fopen]').forEach((el)=>el.onclick=()=>{ F.open=!F.open; F.picking=null; render(); });
+  const fq=document.getElementById('fq'); if (fq) fq.oninput=()=>{ F.q=fq.value; refreshOps(); };
+  const fmin=document.getElementById('fmin'); if (fmin) fmin.oninput=()=>{ F.min=fmin.value; refreshOps(); };
+  const fmax=document.getElementById('fmax'); if (fmax) fmax.oninput=()=>{ F.max=fmax.value; refreshOps(); };
+  document.querySelectorAll('[data-fclear]').forEach((el)=>el.onclick=()=>{ F.q=''; render(); });
+  document.querySelectorAll('[data-fdir]').forEach((el)=>el.onclick=()=>{ F.dir=el.dataset.fdir; render(); });
+  const fsort=document.getElementById('fsort'); if (fsort) fsort.onchange=()=>{ F.sort=fsort.value; render(); };
+  document.querySelectorAll('[data-fdesc]').forEach((el)=>el.onclick=()=>{ F.desc=!F.desc; render(); });
+  document.querySelectorAll('[data-fpick]').forEach((el)=>el.onclick=()=>{ F.picking = F.picking===el.dataset.fpick ? null : el.dataset.fpick; render(); });
+  document.querySelectorAll('[data-fadd]').forEach((el)=>el.onclick=()=>{ const [which, kind, name] = el.dataset.fadd.split('|');
+    const list = which==='exc' ? F.exc : F.inc;
+    if (!list.some((x)=>x.kind===kind && x.name===name)) list.push({ kind, name });
+    F.picking=null; render(); });
+  document.querySelectorAll('[data-funfilter]').forEach((el)=>el.onclick=()=>{ const k=el.dataset.funfilter;
+    if (k==='q') F.q=''; else if (k==='amt') { F.min=''; F.max=''; } else if (k==='dir') F.dir='';
+    else if (k.startsWith('inc')) F.inc.splice(+k.slice(3),1); else if (k.startsWith('exc')) F.exc.splice(+k.slice(3),1);
+    render(); });
   document.querySelectorAll('[data-accclosed]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.closed=el.dataset.accclosed==='1'; render(); });
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
@@ -1233,12 +1356,13 @@ function wire(){
     for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oTag','tag']]) { const v=g(id); if (v!==undefined) p[f]=v; }
     p.splits = p.splits.map((sp,i)=>({ tag: g('oSpTag'+i) ?? sp.tag, amount: g('oSpAmt'+i) ?? sp.amount }));
     p.closeArm=false; p.delArm=false; };
-  const openOp=(id)=>{ const o = id==null ? null : opsOf(state.account).find((x)=>x.id===id);
+  const openOp=(id)=>{ openOpById(id); };
+  function openOpById(id){ const o = id==null ? null : opsOf(state.account).find((x)=>x.id===id);
     const Y = theYear();
     const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'',
       splits:o?o.splits.map((sp)=>({ tag:sp.tag, amount:String(sp.amount) })):[] };
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
-    render(); state.page.fresh=false; };
+    render(); state.page.fresh=false; }
   document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>openOp(null));
   document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOp(el.dataset.opedit));
   document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', amount:'' }); render(); });
