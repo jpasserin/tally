@@ -74,6 +74,9 @@
   .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
   .cap.fixed{border-color:var(--accent);color:var(--accent2)}
   .hero{font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.05;font-variant-numeric:tabular-nums}
+  /* A single bar split by share, the percentage written in each part. */
+  .pbar{display:flex;height:22px;border-radius:7px;overflow:hidden;margin-top:10px;background:var(--bg2)}
+  .pbar span{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#06101c;min-width:0;overflow:hidden}
   .herosub{font-size:12px;color:var(--muted);margin-top:3px}
   .neg{color:var(--bad)!important} .pos{color:var(--good)}
   .row .v.neg,.row .v.pos{font-weight:700}
@@ -173,9 +176,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=26"></script>
+<script src="backend.js?v=27"></script>
 <script>
-const APP_VERSION="26";
+const APP_VERSION="27";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -186,7 +189,7 @@ const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null,
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{} };
 
 /* ------------------------------------------------------------- the model --
    Categories: a unique name, a type, and tags that are unique across ALL
@@ -446,18 +449,134 @@ const TABS = [
   ['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
   ['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
   ['account','Account','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
-  ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
   ['settings','Settings','<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'],
 ];
 
 const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
 const SCREENS = {
-  summary: () => empty('Summary'),
-  report:  () => empty('Report'),
+  summary: () => subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
+  report:  () => subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? empty('Budgets') : tabReport()),
   account: tabAccount,
-  history: () => empty('History'),
   settings: tabSettings,
 };
+
+/* Sub-tabs under the header, the same bar Settings uses. */
+const SUBS = {
+  summary: [['current','Current','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
+            ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>']],
+  report:  [['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
+            ['prevision','Prevision','<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/><path d="M12 14v4"/><path d="M10 16h4"/>'],
+            ['budgets','Budgets','<path d="M4 8h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 8V6a2 2 0 0 1 2-2h10"/><circle cx="15" cy="14" r="1.5"/>']],
+};
+const sub = (tab) => { const list = SUBS[tab]; const cur = (state.sub||{})[tab]; return list.some(([k])=>k===cur) ? cur : list[0][0]; };
+const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
+  `<button class="${sub(tab)===id?'active':''}" data-sub="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('')}</div>`;
+
+/* ---------------------------------------------------------------- summary --
+   Net worth: every account except the Excluded ones, at the end of the year,
+   in the shown currency at the year-end rate; then how it splits by the
+   currency the money actually sits in. */
+const counted = () => store.accounts.filter((a)=>a.category!=='Excluded');
+const CUR_COLORS = { USD:'#f87171', EUR:'#3b82f6', AUD:'#fbbf24' };
+const kfmt = (v) => { const a = Math.abs(v); const t = a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e4 ? Math.round(v/1e3)+'k' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; return t; };
+function netWorthAt(year){
+  const m = yearMonth(year);
+  let total = 0; const by = { USD:0, EUR:0, AUD:0 };
+  for (const a of counted()) { const v = conv(balanceAt(a, year), a.currency, store.cur, m); if (v==null) continue; total += v; by[a.currency] += v; }
+  return { total: Math.round(total*100)/100, by };
+}
+function tabSummary(){
+  const Y = theYear();
+  const nw = netWorthAt(Y);
+  const pos = CURRENCIES.map((c)=>[c, Math.max(0, nw.by[c])]).filter(([,v])=>v>0);
+  const sum = pos.reduce((t,[,v])=>t+v, 0);
+  return `
+  <div class="card">
+    <h2>Net worth <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
+    <div class="hero ${nw.total<0?'neg':''}">${money(nw.total, store.cur)}</div>
+    ${sum>0 ? `
+    <div class="pbar">${pos.map(([c,v])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${CUR_COLORS[c]}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>
+    <div class="legend" style="margin-top:6px">${CURRENCIES.map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c} (${SYM[store.cur]}${kfmt(nw.by[c])})</span>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+
+/* ----------------------------------------------------------------- report --
+   The year's operations summed per category, in the shown currency at each
+   operation's month. A secondary tag takes its own part; the main tag keeps
+   the rest. Tags no category claims are shown as Unfiled, not dropped. */
+const catOfTag = (t) => store.categories.find((c)=>c.tags.some((x)=>same(x, t))) || null;
+function sumsByCategory(year){
+  const out = {}; let unfiled = 0;
+  for (const a of store.accounts) for (const o of opsOf(a.key)) {
+    if (o.date.slice(0,4)!==String(year)) continue;
+    const m = o.date.slice(0,7);
+    const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount }));
+    parts.push({ tag:o.tag, amount: o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0) });
+    for (const p of parts) {
+      const v = conv(p.amount, a.currency, store.cur, m); if (v==null) continue;
+      const c = catOfTag(p.tag);
+      if (c) out[c.name] = (out[c.name]||0) + v; else unfiled += v;
+    }
+  }
+  return { out, unfiled };
+}
+function reportGroup(title, types, sums){
+  const rows = store.categories.filter((c)=>types.includes(c.type) && sums.out[c.name]).map((c)=>({ c, v:sums.out[c.name] }))
+    .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  const total = rows.reduce((t,r)=>t+r.v, 0);
+  return `
+  <div class="card">
+    <h2>${title} <span class="v ${total<0?'neg':'pos'}" style="text-transform:none;letter-spacing:0">${money(total, store.cur)}</span></h2>
+    ${rows.length ? `<div class="rows">${rows.map((r)=>`
+      <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
+        <span class="muted" style="font-size:11.5px">${esc(r.c.type)}</span></span>
+        <span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nothing this year.</div>`}
+  </div>`;
+}
+function tabReport(){
+  const Y = theYear();
+  const sums = sumsByCategory(Y);
+  return reportGroup('Spendings', ['Necessity','Optional','Misc'], sums)
+    + reportGroup('Income, tax and savings', ['Income','Taxes','Savings'], sums)
+    + (Math.abs(sums.unfiled) >= 0.005 ? `<div class="card"><h2>Unfiled <span class="v" style="text-transform:none;letter-spacing:0">${money(sums.unfiled, store.cur)}</span></h2></div>` : '');
+}
+
+/* ---------------------------------------------------------------- history --
+   Net worth month by month, each month at its own rate, on the zoomable
+   chart. */
+function netWorthMonths(){
+  let first = null;
+  for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
+  if (!first) return [];
+  const now = new Date().toISOString().slice(0,7);
+  const out = [];
+  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
+    const m = y+'-'+String(mo).padStart(2,'0');
+    const end = m + '-31';
+    let total = 0;
+    for (const a of counted()) {
+      const bal = (+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0);
+      const v = conv(bal, a.currency, store.cur, m); if (v!=null) total += v;
+    }
+    out.push({ label: mLabel(m), values: { nw: Math.round(total) } });
+    mo++; if (mo > 12) { mo = 1; y++; }
+  }
+  return out;
+}
+function tabHistory(){
+  const pts = netWorthMonths();
+  const n = pts.length;
+  if (n < 2) return `<div class="card"><h2>Net worth</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
+  if (state.nwHi==null || state.nwHi > n-1 || state.nwHi < 1) state.nwHi = n-1;
+  if (state.nwLo==null || state.nwLo >= state.nwHi) state.nwLo = 0;
+  return `
+  <div class="card">
+    <h2>Net worth <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])} by month</span></h2>
+    ${rangeChart('nw', pts, [{ key:'nw', label:'Net worth', color:'#3b82f6' }], state.nwLo, state.nwHi)}
+  </div>`;
+}
 
 /* --------------------------------------------------------------- accounts --*/
 /* The month whose rate a year-end balance is converted at: December of that
@@ -1152,6 +1271,11 @@ function wire(){
     const pts = sorted.map((r)=>({ label: mLabel(r.month), values: Object.fromEntries(others.map((c)=>[c, rateOf(r, base, c)])) }));
     const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
+  }
+  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; render(); });
+  if (state.tab==='summary' && sub('summary')==='history') {
+    const pts = netWorthMonths();
+    if (pts.length > 1) wireRangeChart('nw', pts, [{ key:'nw', label:'Net worth', color:'#3b82f6' }], ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; });
   }
   const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
   if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
