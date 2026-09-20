@@ -262,9 +262,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=51"></script>
+<script src="backend.js?v=52"></script>
 <script>
-const APP_VERSION="51";
+const APP_VERSION="52";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -899,9 +899,9 @@ function usualTag(name){
   return Object.keys(t).sort((x,y)=>t[y]-t[x])[0] || '';
 }
 function warnings(){
-  const out = [];
+  const out = [], aside = [];
   let hidden = 0;
-  const add = (kind, title, o, a, text) => { if (isDismissed(kind, o, a)) { hidden++; return; }
+  const add = (kind, title, o, a, text) => { if (isDismissed(kind, o, a)) { hidden++; aside.push({ kind, title, o, a, text }); return; }
     let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text }); };
   const all = store.accounts.flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
   const today = TODAY();
@@ -939,7 +939,7 @@ function warnings(){
   /* accounts */
   for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
   out.sort((x,y)=>y.items.length-x.items.length);
-  out.hidden = hidden;
+  out.hidden = hidden; out.aside = aside;
   return out;
 }
 /* Which fixes fit which kind. */
@@ -953,6 +953,7 @@ function tabWarnings(){
   const groups = warnings();
   const n = groups.reduce((t,g)=>t+g.items.length, 0);
   const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : '';
+  if (state.warnKind==='__aside') { if (groups.aside.length) return widget + asidePage(groups.aside); state.warnKind = null; }
   const g = state.warnKind ? groups.find((x)=>x.kind===state.warnKind) : null;
   if (state.warnKind && !g) state.warnKind = null;
   if (g) return widget + warnPage(g);
@@ -963,8 +964,28 @@ function tabWarnings(){
       <div class="row tap" data-warnopen="${x.kind}"><span class="k">${esc(x.title)}</span>
         <span style="display:flex;align-items:center;gap:10px"><span class="v">${x.items.length}</span><span class="chev">›</span></span></div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing suspicious.</div>`}
-    ${groups.hidden ? `<button class="btn" style="margin-top:10px" data-warnundo="1"${LK()}>Bring back ${groups.hidden} marked correct</button>` : ''}
+    ${groups.hidden ? `<button class="btn" style="margin-top:10px" data-warnopen="__aside"${LK()}>Marked correct · ${groups.hidden}</button>` : ''}
   </div>`;
+}
+/* What was marked correct, each with a box; Bring back returns the ticked. */
+function asidePage(items){
+  const on = (k) => state.sel.includes(k);
+  const key = (x) => dismissKey(x.kind, x.o, x.a);
+  return `
+  <div class="card">
+    <h2>Marked correct <span class="muted" style="text-transform:none;letter-spacing:0">${items.length}</span></h2>
+    <div class="rows">${items.map((x)=>{ const k = key(x); return `
+      <div class="row tap" ${x.o?`data-opedit="${esc(x.o.id)}"`:`data-accedit="${store.accounts.indexOf(x.a)}"`}>
+        ${store.locked?'':`<span class="ck ${on(k)?'on':''}" data-selwarn="${esc(k)}">${on(k)?'✓':''}</span>`}
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(x.o ? (x.o.name||'—') : x.a.key)}</div>
+          <div class="sub">${esc(x.title)}${x.o?' · '+esc(x.o.date)+' · '+esc(x.a.key):''} · ${esc(x.text)}</div></div>
+        ${x.o?`<span class="v ${x.o.amount<0?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span>`:'<span class="chev">›</span>'}
+      </div>`; }).join('')}</div>
+    ${store.locked?'':`<button class="btn" style="margin-top:8px" data-warnall="1">${state.sel.length===items.length?'Select none':'Select all'}</button>`}
+  </div>
+  <div style="height:56px"></div>
+  ${state.sel.length?`<div class="selbar raised"><span>${state.sel.length} selected</span><button class="gbtn" data-warnrestore="1">Bring back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>`:''}
+  <div class="closebar"><button class="btn" data-warnclose="1">Close</button></div>`;
 }
 /* One kind, every finding, a box on each; the bar below offers the fixes
    that fit, applied to all the ticked ones. */
@@ -1000,9 +1021,9 @@ function warnBar(g){
           + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-warnpick="tag|${esc(t)}">${dot(typeColor(c.type))}${esc(t)}</button>`).join('')).join('')
       : state.bulk==='file'
       ? store.categories.map((c)=>`<button data-warnpick="file|${esc(c.name)}">${dot(typeColor(c.type))}${esc(c.name)}</button>`).join('')
-      : store.people.map((x)=>`<button data-warnpick="owner|${esc(x.name)}">${esc(x.name)} <span class="muted" style="font-size:11px">${esc(x.type)}</span></button>`).join('');
+      : store.people.map((x)=>{ const on = (state.pick||[]).includes(x.name); return `<button data-warnowner="${esc(x.name)}"><span class="ck ${on?'on':''}" style="margin:0">${on?'✓':''}</span>${esc(x.name)} <span class="muted" style="font-size:11px">${esc(x.type)}</span></button>`; }).join('');
     return `<div class="selbar pick raised">
-      <div class="selhead"><span>${n} selected · ${FIX_LABEL[state.bulk]}</span><button class="gbtn ghost" data-bulk="">Back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>
+      <div class="selhead"><span>${n} selected · ${FIX_LABEL[state.bulk]}</span>${state.bulk==='owner'?`<button class="gbtn" data-warnowners="1" ${(state.pick||[]).length?'':'disabled'}>Apply</button>`:''}<button class="gbtn ghost" data-bulk="">Back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>
       <div class="selpick">${list || '<button disabled>Nothing to pick</button>'}</div></div>`;
   }
   return `<div class="selbar raised"><span>${n} selected</span>${fixes.map((f)=> f==='delete'
@@ -2069,11 +2090,19 @@ function wire(){
   /* warnings: a kind opens its page; fixes act on the ticked findings */
   document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; render(); });
   document.querySelectorAll('[data-warnclose]').forEach((el)=>el.onclick=()=>{ state.warnKind=null; state.sel=[]; state.bulk=null; render(); });
-  document.querySelectorAll('[data-warnundo]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; store.dismissed=[]; commit(); });
+  document.querySelectorAll('[data-warnrestore]').forEach((el)=>el.onclick=()=>{ if (store.locked) return;
+    store.dismissed = (store.dismissed||[]).filter((k)=>!state.sel.includes(k)); state.sel=[]; commit(); });
+  document.querySelectorAll('[data-warnowner]').forEach((el)=>el.onclick=()=>{ const n=el.dataset.warnowner; state.pick = state.pick||[];
+    state.pick = state.pick.includes(n) ? state.pick.filter((x)=>x!==n) : [...state.pick, n]; render(); });
+  document.querySelectorAll('[data-warnowners]').forEach((el)=>el.onclick=()=>{
+    const items = warnItems(), touched = new Set();
+    for (const {o,a} of items) if (!o) { for (const n of state.pick||[]) if (!a.owners.includes(n)) a.owners.push(n); touched.add('Config'); }
+    state.sel=[]; state.bulk=null; state.pick=[]; if (touched.size) commit(...touched); else render(); });
   document.querySelectorAll('[data-selwarn]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
     const k=el.dataset.selwarn; state.sel = state.sel.includes(k) ? state.sel.filter((x)=>x!==k) : [...state.sel, k]; if (!state.sel.length) state.bulk=null; render(); });
-  document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const g = warnings().find((x)=>x.kind===state.warnKind); if (!g) return;
-    const all = g.items.map(({o,a})=> o ? o.id : a.key); state.sel = state.sel.length===all.length ? [] : all; state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const w = warnings();
+    const all = state.warnKind==='__aside' ? w.aside.map((x)=>dismissKey(x.kind, x.o, x.a)) : ((w.find((x)=>x.kind===state.warnKind)||{}).items||[]).map(({o,a})=> o ? o.id : a.key);
+    state.sel = state.sel.length===all.length ? [] : all; state.bulk=null; render(); });
   const warnItems = () => { const g = warnings().find((x)=>x.kind===state.warnKind); return g ? g.items.filter(({o,a})=>state.sel.includes(o ? o.id : a.key)) : []; };
   document.querySelectorAll('[data-warnfix]').forEach((el)=>el.onclick=()=>{
     const fix = el.dataset.warnfix, items = warnItems(), touched = new Set();
@@ -2100,7 +2129,7 @@ function wire(){
     const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id];
     if (!state.sel.length) state.bulk=null; render(); });
   document.querySelectorAll('[data-selclear]').forEach((el)=>el.onclick=()=>{ state.sel=[]; state.bulk=null; render(); });
-  document.querySelectorAll('[data-bulk]').forEach((el)=>el.onclick=()=>{ state.bulk=el.dataset.bulk||null; render(); });
+  document.querySelectorAll('[data-bulk]').forEach((el)=>el.onclick=()=>{ state.bulk=el.dataset.bulk||null; state.pick=[]; render(); });
   document.querySelectorAll('[data-bulkpick]').forEach((el)=>el.onclick=()=>{
     const i = el.dataset.bulkpick.indexOf('|'); const what = el.dataset.bulkpick.slice(0,i), val = el.dataset.bulkpick.slice(i+1);
     const touched = new Set();
