@@ -15,12 +15,23 @@
  * Tally never requires redeploying this.
  */
 
-var BACKEND_VERSION = 3;
+var BACKEND_VERSION = 4;
 
 /* ── configure ─────────────────────────────────────────────────────────── */
 var SHEET_ID = 'PUT_YOUR_SPREADSHEET_ID_HERE';
 var TOKEN    = 'PUT_A_LONG_RANDOM_STRING_HERE';
 /* ──────────────────────────────────────────────────────────────────────── */
+
+/* RUN THIS ONCE from the editor (pick "authorize" in the dropdown, press Run)
+   whenever a new version needs a permission the old one did not have. A web
+   app keeps the permissions it was first granted; only a run from the editor
+   shows the consent screen. This touches everything the script uses. */
+function authorize() {
+  UrlFetchApp.fetch('https://api.frankfurter.dev/v1/latest?base=USD&symbols=EUR', { muteHttpExceptions: true });
+  ScriptApp.getProjectTriggers();
+  SpreadsheetApp.openById(SHEET_ID).getName();
+  return 'ok';
+}
 
 function doGet(e)  { return handle(e, null); }
 function doPost(e) {
