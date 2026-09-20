@@ -35,6 +35,25 @@
   .muted{color:var(--muted)}
 
   .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  /* The sub-tab bar stays put under the header while the page scrolls. */
+  .pillrow.sticky{position:sticky;top:45px;z-index:15;background:var(--bg);padding:2px 0 10px;margin:-2px 0 6px}
+
+  /* A widget over the bottom half of the screen. */
+  .sheetwrap{position:fixed;inset:0;z-index:40}
+  .scrim{position:absolute;inset:0;background:rgba(0,0,0,.5)}
+  .sheet{position:absolute;left:0;right:0;bottom:0;min-height:50vh;max-height:82vh;background:var(--card);
+    border-top:1px solid var(--line);border-radius:20px 20px 0 0;padding:18px 16px calc(14px + env(safe-area-inset-bottom));
+    display:flex;flex-direction:column;gap:10px;overflow-y:auto;animation:up .22s ease;max-width:560px;margin:0 auto}
+  @keyframes up{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
+  .sheet h3{margin:0 0 4px;font-size:16px}
+  .sheet .foot{display:flex;gap:8px;margin-top:auto;padding-top:8px}
+  .sheet .foot .btn.close{flex:0 0 auto;min-width:92px;background:var(--bg2)}
+  .sheet .foot .btn.close.arm{background:var(--bad);border-color:var(--bad);color:#fff}
+  .tagbox{display:flex;flex-wrap:wrap;gap:5px;align-items:center;background:var(--bg2);border:1px solid var(--line);
+    border-radius:10px;padding:6px 8px;cursor:text;min-height:40px}
+  .tagbox:focus-within{border-color:var(--accent)}
+  .tagbox input{flex:1;min-width:90px;width:auto;background:none;border:0;padding:4px 2px}
+  .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
   .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
     color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
   .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -97,7 +116,7 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="5";
+const APP_VERSION="6";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -209,7 +228,7 @@ const SETTINGS_TABS = [['data','Data'],['tags','Tags'],['people','People'],['abo
 function tabSettings(){
   const which = SETTINGS_TABS.some(([k])=>k===state.settings) ? state.settings : 'data';
   return `
-  <div class="pillrow">${SETTINGS_TABS.map(([id,label])=>
+  <div class="pillrow sticky">${SETTINGS_TABS.map(([id,label])=>
     `<button class="pill ${which===id?'on':''}" data-set="${id}">${label}</button>`).join('')}</div>
   ${which==='data' ? settingsData()
     : which==='tags' ? settingsTags()
@@ -221,8 +240,7 @@ function tabSettings(){
    heading would be. Nothing slides up from the bottom. */
 function settingsTags(){
   const p = state.page;
-  if (p && p.kind==='cat') return catPage(p);
-  return `
+  return (p && p.kind==='cat' ? catSheet(p) : '') + `
   <div class="card">
     <h2>Categories <button class="gbtn" data-catnew="1">+</button></h2>
     ${store.categories.length ? `<div class="rows">${store.categories.map((c,i)=>`
@@ -237,21 +255,32 @@ function settingsTags(){
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
-function catPage(p){
+/* The widget: name, type, and a tag field that turns each Enter into a
+   capsule. Close asks once (red) if anything was typed; Save is the wide blue
+   one. Tapping the dark area behind counts as Close. */
+const catDirty = (p) => p.name.trim()!==p.was.name || p.type!==p.was.type || p.tags.join('\u0001')!==p.was.tags.join('\u0001') || !!p.draft;
+function catSheet(p){
   const isNew = p.index==null;
   return `
-  <div class="card">
-    <h2><span class="act" data-pageback="1">‹ Categories</span> ${isNew?'New category':esc(store.categories[p.index].name)}</h2>
-    <div class="field"><label>Name</label><input id="cName" value="${esc(p.name)}"></div>
-    <div class="field"><label>Type</label>
-      <div class="chips">${TYPES.map(([k,col])=>
-        `<button class="chip ${p.type===k?'on':''}" data-cattype="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
-    <div class="field"><label>Tags</label><input id="cTags" value="${esc(p.tags)}" placeholder="comma separated"></div>
-    <div class="btnrow">
-      <button class="btn primary" data-catsave="1">${isNew?'Create':'Save'}</button>
-      <button class="btn" data-pageback="1">Cancel</button>
+  <div class="sheetwrap">
+    <div class="scrim" data-catclose="1"></div>
+    <div class="sheet">
+      <h3>${isNew?'New category':esc(store.categories[p.index].name)}</h3>
+      <div class="field"><label>Name</label><input id="cName" value="${esc(p.name)}"></div>
+      <div class="field"><label>Type</label>
+        <div class="chips">${TYPES.map(([k,col])=>
+          `<button class="chip ${p.type===k?'on':''}" data-cattype="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
+      <div class="field"><label>Tags</label>
+        <div class="tagbox" data-tagbox="1">
+          ${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-tagdel="${i}">×</span></span>`).join('')}
+          <input id="cTagIn" value="${esc(p.draft||'')}" autocapitalize="off" autocomplete="off" enterkeyhint="done">
+        </div></div>
+      ${isNew?'':`<button class="btn danger" style="width:100%" data-catdelete="${p.index}">Delete</button>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-catclose="1">${p.closeArm?'Close?':'Close'}</button>
+        <button class="btn primary" data-catsave="1">Save</button>
+      </div>
     </div>
-    ${isNew?'':`<button class="btn danger" style="margin-top:7px;width:100%" data-catdelete="${p.index}">Delete</button>`}
   </div>`;
 }
 function settingsPeople(){
@@ -350,23 +379,49 @@ function wire(){
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
   document.querySelectorAll('[data-pageback]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
 
-  /* categories */
-  const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTags');
-    if (n) state.page.name=n.value; if (t) state.page.tags=t.value; };
-  document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>{
-    state.page={ kind:'cat', index:null, name:'', type:'Necessity', tags:'' }; render(); });
-  document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{
-    const c=store.categories[+el.dataset.catedit]; if (!c) return;
-    state.page={ kind:'cat', index:+el.dataset.catedit, name:c.name, type:c.type, tags:c.tags.join(', ') }; render(); });
+  /* categories - the widget */
+  const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
+    if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; };
+  const openCat=(index)=>{ const c=index==null?null:store.categories[index];
+    state.page={ kind:'cat', index, name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[], draft:'',
+      was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[] }, closeArm:false, focus:false };
+    render(); };
+  /* A tag is added on Enter (or a comma); the field stays ready for the next.
+     Backspace on an empty field takes the last capsule back. */
+  const addTag=()=>{ const p=state.page; const t=(p.draft||'').replace(/,/g,'').trim();
+    if (t && !p.tags.some((x)=>same(x,t))) p.tags.push(t);
+    p.draft=''; p.focus=true; render(); };
+  document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>openCat(null));
+  document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>openCat(+el.dataset.catedit));
   document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
+  const tagIn=document.getElementById('cTagIn');
+  if (tagIn && state.page && state.page.kind==='cat') {
+    tagIn.onkeydown=(e)=>{
+      if (e.key==='Enter' || e.key===',') { e.preventDefault(); readCat(); addTag(); }
+      else if (e.key==='Backspace' && !tagIn.value && state.page.tags.length) { readCat(); state.page.tags.pop(); state.page.focus=true; render(); }
+    };
+    tagIn.oninput=()=>{ state.page.draft=tagIn.value; state.page.closeArm=false; };
+    if (state.page.focus) { state.page.focus=false; tagIn.focus(); }
+  }
+  document.querySelectorAll('[data-tagbox]').forEach((el)=>el.onclick=()=>{ const t=document.getElementById('cTagIn'); if (t) t.focus(); });
+  document.querySelectorAll('[data-tagdel]').forEach((el)=>el.onclick=(e)=>{ if (e&&e.stopPropagation) e.stopPropagation();
+    readCat(); state.page.tags.splice(+el.dataset.tagdel,1); state.page.focus=true; render(); });
   document.querySelectorAll('[data-catsave]').forEach((el)=>el.onclick=()=>{
     readCat(); const p=state.page;
-    const name=p.name.trim(), tags=splitTags(p.tags);
+    /* Whatever is still typed in the tag field counts as a tag too. */
+    const t=(p.draft||'').replace(/,/g,'').trim(); if (t && !p.tags.some((x)=>same(x,t))) p.tags.push(t); p.draft='';
+    const name=p.name.trim(), tags=p.tags.slice();
     const cur = p.index==null ? null : store.categories[p.index];
-    try { checkCategory(name, p.type, tags, cur); } catch (e) { alert(e.message); return; }
+    try { checkCategory(name, p.type, tags, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) Object.assign(cur, { name, type:p.type, tags });
     else store.categories.push({ name, type:p.type, tags });
     state.page=null; commit(); });
+  /* Close: straight away if nothing was entered; otherwise red once, then gone. */
+  document.querySelectorAll('[data-catclose]').forEach((el)=>el.onclick=()=>{
+    const p=state.page; const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
+    if (n) p.name=n.value; if (t) p.draft=t.value;
+    if (catDirty(p) && !p.closeArm) { p.closeArm=true; render(); return; }
+    state.page=null; render(); });
   document.querySelectorAll('[data-catdelete]').forEach((el)=>el.onclick=()=>{
     if (!confirm('Delete this category?')) return;
     store.categories.splice(+el.dataset.catdelete, 1); state.page=null; commit(); });
