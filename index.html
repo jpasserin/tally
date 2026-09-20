@@ -243,9 +243,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=43"></script>
+<script src="backend.js?v=44"></script>
 <script>
-const APP_VERSION="43";
+const APP_VERSION="44";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -427,6 +427,16 @@ function opsTab(a){
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount, o.note||'', o.tag,
       o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id]) };
 }
+/* The third tab, "Budgets": every operation that carries a budget, one row
+   each, grouped by budget then date. A mirror for reading - the account tabs
+   stay the record - rewritten with every push. */
+const BUDGETS_HEADERS = ['Budget','Date','Account','Name','Amount','Currency','Tag','Description','Id'];
+function budgetsTab(){
+  const rows = [];
+  for (const b of store.budgets) for (const {o,a} of budgetOps(b.name).sort((x,y)=>x.o.date<y.o.date?-1:x.o.date>y.o.date?1:0))
+    rows.push([b.name, o.date, a.key, o.name, o.amount, a.currency, o.tag, o.note||'', o.id]);
+  return { name:'Budgets', index:3, headers:BUDGETS_HEADERS, rows };
+}
 function readOps(tab){
   const heads = ((tab && tab.headers) || OPS_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : r[i]; };
@@ -523,6 +533,8 @@ async function pushNow(everything){
   const names = everything ? ['Config'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
   const tabs = names.map((n)=> n==='Config' ? configTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  /* The Budgets mirror rides along whenever anything it reflects changed. */
+  if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetsTab());
   state.sync={ msg:'Syncing…' }; render();
   try {
     const j = await BK.push(store.backend, tabs);
