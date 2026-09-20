@@ -236,9 +236,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=36"></script>
+<script src="backend.js?v=37"></script>
 <script>
-const APP_VERSION="36";
+const APP_VERSION="37";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -364,6 +364,11 @@ const money0 = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.round(Math.abs(v
    tags, not instead. */
 const BUDGET_COLORS = ['#3b82f6','#4ade80','#fbbf24','#f87171','#c155ba','#7cb8ff','#33a569','#b68320'];
 const budgetOf = (name) => store.budgets.find((b)=>same(b.name, name)) || null;
+/* Open ones first, then the closed, each group in its own order. */
+const budgetsSorted = () => store.budgets.filter((b)=>!b.closed).concat(store.budgets.filter((b)=>b.closed));
+/* What an operation may be put on: the open budgets - and the one it already
+   carries, closed or not, so an edit does not lose it. */
+const budgetsFor = (current) => store.budgets.filter((b)=>!b.closed || same(b.name, current||''));
 const freeBudgetColor = () => BUDGET_COLORS.find((c)=>!store.budgets.some((b)=>b.color===c)) || BUDGET_COLORS[store.budgets.length % BUDGET_COLORS.length];
 /* The budget's amount in the shown currency, at the rate of the month it
    was created - the operations convert at their own months, never this. */
@@ -405,7 +410,7 @@ function configTab(){
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'' })))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'' }))) };
+      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
@@ -452,7 +457,7 @@ function readConfig(tab){
     if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
-      created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY() }); }
+      created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
   return { categories:cats, people, accounts, budgets };
 }
@@ -775,11 +780,11 @@ function tabBudgets(){
   return widget + `
   <div class="card">
     <h2>Budgets <button class="gbtn" data-budnew="1">+</button></h2>
-    ${store.budgets.length ? `<div class="rows">${store.budgets.map((b,i)=>{
+    ${store.budgets.length ? `<div class="rows">${budgetsSorted().map((b)=>{
       const spent = budgetSpent(b.name), amt = budgetAmountIn(b), pc = amt ? Math.min(100, spent/amt*100) : 0;
-      return `<div class="row tap" data-budopen="${esc(b.name)}">
+      return `<div class="row tap" data-budopen="${esc(b.name)}" ${b.closed?'style="opacity:.75"':''}>
         <div style="flex:1;min-width:0">
-          <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span><b>${esc(b.name)}</b></div>
+          <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span><b ${b.closed?'class="muted"':''}>${esc(b.name)}</b>${b.closed?'<span class="muted" style="font-size:11px">Closed</span>':''}</div>
           ${amt?`<div class="bbar"><i style="width:${pc.toFixed(1)}%;background:${spent>amt?'var(--bad)':b.color}"></i></div>`:''}
         </div>
         <span style="text-align:right"><span class="v ${amt&&spent>amt?'neg':''}">${money(spent, store.cur)}</span>${amt?`<div class="muted" style="font-size:11px">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+')':''}</div>`:''}</span>
@@ -800,7 +805,7 @@ function budgetPage(b){
   <div class="card">
     <h2><span class="act" data-budback="1">‹ Budgets</span>
       <button class="gbtn ghost" data-budedit="${store.budgets.indexOf(b)}">Edit</button></h2>
-    <div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</div>
+    <div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}${b.closed?'<span class="muted" style="font-size:11px;font-weight:600">Closed</span>':''}</div>
     <div class="hero ${left!=null&&left<0?'neg':''}">${money(spent, store.cur)}</div>
     ${amt!=null?`<div class="herosub">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+' at '+esc(b.created)+')':''} · <b style="color:${left>=0?'var(--good)':'var(--bad)'}">${left>=0?money(left, store.cur)+' left':money(-left, store.cur)+' over'}</b></div>
     <div class="bbar" style="height:9px;margin-top:8px"><i style="width:${Math.min(100, spent/amt*100).toFixed(1)}%;background:${left<0?'var(--bad)':b.color}"></i></div>`:''}
@@ -819,7 +824,7 @@ function opRowsMixed(list){
   return list.length ? `<div class="rows">${list.map(({o,a})=>opRow(o, a, true)).join('')}</div>`
     : `<div class="hint" style="margin-top:0">${filterActive(opFilter())?'Nothing matches.':'Nothing yet.'}</div>`;
 }
-const budgetDirty = (p) => JSON.stringify([p.name.trim(), p.color, p.amount, p.currency, p.created]) !== JSON.stringify([p.was.name, p.was.color, p.was.amount, p.was.currency, p.was.created]);
+const budgetDirty = (p) => JSON.stringify([p.name.trim(), p.color, p.amount, p.currency, p.created, p.closed]) !== JSON.stringify([p.was.name, p.was.color, p.was.amount, p.was.currency, p.was.created, p.was.closed]);
 function budgetSheet(p){
   const isNew = p.index==null;
   return `
@@ -838,7 +843,9 @@ function budgetSheet(p){
       </div>
       <div class="field"><label>Colour</label>
         <div class="swatches">${BUDGET_COLORS.map((c)=>`<span class="swatch ${p.color===c?'on':''}" style="background:${c}" data-budcolor="${c}"></span>`).join('')}</div></div>
-      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-buddelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
+      ${isNew?'':`<div class="field"><label>Status</label>
+        <div class="chips"><button class="chip ${!p.closed?'on':''}" data-budclosed="0">Open</button><button class="chip ${p.closed?'on':''}" data-budclosed="1">Closed</button></div></div>
+      <button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-buddelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-budclose="1">${p.closeArm?'Close?':'Close'}</button>
         <button class="btn primary" data-budsave="1">Save</button>
@@ -997,8 +1004,8 @@ function selBar(raised){
   const body = state.bulk==='tag'
     ? `<select id="bulkTag">${tagOptions('')}</select><button class="gbtn" data-bulkapply="tag">Apply</button>`
     : state.bulk==='budget'
-    ? `<select id="bulkBudget"><option value="">none</option>${store.budgets.map((b)=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('')}</select><button class="gbtn" data-bulkapply="budget">Apply</button>`
-    : `<span>${n} selected</span><button class="gbtn" data-bulk="tag">Tag</button><button class="gbtn" data-bulk="budget" ${store.budgets.length?'':'disabled'}>Budget</button>`;
+    ? `<select id="bulkBudget"><option value="">none</option>${budgetsFor().map((b)=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('')}</select><button class="gbtn" data-bulkapply="budget">Apply</button>`
+    : `<span>${n} selected</span><button class="gbtn" data-bulk="tag">Tag</button><button class="gbtn" data-bulk="budget" ${budgetsFor().length?'':'disabled'}>Budget</button>`;
   return `<div class="selbar${raised?' raised':''}">${body}<button class="gbtn ghost" data-selclear="1">✕</button></div>`;
 }
 /* The account an operation belongs to, wherever it is listed from. */
@@ -1050,8 +1057,8 @@ function opSheet(p, a){
       <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
       <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
       <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select></div>
-      ${store.budgets.length?`<div class="field"><label>Budget</label>
-        <div class="chips">${store.budgets.map((b)=>`<button class="chip ${same(p.budget||'', b.name)?'on':''}" data-opbudget="${esc(b.name)}"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</button>`).join('')}</div></div>`:''}
+      ${budgetsFor(p.budget).length?`<div class="field"><label>Budget</label>
+        <div class="chips">${budgetsFor(p.budget).map((b)=>`<button class="chip ${same(p.budget||'', b.name)?'on':''}" data-opbudget="${esc(b.name)}"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</button>`).join('')}</div></div>`:''}
       <div class="field"><label>Secondary tags</label>
         ${p.splits.map((sp,i)=>`<div class="btnrow" style="margin-bottom:5px">
           <select id="oSpTag${i}" style="flex:1;min-width:0">${tagOptions(sp.tag)}</select>
@@ -1742,7 +1749,7 @@ function wire(){
   const readBud=()=>{ const n=document.getElementById('bName'), a=document.getElementById('bAmount'), d=document.getElementById('bDate');
     if (n) state.page.name=n.value; if (a) state.page.amount=a.value; if (d) state.page.created=d.value; state.page.closeArm=false; state.page.delArm=false; };
   const openBud=(index)=>{ const b=index==null?null:store.budgets[index];
-    const cur = { name:b?b.name:'', color:b?b.color:freeBudgetColor(), amount:b&&b.amount!=null?String(b.amount):'', currency:b?b.currency:store.cur, created:b?(b.created||TODAY()):TODAY() };
+    const cur = { name:b?b.name:'', color:b?b.color:freeBudgetColor(), amount:b&&b.amount!=null?String(b.amount):'', currency:b?b.currency:store.cur, created:b?(b.created||TODAY()):TODAY(), closed:b?!!b.closed:false };
     state.page={ kind:'budget', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-budnew]').forEach((el)=>el.onclick=()=>openBud(null));
@@ -1751,6 +1758,7 @@ function wire(){
   document.querySelectorAll('[data-budback]').forEach((el)=>el.onclick=()=>{ state.budget=null; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budcolor]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.color=el.dataset.budcolor; render(); });
   document.querySelectorAll('[data-budcur]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.currency=el.dataset.budcur; render(); });
+  document.querySelectorAll('[data-budclosed]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.closed=el.dataset.budclosed==='1'; render(); });
   const bd=document.getElementById('bDate');
   if (bd && state.page && state.page.kind==='budget') bd.oninput=bd.onchange=()=>{ state.page.created=bd.value; state.page.closeArm=false; state.page.delArm=false; };
   const bn=document.getElementById('bName'), ba=document.getElementById('bAmount');
@@ -1759,7 +1767,7 @@ function wire(){
   document.querySelectorAll('[data-budsave]').forEach((el)=>el.onclick=()=>{
     readBud(); const p=state.page;
     const cur = p.index==null ? null : store.budgets[p.index];
-    const b = { name:p.name.trim(), color:p.color, currency:p.currency, created:p.created, amount: String(p.amount).trim()==='' ? null : num(p.amount) };
+    const b = { name:p.name.trim(), color:p.color, currency:p.currency, created:p.created, closed:!!p.closed, amount: String(p.amount).trim()==='' ? null : num(p.amount) };
     try { checkBudget(b, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) {
       /* A renamed budget takes its operations with it. */
