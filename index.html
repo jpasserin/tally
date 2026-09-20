@@ -76,7 +76,10 @@
   .hero{font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.05;font-variant-numeric:tabular-nums}
   /* Six figures for the year, three a row. */
   .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
-  .kpi{background:var(--card2);border-radius:12px;padding:8px 9px;min-width:0}
+  .kpi{background:var(--card2);border-radius:12px;padding:8px 9px;min-width:0;position:relative}
+  .qbtn{position:absolute;top:5px;right:5px;width:17px;height:17px;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);
+    font-size:10px;font-weight:700;line-height:1;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;font-family:inherit}
+  .kpi .l{padding-right:18px}
   .kpi .l{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
   .kpi .v{font-size:14px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   /* A single bar split by share, the percentage written in each part. */
@@ -210,9 +213,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=33"></script>
+<script src="backend.js?v=34"></script>
 <script>
-const APP_VERSION="33";
+const APP_VERSION="34";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -493,7 +496,8 @@ const TABS = [
 const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
 const SCREENS = {
   summary: () => subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
-  report:  () => subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? empty('Budgets') : tabReport()),
+  report:  () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '')
+    + subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? empty('Budgets') : tabReport()),
   account: tabAccount,
   settings: tabSettings,
 };
@@ -586,17 +590,48 @@ function yearFigures(sums){
   const r2 = (v) => Math.round(v*100)/100;
   return { in:r2(inc), out:r2(out), tax:r2(tax), sav:r2(sav), cash:r2(inc-(out+tax+sav)), nw:r2(inc-(out+tax)) };
 }
+/* The ? on a box: what the figure is, and the numbers it was made of. */
+const EXPLAIN = {
+  in:   { label:'In',               text:'Sum of all the Income categories.',                         types:['Income'] },
+  out:  { label:'Out',              text:'Sum of all the Necessity, Optional and Misc categories.',   types:['Necessity','Optional','Misc'], flip:true },
+  tax:  { label:'Taxes',            text:'Sum of all the Taxes categories.',                          types:['Taxes'], flip:true },
+  sav:  { label:'Savings',          text:'Sum of all the Savings categories.',                        types:['Savings'], flip:true },
+  cash: { label:'Cash',             text:'In − (Out + Taxes + Savings).',                             parts:['in','out','tax','sav'] },
+  nw:   { label:'Net worth change', text:'In − (Out + Taxes).',                                       parts:['in','out','tax'] },
+};
+function explainSheet(which){
+  const e = EXPLAIN[which]; if (!e) return '';
+  const Y = theYear(), sums = sumsByCategory(Y), f = yearFigures(sums);
+  const rows = e.types
+    ? store.categories.filter((c)=>e.types.includes(c.type) && sums.out[c.name]).map((c)=>[c.name, (e.flip?-1:1)*sums.out[c.name], typeColor(c.type)])
+        .sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]))
+    : e.parts.map((k)=>[EXPLAIN[k].label, (k==='in'?1:-1)*f[k], null]);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-explainclose="1"></div>
+    <div class="sheet${state.page.fresh?' enter':''}">
+      <h3>${e.label} <span class="muted" style="font-size:12px;font-weight:600">${Y}</span></h3>
+      <div class="hint" style="margin:0 0 6px">${e.text}</div>
+      ${rows.length ? `<div class="rows">${rows.map(([name,v,col])=>`
+        <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px">${col?`<span class="dot" style="background:${col}"></span>`:''}${esc(name)}</span>
+          <span class="v">${money(v, store.cur)}</span></div>`).join('')}
+        <div class="row"><span class="k"><b>${esc(e.label)}</b></span><span class="v"><b>${money(f[which], store.cur)}</b></span></div></div>`
+      : `<div class="hint" style="margin:0">Nothing this year.</div>`}
+      <div class="foot"><button class="btn close" style="flex:1" data-explainclose="1">Close</button></div>
+    </div>
+  </div>`;
+}
 function summaryCard(Y){
   const f = yearFigures(sumsByCategory(Y));
-  const box = (label, v, color) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div></div>`;
+  const box = (label, v, color, key) => `<div class="kpi"><button class="qbtn" data-explain="${key}">?</button><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div></div>`;
   return `
   <div class="card">
     <h2>Summary <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
     <div class="kpis">
-      ${box('In', f.in, 'var(--good)')}${box('Out', f.out, 'var(--bad)')}${box('Taxes', f.tax, 'var(--txt)')}
+      ${box('In', f.in, 'var(--good)', 'in')}${box('Out', f.out, 'var(--bad)', 'out')}${box('Taxes', f.tax, 'var(--txt)', 'tax')}
     </div>
     <div class="kpis" style="margin-top:6px">
-      ${box('Savings', f.sav, 'var(--accent)')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)')}${box('Net worth change', f.nw, 'var(--txt)')}
+      ${box('Savings', f.sav, 'var(--accent)', 'sav')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)', 'cash')}${box('Net worth change', f.nw, 'var(--txt)', 'nw')}
     </div>
   </div>`;
 }
@@ -1437,6 +1472,8 @@ function wire(){
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
   document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; render(); });
+  document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
     const pts = netWorthMonths();
     if (pts.length > 1) wireRangeChart('nw', pts, [{ key:'nw', label:'Net worth', color:'#3b82f6' }], ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; });
