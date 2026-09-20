@@ -262,9 +262,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=53"></script>
+<script src="backend.js?v=54"></script>
 <script>
-const APP_VERSION="53";
+const APP_VERSION="54";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -443,8 +443,21 @@ function configTab(){
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'' })))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' })))
-      .concat((store.dismissed||[]).map((d)=>row({ Kind:'dismissed', Name:d }))) };
+      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
+}
+/* The findings marked correct, in a tab of their own - there may be many.
+   The key (kind|id) is what counts; the rest says what it was, for reading. */
+const DISMISSED_HEADERS = ['Key','Kind','Account','Name','Date','Amount'];
+function dismissedTab(){
+  const rows = (store.dismissed||[]).map((k)=>{ const i = k.indexOf('|'); const kind = k.slice(0,i), id = k.slice(i+1);
+    const a = accountOfOp(id) || store.accounts.find((x)=>x.key===id) || null; const o = a ? opsOf(a.key).find((x)=>x.id===id) : null;
+    return [k, kind, a ? a.key : '', o ? o.name : '', o ? o.date : '', o ? o.amount : '']; });
+  return { name:'Dismissed', index:4, headers:DISMISSED_HEADERS, rows };
+}
+function readDismissed(tab){
+  const heads = ((tab && tab.headers) || DISMISSED_HEADERS).map((h)=>String(h).trim());
+  const i = heads.indexOf('Key');
+  return ((tab && tab.rows) || []).map((r)=>String((i<0 ? r[0] : r[i])||'').trim()).filter((k)=>k.includes('|'));
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
@@ -484,7 +497,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], dismissed=[];
+  const cats=[], people=[], accounts=[], budgets=[];
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -502,9 +515,8 @@ function readConfig(tab){
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
-    if (kind==='dismissed') dismissed.push(name);
   }
-  return { categories:cats, people, accounts, budgets, dismissed };
+  return { categories:cats, people, accounts, budgets };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -563,9 +575,9 @@ function pushSoon(){
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
-  const names = everything ? ['Config'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const names = everything ? ['Config','Dismissed'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
-  const tabs = names.map((n)=> n==='Config' ? configTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
   if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetsTab());
   state.sync={ msg:'Syncing…' }; render();
@@ -581,7 +593,8 @@ async function pullNow(){
   const j = await BK.pull(store.backend);
   const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
   const got = readConfig(cfg);
-  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.dismissed=got.dismissed;
+  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets;
+  store.dismissed = readDismissed((j.tabs||[]).find((t)=>t.name==='Dismissed'));
   store.ops = {};
   for (const a of store.accounts) store.ops[a.key] = readOps((j.tabs||[]).find((t)=>t.name===a.key));
   store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
@@ -948,18 +961,40 @@ const WARN_FIXES = {
   transfer:['ok','tag','delete'], creditspend:['ok','tag','delete'], debitincome:['ok','tag','delete'], future:['ok','delete'], noowner:['owner'],
 };
 const FIX_LABEL = { tag:'Tag', file:'File', ok:'Mark correct', usual:'Use usual', delete:'Delete', owner:'Owner' };
+const WARN_ABOUT = [
+  ['Tag in no category', 'The operation carries a tag no category claims, so it counts nowhere.'],
+  ['No tag', 'The operation has no tag at all.'],
+  ['Possible double entry', 'Two or more operations in one account with the same date, amount and name.'],
+  ['Transfer with one side', 'Named after another account, or tagged x, with no opposite amount in that account within five days.'],
+  ['Tagged unlike the same payee elsewhere', 'This payee is usually tagged another way.'],
+  ['Credit in a spending category', 'Money in, under a Necessity, Optional or Misc tag - a refund, or a slip. Transfers (x) are not counted.'],
+  ['Debit in an income category', 'Money out, under an Income tag.'],
+  ['Dated in the future', 'The date is after today.'],
+  ['Account with no owner', 'An account nobody owns - imported ones start this way.'],
+];
+function warnAboutSheet(){
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-warnaboutclose="1"></div>
+    <div class="sheet${state.page.fresh?' enter':''}">
+      <h3>Warnings</h3>
+      <div class="rows">${WARN_ABOUT.map(([t,d])=>`<div class="row" style="display:block"><div class="k" style="font-weight:700">${esc(t)}</div><div class="sub">${esc(d)}</div></div>`).join('')}</div>
+      <div class="foot"><button class="btn close" style="flex:1" data-warnaboutclose="1">Close</button></div>
+    </div>
+  </div>`;
+}
 function tabWarnings(){
   const p = state.page;
   const groups = warnings();
   const n = groups.reduce((t,g)=>t+g.items.length, 0);
-  const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : '';
+  const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : p && p.kind==='warnabout' ? warnAboutSheet() : '';
   if (state.warnKind==='__aside') { if (groups.aside.length) return widget + asidePage(groups.aside); state.warnKind = null; }
   const g = state.warnKind ? groups.find((x)=>x.kind===state.warnKind) : null;
   if (state.warnKind && !g) state.warnKind = null;
   if (g) return widget + warnPage(g);
   return widget + `
   <div class="card">
-    <h2>Warnings <span class="muted" style="text-transform:none;letter-spacing:0">${n}</span></h2>
+    <h2>Warnings <span class="fbar"><span class="muted">${n}</span><button class="qbtn" style="position:static" data-warnabout="1">?</button></span></h2>
     ${groups.length ? `<div class="rows">${groups.map((x)=>`
       <div class="row tap" data-warnopen="${x.kind}"><span class="k">${esc(x.title)}</span>
         <span style="display:flex;align-items:center;gap:10px"><span class="v">${x.items.length}</span><span class="chev">›</span></span></div>`).join('')}</div>`
@@ -2091,11 +2126,13 @@ function wire(){
 
   /* warnings: a kind opens its page; fixes act on the ticked findings */
   document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnabout]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'warnabout', fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-warnaboutclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-warnclose]').forEach((el)=>el.onclick=()=>{ state.warnKind=null; state.sel=[]; state.bulk=null; render(); });
   document.querySelectorAll('[data-warnrestore]').forEach((el)=>el.onclick=()=>{ if (store.locked) return;
     const w = warnings(); const drop = new Set(state.sel);
     for (const x of w.aside) if (drop.has(dismissKey(x.kind, x.o, x.a))) for (const y of (x.group||[x.o])) drop.add(dismissKey(x.kind, y, x.a));
-    store.dismissed = (store.dismissed||[]).filter((k)=>!drop.has(k)); state.sel=[]; commit(); });
+    store.dismissed = (store.dismissed||[]).filter((k)=>!drop.has(k)); state.sel=[]; commit('Dismissed'); });
   document.querySelectorAll('[data-warnowner]').forEach((el)=>el.onclick=()=>{ const n=el.dataset.warnowner; state.pick = state.pick||[];
     state.pick = state.pick.includes(n) ? state.pick.filter((x)=>x!==n) : [...state.pick, n]; render(); });
   document.querySelectorAll('[data-warnowners]').forEach((el)=>el.onclick=()=>{
@@ -2112,7 +2149,7 @@ function wire(){
     const fix = el.dataset.warnfix, items = warnItems(), touched = new Set();
     if (fix==='delete' && state.bulk!=='delete') { state.bulk='delete'; render(); return; }
     for (const {o,a,group} of items) {
-      if (fix==='ok') { for (const x of (group||[o])) { const k = dismissKey(state.warnKind, x, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); } touched.add('Config'); }
+      if (fix==='ok') { for (const x of (group||[o])) { const k = dismissKey(state.warnKind, x, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); } touched.add('Dismissed'); }
       else if (fix==='delete' && o) { const gone = group ? group.slice(1).map((x)=>x.id) : [o.id];   /* a double: the copies go, the first stays */
         store.ops[a.key] = opsOf(a.key).filter((x)=>!gone.includes(x.id)); touched.add(a.key); }
       else if (fix==='usual' && o) { const u = usualTag(o.name); if (u && u!==o.tag) { o.tag=u; o.splits=o.splits.filter((sp)=>sp.tag!==u); touched.add(a.key); } }
