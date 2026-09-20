@@ -82,6 +82,7 @@
   .kpi .l{padding-right:18px}
   .kpi .l{font-size:9.5px;text-transform:uppercase;letter-spacing:.5px;color:var(--muted)}
   .kpi .v{font-size:14px;font-weight:700;margin-top:3px;font-variant-numeric:tabular-nums;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .kpi .m{font-size:10.5px;color:var(--muted);margin-top:1px;font-variant-numeric:tabular-nums;white-space:nowrap}
   /* A single bar split by share, the percentage written in each part. */
   .pbar{display:flex;height:22px;border-radius:7px;overflow:hidden;margin-top:10px;background:var(--bg2)}
   .pbar span{display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#06101c;min-width:0;overflow:hidden}
@@ -241,9 +242,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=38"></script>
+<script src="backend.js?v=39"></script>
 <script>
-const APP_VERSION="38";
+const APP_VERSION="39";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -683,9 +684,20 @@ function explainSheet(which){
     </div>
   </div>`;
 }
+/* How much of the year has gone: twelve for a past year, the months elapsed
+   for this one - the current month counted by the day, so the per-month
+   figure does not swing on the 1st. */
+function monthsIn(year){
+  if (year < THIS_YEAR) return 12;
+  if (year > THIS_YEAR) return 1;
+  const d = new Date();
+  const days = new Date(d.getFullYear(), d.getMonth()+1, 0).getDate();
+  return Math.max(0.5, d.getMonth() + d.getDate()/days);
+}
 function summaryCard(Y){
   const f = yearFigures(sumsByCategory(Y));
-  const box = (label, v, color, key) => `<div class="kpi"><button class="qbtn" data-explain="${key}">?</button><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div></div>`;
+  const div = monthsIn(Y);
+  const box = (label, v, color, key) => `<div class="kpi"><button class="qbtn" data-explain="${key}">?</button><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div><div class="m">${money(Math.round(v/div*100)/100, store.cur)}/mo</div></div>`;
   return `
   <div class="card">
     <h2>Summary <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
