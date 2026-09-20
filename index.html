@@ -238,6 +238,10 @@
   nav button svg{width:21px;height:21px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round;}
   nav button.active{color:var(--accent)}
+  /* A small warning sign over the Account icon while there are findings. */
+  nav button .ico{position:relative;display:inline-block}
+  nav button .navwarn{position:absolute;top:-5px;right:-9px;width:13px;height:13px;color:var(--warn)}
+  nav button .navwarn svg{width:13px;height:13px;stroke:var(--warn);fill:var(--bg);stroke-width:2.4}
 
   /* The Settings sub-tabs: a bar like the bottom one, smaller, under the header. */
   .subnav{position:sticky;top:45px;z-index:15;display:flex;justify-content:space-around;background:var(--bg);
@@ -258,9 +262,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=50"></script>
+<script src="backend.js?v=51"></script>
 <script>
-const APP_VERSION="50";
+const APP_VERSION="51";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1696,8 +1700,10 @@ function settingsAbout(){
 
 /* ----------------------------------------------------------------- render --*/
 function renderNav(){
+  const nWarn = warnings().reduce((t,g)=>t+g.items.length, 0);
   document.getElementById('nav').innerHTML = TABS.map(([id,label,icon]) =>
-    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><svg viewBox="0 0 24 24">${id==='settings'&&store.locked?ICON_LOCK:icon}</svg>${label}</button>`).join('');
+    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><span class="ico"><svg viewBox="0 0 24 24">${id==='settings'&&store.locked?ICON_LOCK:icon}</svg>${
+      id==='account'&&nWarn?`<span class="navwarn" title="${nWarn} warning${nWarn===1?'':'s'}"><svg viewBox="0 0 24 24"><path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg></span>`:''}</span>${label}</button>`).join('');
 }
 /* Nothing animates on a tap. The page scrolls to the top only when the
    bottom tab changes; every other redraw keeps its place - the content area
