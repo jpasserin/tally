@@ -27,6 +27,11 @@
     margin:0 -16px 14px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);}
   header h1{font-size:20px;margin:0;letter-spacing:.3px;}
   header h1 .dot{color:var(--accent)}
+  header .hdrright{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;font-weight:600}
+  .hdrbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:28px;height:26px;
+    cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
+  .hdrbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+  .hdrbtn:active{color:var(--accent)}
 
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-bottom:14px;}
   .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
@@ -109,14 +114,15 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Tally<span class="dot">.</span></h1><div id="hdrRight" class="muted" style="font-size:12px;font-weight:600"></div></header>
+  <header><h1>Tally<span class="dot">.</span></h1><div class="hdrright"><span id="hdrRight"></span><button class="hdrbtn" id="hardReload" title="Reload">
+    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="6";
+const APP_VERSION="7";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -374,7 +380,18 @@ function render(){
   if (moved) scrollTo({ top:0 });
 }
 
+/* TEMPORARY, for testing: throw away the service worker and every cache,
+   then reload from the network, so a fresh deploy is picked up on the spot. */
+async function hardReload(){
+  try {
+    if (navigator.serviceWorker) for (const r of await navigator.serviceWorker.getRegistrations()) await r.unregister();
+    if (typeof caches !== 'undefined') for (const k of await caches.keys()) await caches.delete(k);
+  } catch (e) { /* nothing to clear */ }
+  location.reload();
+}
+
 function wire(){
+  const hr=document.getElementById('hardReload'); if (hr) hr.onclick=hardReload;
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
   document.querySelectorAll('[data-pageback]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
