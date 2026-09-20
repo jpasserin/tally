@@ -62,6 +62,12 @@
   .tagbox input{flex:1;min-width:90px;width:auto;background:none;border:0;padding:2px 2px}
   .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
   .cap.fixed{border-color:var(--accent);color:var(--accent2)}
+  table.fx{border-collapse:collapse;width:100%;font-size:12.5px}
+  table.fx th,table.fx td{padding:5px 4px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
+  table.fx th{color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
+  table.fx th:first-child,table.fx td:first-child{text-align:left}
+  table.fx tr:last-child td{border-bottom:0}
+  table.fx tr.muted td{color:var(--muted)}
   .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
     color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
   .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -131,14 +137,15 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="14";
+const APP_VERSION="15";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[] }, loadStore());
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], rates:[],
+  fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
 const state = { tab:'settings', settings:'data', sync:null, page:null };
@@ -217,6 +224,7 @@ async function pullNow(){
   const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
   const got = readConfig(cfg);
   store.categories=got.categories; store.people=got.people;
+  store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   return got;
 }
@@ -247,6 +255,7 @@ const SETTINGS_TABS = [
   ['data','Data','<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'],
   ['tags','Tags','<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'],
   ['people','People','<circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.3 2.7-5.2 6-5.2s6 1.9 6 5.2"/><path d="M15 20c0-2.4 1-3.8 3-3.8s3 1.4 3 3.8"/>'],
+  ['fx','Currency','<circle cx="12" cy="12" r="9"/><path d="M15 9.5a3 3 0 0 0-3-2c-1.7 0-3 1-3 2.2 0 2.6 6 1.3 6 4.2 0 1.3-1.3 2.3-3 2.3a3 3 0 0 1-3-2"/><path d="M12 5.5v13"/>'],
   ['about','About','<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>'],
 ];
 
@@ -258,7 +267,46 @@ function tabSettings(){
   ${which==='data' ? settingsData()
     : which==='tags' ? settingsTags()
     : which==='people' ? settingsPeople()
+    : which==='fx' ? settingsFx()
     : settingsAbout()}`;
+}
+
+/* ---------------------------------------------------------- currencies --
+   Accounts are in USD, EUR and AUD. The month-end rates live in the sheet's
+   second tab, Rates, written once by the script and never changed; the app
+   only reads them. Fetch fills the years chosen, from 2013 by default, and
+   installs the monthly trigger that adds each month as it ends. */
+const rateRows = (tab) => ((tab && tab.rows) || []).map((r) => ({
+  month: String(r[0]||'').slice(0,7), eur: +r[1], aud: +r[2], date: String(r[3]||'').slice(0,10) }))
+  .filter((r) => /^\d{4}-\d{2}$/.test(r.month) && r.eur > 0 && r.aud > 0);
+const fx4 = (v) => (v > 0 ? v.toFixed(4) : '—');
+const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+function settingsFx(){
+  const now = new Date().getFullYear();
+  const years = []; for (let y = 2013; y <= now; y++) years.push(y);
+  /* The last twelve months in the sheet, newest first. */
+  const last12 = store.rates.slice().sort((a,b)=>a.month<b.month?1:-1).slice(0,12);
+  const st = state.fx;
+  const sel = (id, val, list) => `<select id="${id}">${list.map((y)=>`<option value="${y}" ${y===val?'selected':''}>${y}</option>`).join('')}</select>`;
+  return `
+  <div class="card">
+    <h2>Exchange rates</h2>
+    <div class="btnrow" style="align-items:flex-end">
+      <div class="field" style="flex:1;margin:0"><label>From</label>${sel('fxFrom', store.fxFrom, years)}</div>
+      <div class="field" style="flex:1;margin:0"><label>To</label>${sel('fxTo', store.fxTo, years)}</div>
+      <button class="btn primary" style="flex:0 0 auto" data-fxfetch="1" ${connected()?'':'disabled'}>Fetch</button>
+    </div>
+    ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
+  </div>
+
+  <div class="card">
+    <h2>USD per unit <span class="muted" style="text-transform:none;letter-spacing:0">${store.rates.length?store.rates.length+' months':''}</span></h2>
+    ${last12.length ? `<table class="fx">
+      <thead><tr><th>Month</th><th>EUR</th><th>AUD</th></tr></thead>
+      <tbody>${last12.map((r)=>`<tr><td>${MON[+r.month.slice(5,7)-1]} ${r.month.slice(0,4)}</td><td>${fx4(r.eur)}</td><td>${fx4(r.aud)}</td></tr>`).join('')}</tbody>
+    </table>`
+    : `<div class="hint" style="margin-top:0">No rates yet.</div>`}
+  </div>`;
 }
 
 /* A page one level down inside the tab: same chrome, a back link where the
@@ -509,6 +557,23 @@ function wire(){
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
 
+  /* currencies */
+  const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
+  if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
+  if (ft) ft.onchange=()=>{ store.fxTo=+ft.value; save(); };
+  document.querySelectorAll('[data-fxfetch]').forEach((el)=>el.onclick=async()=>{
+    if (ff) store.fxFrom=+ff.value; if (ft) store.fxTo=+ft.value;
+    if (store.fxFrom > store.fxTo) { const t=store.fxFrom; store.fxFrom=store.fxTo; store.fxTo=t; }
+    save();
+    state.fx={ msg:'Fetching…' }; render();
+    try {
+      const j = await BK.rates(store.backend, store.fxFrom, store.fxTo);
+      store.rates = rateRows({ rows: (j.rows||[]).map((r)=>[r.month, r.eur, r.aud, r.date]) });
+      store.backendVersion=j.backend; save();
+      state.fx={ msg:store.rates.length+' months in the sheet' };
+    } catch (e) { state.fx={ msg:e.message, bad:true }; }
+    render(); });
+
   /* The fields save as you type, so leaving the tab loses nothing. */
   const u=document.getElementById('bkUrl'), t=document.getElementById('bkTok');
   if (u) u.oninput=()=>{ store.backend.url=u.value.trim(); save(); };
@@ -535,8 +600,8 @@ render();
 /* A fresh install with a connected sheet takes its config from the sheet, so
    a second phone starts where the first left off. A store with anything in
    it is left alone - what is here wins until it is pushed. */
-if (connected() && !store.categories.length && !store.people.length) {
-  pullNow().then((got)=>{ if (got.categories.length || got.people.length) render(); }).catch(()=>{});
+if (connected() && !store.categories.length && !store.people.length && !store.rates.length) {
+  pullNow().then(()=>render()).catch(()=>{});
 }
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {

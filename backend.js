@@ -54,6 +54,9 @@
   /* tabs: [{ name, headers, rows }] — the app decides the layout, the script
      only writes it, so a new column never needs a backend redeploy. */
   const push = (cfg, tabs) => call(cfg, 'push', { tabs });
+  /* Month-end exchange rates for the years from..to, fetched by the script
+     from the ECB and kept in the sheet's Rates tab. */
+  const rates = (cfg, from, to) => call(cfg, 'rates', { from, to });
 
-  return { call, ping, pull, push };
+  return { call, ping, pull, push, rates };
 }));
