@@ -156,16 +156,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=19"></script>
+<script src="backend.js?v=20"></script>
 <script>
-const APP_VERSION="19";
+const APP_VERSION="20";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], rates:[],
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], accounts:[], rates:[],
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -180,6 +180,13 @@ const TYPES = [
 ];
 const typeColor = (t) => (TYPES.find(([k])=>k===t) || ['','#5b6170'])[1];
 const PEOPLE_TYPES = ['Parent','Child'];
+const CURRENCIES = ['USD','EUR','AUD'];
+/* Accounts: a unique key, a currency, owners from People, a category (is the
+   money reachable) and a type (how it is recorded). Cash first; other types
+   will bring their own settings later. */
+const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
+const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
+const ACCOUNT_TYPES = ['Cash','Fund'];
 const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
 
@@ -198,6 +205,14 @@ function checkCategory(name, type, tags, skip){
     if (owner) throw new Error('"'+t+'" is already in '+owner.name+'.');
   }
 }
+function checkAccount(a, skip){
+  if (!a.key) throw new Error('A key.');
+  if (!CURRENCIES.includes(a.currency)) throw new Error('A currency.');
+  if (!a.owners.length) throw new Error('An owner.');
+  if (!ACCOUNT_CATEGORIES.some(([k])=>k===a.category)) throw new Error('A category.');
+  if (!ACCOUNT_TYPES.includes(a.type)) throw new Error('A type.');
+  if (store.accounts.some((x)=>x!==skip && same(x.key, a.key))) throw new Error('"'+a.key+'" already exists.');
+}
 function checkPerson(name, type, skip){
   if (!name) throw new Error('A name.');
   if (!PEOPLE_TYPES.includes(type)) throw new Error('A type.');
@@ -207,20 +222,29 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category'];
 function configTab(){
-  return { name:'Config', index:1, headers:['Kind','Name','Type','Tags'],
-    rows: store.categories.map((c)=>['category', c.name, c.type, c.tags.join(', ')])
-      .concat(store.people.map((p)=>['person', p.name, p.type, ''])) };
+  return { name:'Config', index:1, headers:CONFIG_HEADERS,
+    rows: store.categories.map((c)=>['category', c.name, c.type, c.tags.join(', '), '', '', ''])
+      .concat(store.people.map((p)=>['person', p.name, p.type, '', '', '', '']))
+      .concat(store.accounts.map((a)=>['account', a.key, a.type, '', a.currency, a.owners.join(', '), a.category])) };
 }
+/* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[];
+  const cats=[], people=[], accounts=[];
+  const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
+  const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
-    const [kind, name, type, tags] = r.map((x)=>String(x==null?'':x).trim());
+    const kind = col(r,'Kind'), name = col(r,'Name'), type = col(r,'Type');
     if (!name) continue;
-    if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: withName(name, splitTags(tags)) });
+    if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: withName(name, splitTags(col(r,'Tags'))) });
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
+    if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
+      currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
+      owners: splitTags(col(r,'Owners')),
+      category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash' });
   }
-  return { categories:cats, people };
+  return { categories:cats, people, accounts };
 }
 const connected = () => !!(store.backend.url && store.backend.token);
 let pushTimer = null;
@@ -244,7 +268,7 @@ async function pullNow(){
   const j = await BK.pull(store.backend);
   const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
   const got = readConfig(cfg);
-  store.categories=got.categories; store.people=got.people;
+  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts;
   store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   return got;
@@ -266,10 +290,54 @@ const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint
 const SCREENS = {
   summary: () => empty('Summary'),
   report:  () => empty('Report'),
-  account: () => empty('Account'),
+  account: tabAccount,
   history: () => empty('History'),
   settings: tabSettings,
 };
+
+/* --------------------------------------------------------------- accounts --*/
+function tabAccount(){
+  const p = state.page;
+  const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: store.accounts.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
+  return (p && p.kind==='account' ? accountSheet(p) : '') + `
+  <div class="card">
+    <h2>Accounts <button class="gbtn" data-accnew="1">+</button></h2>
+    ${store.accounts.length ? groups.map((g)=>`
+      <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
+        <span class="dot" style="background:${g.col}"></span>${g.k}</div>
+      <div class="rows">${g.list.map((a)=>`
+        <div class="row tap" data-accedit="${store.accounts.indexOf(a)}">
+          <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${a.type!=='Cash'?' · '+esc(a.type):''}</span></div>
+          <span class="chev">›</span>
+        </div>`).join('')}</div>`).join('')
+    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type]);
+function accountSheet(p){
+  const isNew = p.index==null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-accclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New account':esc(store.accounts[p.index].key)}</h3>
+      <div class="field"><label>Key</label><input id="aKey" value="${esc(p.key)}" autocapitalize="characters"></div>
+      <div class="field"><label>Currency</label>
+        <div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-acccur="${c}">${c}</button>`).join('')}</div></div>
+      <div class="field"><label>Owners</label>
+        <div class="chips">${store.people.map((x)=>`<button class="chip ${p.owners.includes(x.name)?'on':''}" data-accowner="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div></div>
+      <div class="field"><label>Category</label>
+        <div class="chips">${ACCOUNT_CATEGORIES.map(([k,col])=>`<button class="chip ${p.category===k?'on':''}" data-acccat="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
+      <div class="field"><label>Type</label>
+        <div class="chips">${ACCOUNT_TYPES.map((k)=>`<button class="chip ${p.type===k?'on':''}" data-acctype="${k}">${k}</button>`).join('')}</div></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-accdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-accclose="1">${p.closeArm?'Close?':'Close'}</button>
+        <button class="btn primary" data-accsave="1">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
 
 /* --------------------------------------------------------------- settings --*/
 const SETTINGS_TABS = [
@@ -301,7 +369,6 @@ const rateRows = (tab) => ((tab && tab.rows) || []).map((r) => ({
   month: String(r[0]||'').slice(0,7), eur: +r[1], aud: +r[2], date: String(r[3]||'').slice(0,10) }))
   .filter((r) => /^\d{4}-\d{2}$/.test(r.month) && r.eur > 0 && r.aud > 0);
 const fx4 = (v) => (v > 0 ? v.toFixed(4) : '—');
-const CURRENCIES = ['USD','EUR','AUD'];
 /* USD per one unit of each currency, for one month's row. */
 const usdPer = (r) => ({ USD:1, EUR:r.eur, AUD:r.aud });
 /* How much of `to` one unit of `base` buys, that month. */
@@ -571,7 +638,7 @@ async function hardReload(){
 
 function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
 
   /* categories - the widget */
@@ -657,6 +724,37 @@ function wire(){
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
 
+  /* accounts - the widget */
+  const readAcc=()=>{ const k=document.getElementById('aKey'); if (k) state.page.key=k.value; state.page.closeArm=false; state.page.delArm=false; };
+  const openAcc=(index)=>{ const a=index==null?null:store.accounts[index];
+    const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash' };
+    state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
+    render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>openAcc(null));
+  document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>openAcc(+el.dataset.accedit));
+  document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
+  document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
+  document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; render(); });
+  document.querySelectorAll('[data-accowner]').forEach((el)=>el.onclick=()=>{ readAcc(); const o=el.dataset.accowner, p=state.page;
+    p.owners = p.owners.includes(o) ? p.owners.filter((x)=>x!==o) : [...p.owners, o]; render(); });
+  const ak=document.getElementById('aKey');
+  if (ak && state.page && state.page.kind==='account') ak.oninput=()=>{ state.page.key=ak.value; state.page.closeArm=false; state.page.delArm=false; };
+  document.querySelectorAll('[data-accsave]').forEach((el)=>el.onclick=()=>{
+    readAcc(); const p=state.page;
+    const a = { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type };
+    const cur = p.index==null ? null : store.accounts[p.index];
+    try { checkAccount(a, cur); } catch (e) { alert(e.message); render(); return; }
+    if (cur) Object.assign(cur, a); else store.accounts.push(a);
+    state.page=null; commit(); });
+  document.querySelectorAll('[data-accclose]').forEach((el)=>el.onclick=()=>{
+    const p=state.page; const k=document.getElementById('aKey'); if (k) p.key=k.value;
+    if (accountDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
+    state.page=null; render(); });
+  document.querySelectorAll('[data-accdelete]').forEach((el)=>el.onclick=()=>{
+    const p=state.page; const k=document.getElementById('aKey'); if (k) p.key=k.value;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.accounts.splice(+el.dataset.accdelete, 1); state.page=null; commit(); });
+
   /* currencies */
   document.querySelectorAll('[data-fxbase]').forEach((el)=>el.onclick=()=>{ state.fxBase=el.dataset.fxbase; render(); });
   if (state.tab==='settings' && state.settings==='fx' && store.rates.length > 1) {
@@ -710,7 +808,7 @@ render();
 /* A fresh install with a connected sheet takes its config from the sheet, so
    a second phone starts where the first left off. A store with anything in
    it is left alone - what is here wins until it is pushed. */
-if (connected() && !store.categories.length && !store.people.length && !store.rates.length) {
+if (connected() && !store.categories.length && !store.people.length && !store.accounts.length && !store.rates.length) {
   pullNow().then(()=>render()).catch(()=>{});
 }
 /* The backend version shown in About is whatever the script answered last.
