@@ -48,7 +48,9 @@
   .scrim{position:absolute;inset:0;background:rgba(0,0,0,.5)}
   .sheet{position:absolute;left:0;right:0;bottom:0;min-height:50vh;max-height:82vh;background:var(--card);
     border-top:1px solid var(--line);border-radius:20px 20px 0 0;padding:18px 16px calc(14px + env(safe-area-inset-bottom));
-    display:flex;flex-direction:column;gap:10px;overflow-y:auto;animation:up .22s ease;max-width:560px;margin:0 auto}
+    display:flex;flex-direction:column;gap:10px;overflow-y:auto;max-width:560px;margin:0 auto}
+  /* Slides up once, when it opens; a redraw from a chip inside must not replay it. */
+  .sheet.enter{animation:up .22s ease}
   @keyframes up{from{transform:translateY(30px);opacity:0}to{transform:none;opacity:1}}
   .sheet h3{margin:0 0 4px;font-size:16px}
   .sheet .foot{display:flex;gap:8px;margin-top:auto;padding-top:8px}
@@ -121,7 +123,7 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="8";
+const APP_VERSION="9";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -269,7 +271,7 @@ function catSheet(p){
   return `
   <div class="sheetwrap">
     <div class="scrim" data-catclose="1"></div>
-    <div class="sheet">
+    <div class="sheet${p.fresh?' enter':''}">
       <h3>${isNew?'New category':esc(store.categories[p.index].name)}</h3>
       <div class="field"><label>Name</label><input id="cName" value="${esc(p.name)}"></div>
       <div class="field"><label>Type</label>
@@ -366,7 +368,9 @@ function renderNav(){
 }
 /* Only actually going somewhere animates and scrolls to the top; a redraw
    from a button on the same screen must not jump. */
-const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '') + '|' + (state.page ? state.page.kind + (state.page.index==null?'new':state.page.index) : '');
+/* The widget is not a screen of its own: opening it must not fade the page
+   behind it or scroll it to the top. */
+const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '');
 let lastScreen = null;
 function render(){
   const key = screenKey(), moved = key !== lastScreen;
@@ -401,8 +405,8 @@ function wire(){
     if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; };
   const openCat=(index)=>{ const c=index==null?null:store.categories[index];
     state.page={ kind:'cat', index, name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[], draft:'',
-      was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[] }, closeArm:false, focus:false };
-    render(); };
+      was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[] }, closeArm:false, focus:false, fresh:true };
+    render(); state.page.fresh=false; };
   /* A tag is added on Enter (or a comma); the field stays ready for the next.
      Backspace on an empty field takes the last capsule back. */
   const addTag=()=>{ const p=state.page; const t=(p.draft||'').replace(/,/g,'').trim();
