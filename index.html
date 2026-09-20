@@ -166,9 +166,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=21"></script>
+<script src="backend.js?v=22"></script>
 <script>
-const APP_VERSION="21";
+const APP_VERSION="22";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -454,8 +454,8 @@ function opSheet(p, a){
   </div>`;
 }
 const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type, p.opening, p.closed]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type, p.was.opening, p.was.closed]);
-/* Creating: everything. Editing: only the owners and open/closed - the key,
-   currency, category, type and starting balance are shown, locked. */
+/* Creating: everything. Editing: the owners, the starting balance and
+   open/closed - the key, currency, category and type are shown, locked. */
 function accountSheet(p){
   const isNew = p.index==null;
   const lockedRow = (label, value) => `<div class="field"><label>${label}</label><input value="${esc(value)}" disabled></div>`;
@@ -471,7 +471,8 @@ function accountSheet(p){
       </div>
       <div class="field"><label>Currency</label>
         <div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-acccur="${c}">${c}</button>`).join('')}</div></div>`
-      : `<div class="btnrow">${lockedRow('Key', p.key)}${lockedRow('Starting balance', money(+p.opening||0, p.currency))}</div>
+      : `<div class="btnrow">${lockedRow('Key', p.key)}
+           <div class="field" style="flex:1"><label>Starting balance ${esc(SYM[p.currency]||'')}</label><input id="aOpening" inputmode="decimal" value="${esc(p.opening)}" style="text-align:right"></div></div>
          <div class="btnrow">${lockedRow('Currency', p.currency)}${lockedRow('Category', p.category)}${lockedRow('Type', p.type)}</div>`}
       <div class="field"><label>Owners</label>
         <div class="chips">${store.people.map((x)=>`<button class="chip ${p.owners.includes(x.name)?'on':''}" data-accowner="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div></div>
@@ -903,8 +904,8 @@ function wire(){
   document.querySelectorAll('[data-accsave]').forEach((el)=>el.onclick=()=>{
     readAcc(); const p=state.page;
     const cur = p.index==null ? null : store.accounts[p.index];
-    /* Editing changes only the owners and the status; the rest is what it was. */
-    const a = cur ? { ...cur, owners:p.owners.slice(), closed:!!p.closed }
+    /* Editing changes the owners, the starting balance and the status; the rest is what it was. */
+    const a = cur ? { ...cur, owners:p.owners.slice(), opening:num(p.opening||'0'), closed:!!p.closed }
       : { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type, opening:num(p.opening||'0'), closed:false };
     try { checkAccount(a, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) Object.assign(cur, a); else { store.accounts.push(a); store.ops[a.key] = []; }
