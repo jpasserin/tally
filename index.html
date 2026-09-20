@@ -74,6 +74,12 @@
   .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
   .cap.fixed{border-color:var(--accent);color:var(--accent2)}
   .hero{font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.05;font-variant-numeric:tabular-nums}
+  /* Report rows: name, then two aligned columns - per month, and the sum. */
+  .rrow{display:grid;grid-template-columns:1fr 82px 96px;align-items:center;gap:6px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .rrow:last-child{border-bottom:0}
+  .rrow .mo,.rgrp .mo{font-size:11px;color:var(--muted);font-weight:600;text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rrow .v,.rgrp .v{text-align:right;font-weight:700;font-variant-numeric:tabular-nums;white-space:nowrap}
+  .rgrp{display:grid;grid-template-columns:82px 96px;gap:6px;text-transform:none;letter-spacing:0}
   /* Six figures for the year, three a row. */
   .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
   .kpi{background:var(--card2);border-radius:12px;padding:8px 9px;min-width:0;position:relative}
@@ -243,9 +249,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=44"></script>
+<script src="backend.js?v=45"></script>
 <script>
-const APP_VERSION="44";
+const APP_VERSION="45";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -647,14 +653,14 @@ function reportGroup(title, types, sums){
     .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
   const total = rows.reduce((t,r)=>t+r.v, 0);
   const div = monthsIn(theYear());
-  const mo = (v) => `<span class="muted" style="font-size:11px;margin-right:8px;font-weight:600">${money(Math.round(v/div*100)/100, store.cur)}/mo</span>`;
+  const perMo = (v) => money(Math.round(v/div*100)/100, store.cur) + '/mo';
   return `
   <div class="card">
-    <h2>${title} <span class="v ${total<0?'neg':'pos'}" style="text-transform:none;letter-spacing:0">${money(total, store.cur)}</span></h2>
-    ${rows.length ? `<div class="rows">${rows.map((r)=>`
-      <div class="row tap" data-rcatopen="${esc(r.c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
+    <h2>${title} <span class="rgrp"><span class="mo">${perMo(total)}</span><span class="v ${total<0?'neg':'pos'}">${money(total, store.cur)}</span></span></h2>
+    ${rows.length ? rows.map((r)=>`
+      <div class="rrow tap" data-rcatopen="${esc(r.c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
         <span class="muted" style="font-size:11.5px">${esc(r.c.type)}</span></span>
-        <span style="white-space:nowrap">${mo(r.v)}<span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></span></div>`).join('')}</div>`
+        <span class="mo">${perMo(r.v)}</span><span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></div>`).join('')
     : `<div class="hint" style="margin-top:0">Nothing this year.</div>`}
   </div>`;
 }
