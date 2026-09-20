@@ -61,6 +61,7 @@
   .tagbox:focus-within{border-color:var(--accent)}
   .tagbox input{flex:1;min-width:90px;width:auto;background:none;border:0;padding:4px 2px}
   .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
+  .cap.fixed{border-color:var(--accent);color:var(--accent2)}
   .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
     color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
   .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -75,7 +76,6 @@
     font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;flex:1}
   .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
   .btn:disabled{opacity:.45;cursor:default}
-  .btn:active:not(:disabled){transform:scale(.98)}
   .status{font-size:12.5px;margin-top:10px;font-weight:600}
   .status.ok{color:var(--good)} .status.bad{color:var(--bad)}
 
@@ -92,6 +92,7 @@
     display:inline-flex;align-items:center;justify-content:center;text-transform:none;letter-spacing:0}
   .gbtn.ghost{background:none;color:var(--accent2);border-color:var(--line);font-weight:600;font-size:11.5px}
   .btn.danger{background:none;border-color:var(--bad);color:var(--bad)}
+  .btn.danger.arm{background:var(--bad);color:#fff}
   .act{color:var(--accent2);cursor:pointer;text-transform:none;letter-spacing:0;font-weight:600}
 
   .chips{display:flex;gap:6px;flex-wrap:wrap}
@@ -110,8 +111,15 @@
   nav button svg{width:21px;height:21px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round;}
   nav button.active{color:var(--accent)}
-  .tab.enter{animation:fade .22s ease}
-  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+
+  /* The Settings sub-tabs: a bar like the bottom one, smaller, under the header. */
+  .subnav{position:sticky;top:45px;z-index:15;display:flex;justify-content:space-around;background:var(--bg);
+    border-bottom:1px solid var(--line);margin:-14px -16px 14px;padding:5px 0 6px}
+  .subnav button{background:none;border:none;color:var(--muted);font-size:9px;display:flex;flex-direction:column;
+    align-items:center;gap:2px;cursor:pointer;padding:2px 1px;flex:1;min-width:0;font-family:inherit}
+  .subnav button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round}
+  .subnav button.active{color:var(--accent)}
 </style>
 </head>
 <body>
@@ -123,7 +131,7 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="11";
+const APP_VERSION="12";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -146,6 +154,11 @@ const typeColor = (t) => (TYPES.find(([k])=>k===t) || ['','#5b6170'])[1];
 const PEOPLE_TYPES = ['Parent','Child'];
 const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
+
+/* A category's own name is always its first tag: the tags stored are the
+   name, then the others - never the name twice. */
+const withName = (name, tags) => [name].concat(tags.filter((t)=>!same(t,name)));
+const withoutName = (name, tags) => tags.filter((t)=>!same(t,name));
 
 /* Throws with the reason. `skip` is the category being edited. */
 function checkCategory(name, type, tags, skip){
@@ -176,7 +189,7 @@ function readConfig(tab){
   for (const r of (tab && tab.rows) || []) {
     const [kind, name, type, tags] = r.map((x)=>String(x==null?'':x).trim());
     if (!name) continue;
-    if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: splitTags(tags) });
+    if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: withName(name, splitTags(tags)) });
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
   }
   return { categories:cats, people };
@@ -230,13 +243,18 @@ const SCREENS = {
 };
 
 /* --------------------------------------------------------------- settings --*/
-const SETTINGS_TABS = [['data','Data'],['tags','Tags'],['people','People'],['about','About']];
+const SETTINGS_TABS = [
+  ['data','Data','<ellipse cx="12" cy="6" rx="8" ry="3"/><path d="M4 6v12c0 1.7 3.6 3 8 3s8-1.3 8-3V6"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/>'],
+  ['tags','Tags','<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'],
+  ['people','People','<circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.3 2.7-5.2 6-5.2s6 1.9 6 5.2"/><path d="M15 20c0-2.4 1-3.8 3-3.8s3 1.4 3 3.8"/>'],
+  ['about','About','<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>'],
+];
 
 function tabSettings(){
   const which = SETTINGS_TABS.some(([k])=>k===state.settings) ? state.settings : 'data';
   return `
-  <div class="pillrow sticky">${SETTINGS_TABS.map(([id,label])=>
-    `<button class="pill ${which===id?'on':''}" data-set="${id}">${label}</button>`).join('')}</div>
+  <div class="subnav">${SETTINGS_TABS.map(([id,label,icon])=>
+    `<button class="${which===id?'active':''}" data-set="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('')}</div>
   ${which==='data' ? settingsData()
     : which==='tags' ? settingsTags()
     : which==='people' ? settingsPeople()
@@ -279,10 +297,11 @@ function catSheet(p){
           `<button class="chip ${p.type===k?'on':''}" data-cattype="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
       <div class="field"><label>Tags</label>
         <div class="tagbox" data-tagbox="1">
+          <span class="cap fixed" id="cNameCap">${esc(p.name.trim()||'—')}</span>
           ${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-tagdel="${i}">×</span></span>`).join('')}
           <input id="cTagIn" value="${esc(p.draft||'')}" autocapitalize="off" autocomplete="off" enterkeyhint="done">
         </div></div>
-      ${isNew?'':`<button class="btn danger" style="width:100%" data-catdelete="${p.index}">Delete</button>`}
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-catdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-catclose="1">${p.closeArm?'Close?':'Close'}</button>
         <button class="btn primary" data-catsave="1">Save</button>
@@ -366,22 +385,25 @@ function renderNav(){
   document.getElementById('nav').innerHTML = TABS.map(([id,label,icon]) =>
     `<button class="${state.tab===id?'active':''}" data-tab="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('');
 }
-/* Only actually going somewhere animates and scrolls to the top; a redraw
-   from a button on the same screen must not jump. */
-/* The widget is not a screen of its own: opening it must not fade the page
-   behind it or scroll it to the top. */
-const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '');
-let lastScreen = null;
+/* Nothing animates on a tap. The page scrolls to the top only when the
+   bottom tab changes; every other redraw keeps its place - the content area
+   holds its height while it is swapped, so the page cannot shorten for a
+   frame and drag the scroll position with it. */
+let lastTab = null;
 function render(){
-  const key = screenKey(), moved = key !== lastScreen;
-  lastScreen = key;
+  const moved = state.tab !== lastTab;
+  lastTab = state.tab;
   renderNav();
   /* The version in the top bar, so a phone that has not picked up a deploy is
      obvious at a glance. */
   document.getElementById('hdrRight').textContent = 'v' + APP_VERSION;
-  document.getElementById('tabs').innerHTML = `<div class="tab${moved?' enter':''}">${SCREENS[state.tab]()}</div>`;
+  const tabs = document.getElementById('tabs');
+  if (!moved && tabs.offsetHeight) tabs.style.minHeight = tabs.offsetHeight + 'px';
+  tabs.innerHTML = `<div class="tab">${SCREENS[state.tab]()}</div>`;
   wire();
   if (moved) scrollTo({ top:0 });
+  if (typeof requestAnimationFrame === 'function') requestAnimationFrame(()=>{ tabs.style.minHeight=''; });
+  else tabs.style.minHeight='';
 }
 
 /* TEMPORARY, for testing: throw away the service worker and every cache,
@@ -402,19 +424,24 @@ function wire(){
 
   /* categories - the widget */
   const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
-    if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; };
+    if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; state.page.delArm=false; };
   const openCat=(index)=>{ const c=index==null?null:store.categories[index];
-    state.page={ kind:'cat', index, name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[], draft:'',
-      was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:c?c.tags.slice():[] }, closeArm:false, focus:false, fresh:true };
+    const extras = c ? withoutName(c.name, c.tags) : [];
+    state.page={ kind:'cat', index, name:c?c.name:'', type:c?c.type:'Necessity', tags:extras.slice(), draft:'',
+      was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:extras.slice() }, closeArm:false, focus:false, fresh:true };
     render(); state.page.fresh=false; };
   /* A tag is added on Enter (or a comma); the field stays ready for the next.
      Backspace on an empty field takes the last capsule back. */
   const addTag=()=>{ const p=state.page; const t=(p.draft||'').replace(/,/g,'').trim();
-    if (t && !p.tags.some((x)=>same(x,t))) p.tags.push(t);
+    if (t && !p.tags.some((x)=>same(x,t)) && !same(t, p.name)) p.tags.push(t);
     p.draft=''; p.focus=true; render(); };
   document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>openCat(null));
   document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>openCat(+el.dataset.catedit));
   document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
+  /* The name capsule follows the name as it is typed - no redraw, the field
+     you are typing in must stay put. */
+  const cn=document.getElementById('cName'), cap=document.getElementById('cNameCap');
+  if (cn && cap) cn.oninput=()=>{ state.page.name=cn.value; state.page.closeArm=false; cap.textContent=cn.value.trim()||'—'; };
   const tagIn=document.getElementById('cTagIn');
   if (tagIn && state.page && state.page.kind==='cat') {
     tagIn.onkeydown=(e)=>{
@@ -431,7 +458,7 @@ function wire(){
     readCat(); const p=state.page;
     /* Whatever is still typed in the tag field counts as a tag too. */
     const t=(p.draft||'').replace(/,/g,'').trim(); if (t && !p.tags.some((x)=>same(x,t))) p.tags.push(t); p.draft='';
-    const name=p.name.trim(), tags=p.tags.slice();
+    const name=p.name.trim(), tags=withName(name, p.tags);
     const cur = p.index==null ? null : store.categories[p.index];
     try { checkCategory(name, p.type, tags, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) Object.assign(cur, { name, type:p.type, tags });
@@ -443,8 +470,11 @@ function wire(){
     if (n) p.name=n.value; if (t) p.draft=t.value;
     if (catDirty(p) && !p.closeArm) { p.closeArm=true; render(); return; }
     state.page=null; render(); });
+  /* Delete: red once, then gone. Any other tap disarms it. */
   document.querySelectorAll('[data-catdelete]').forEach((el)=>el.onclick=()=>{
-    if (!confirm('Delete this category?')) return;
+    const p=state.page; const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
+    if (n) p.name=n.value; if (t) p.draft=t.value;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.categories.splice(+el.dataset.catdelete, 1); state.page=null; commit(); });
 
   /* people */
