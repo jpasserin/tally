@@ -1,0 +1,214 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0d0f15">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tally">
+<title>Tally</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="apple-touch-icon" href="icon-180.png">
+<style>
+  :root{
+    --bg:#0d0f15; --bg2:#11131a; --card:#181b24; --card2:#1f2330; --line:#272b38;
+    --txt:#eef1f7; --muted:#8a92a6; --accent:#3b82f6; --accent2:#7cb8ff;
+    --good:#4ade80; --bad:#f87171; --warn:#fbbf24; --r:18px;
+  }
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+  html,body{margin:0;background:var(--bg);color:var(--txt);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;font-size:14px;}
+  body{padding-top:env(safe-area-inset-top);padding-bottom:calc(72px + env(safe-area-inset-bottom));}
+  .wrap{max-width:560px;margin:0 auto;padding:16px 16px 24px;}
+
+  header{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;
+    margin:0 -16px 14px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);}
+  header h1{font-size:20px;margin:0;letter-spacing:.3px;}
+  header h1 .dot{color:var(--accent)}
+
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:18px;margin-bottom:14px;}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
+    margin:0 0 13px;font-weight:600;display:flex;align-items:center;justify-content:space-between;gap:8px;}
+  .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:8px;}
+  .muted{color:var(--muted)}
+
+  .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+  .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
+    color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
+  .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
+
+  .field{margin-bottom:10px}
+  .field label{display:block;font-size:11px;color:var(--muted);margin-bottom:4px;text-transform:uppercase;letter-spacing:.5px}
+  input,select{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--txt);border-radius:10px;
+    padding:9px 10px;font-size:14px;font-family:inherit;outline:none}
+  input:focus{border-color:var(--accent)}
+  .btnrow{display:flex;gap:7px}
+  .btn{background:var(--card2);border:1px solid var(--line);color:var(--txt);border-radius:11px;padding:10px 14px;
+    font-size:13.5px;font-weight:600;cursor:pointer;font-family:inherit;flex:1}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn:disabled{opacity:.45;cursor:default}
+  .btn:active:not(:disabled){transform:scale(.98)}
+  .status{font-size:12.5px;margin-top:10px;font-weight:600}
+  .status.ok{color:var(--good)} .status.bad{color:var(--bad)}
+
+  .rows .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .rows .row:last-child{border-bottom:0}
+  .row .k{font-size:13.5px} .row .v{font-weight:700;font-variant-numeric:tabular-nums}
+
+  nav{position:fixed;bottom:0;left:0;right:0;background:rgba(17,19,26,.92);backdrop-filter:blur(12px);
+    border-top:1px solid var(--line);display:flex;justify-content:space-around;
+    padding:8px 0 calc(8px + env(safe-area-inset-bottom));z-index:10;}
+  nav button{background:none;border:none;color:var(--muted);font-size:9.5px;display:flex;flex-direction:column;
+    align-items:center;gap:3px;cursor:pointer;padding:4px 1px;flex:1;min-width:0;font-family:inherit}
+  nav button svg{width:21px;height:21px;display:block;stroke:currentColor;fill:none;stroke-width:2;
+    stroke-linecap:round;stroke-linejoin:round;}
+  nav button.active{color:var(--accent)}
+  .tab.enter{animation:fade .22s ease}
+  @keyframes fade{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header><h1>Tally<span class="dot">.</span></h1><div id="hdrRight"></div></header>
+  <div id="tabs"></div>
+</div>
+<nav id="nav"></nav>
+
+<script src="backend.js"></script>
+<script>
+const APP_VERSION="1";
+const BK = window.TallyBackend;
+
+/* ------------------------------------------------------------------ store --
+   Everything this device remembers, in one localStorage key. */
+const KEY = 'tally-v1';
+function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null }, loadStore());
+const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
+
+const state = { tab:'settings', settings:'data', sync:null };
+const esc = (s) => String(s==null?'':s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+/* ------------------------------------------------------------------- tabs --*/
+const TABS = [
+  ['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
+  ['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
+  ['account','Account','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
+  ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>'],
+  ['settings','Settings','<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'],
+];
+
+const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
+const SCREENS = {
+  summary: () => empty('Summary'),
+  report:  () => empty('Report'),
+  account: () => empty('Account'),
+  history: () => empty('History'),
+  settings: tabSettings,
+};
+
+/* --------------------------------------------------------------- settings --*/
+const SETTINGS_TABS = [['data','Data'],['tags','Tags'],['people','People'],['about','About']];
+
+function tabSettings(){
+  const which = SETTINGS_TABS.some(([k])=>k===state.settings) ? state.settings : 'data';
+  return `
+  <div class="pillrow">${SETTINGS_TABS.map(([id,label])=>
+    `<button class="pill ${which===id?'on':''}" data-set="${id}">${label}</button>`).join('')}</div>
+  ${which==='data' ? settingsData()
+    : which==='tags' ? empty('Tags')
+    : which==='people' ? empty('People')
+    : settingsAbout()}`;
+}
+
+function settingsData(){
+  const b = store.backend;
+  const st = state.sync;
+  return `
+  <div class="card">
+    <h2>Spreadsheet</h2>
+    <div class="field"><label>Script url</label>
+      <input id="bkUrl" value="${esc(b.url)}" placeholder="https://script.google.com/macros/s/…/exec" autocapitalize="off" autocorrect="off"></div>
+    <div class="field"><label>Token</label>
+      <input id="bkTok" value="${esc(b.token)}" type="password" autocapitalize="off"></div>
+    <div class="btnrow">
+      <button class="btn primary" data-bktest="1">Test</button>
+    </div>
+    ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
+  </div>`;
+}
+
+/* Whether the page runs as an installed app rather than a browser tab. */
+const standalone = () => (typeof matchMedia==='function' && matchMedia('(display-mode: standalone)').matches)
+  || (typeof navigator!=='undefined' && navigator.standalone===true);
+let INSTALL_EVT = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); INSTALL_EVT = e; render(); });
+
+function settingsAbout(){
+  return `
+  <div class="card">
+    <h2>Versions</h2>
+    <div class="rows">
+      <div class="row"><span class="k">App</span><span class="v">v${APP_VERSION}</span></div>
+      <div class="row"><span class="k">Backend</span><span class="v">${store.backendVersion?'v'+esc(store.backendVersion):'—'}</span></div>
+    </div>
+  </div>
+  ${standalone() ? '' : `<div class="card">
+    <h2>Install</h2>
+    <button class="btn primary" data-install="1">Install on this phone</button>
+  </div>`}`;
+}
+
+/* ----------------------------------------------------------------- render --*/
+function renderNav(){
+  document.getElementById('nav').innerHTML = TABS.map(([id,label,icon]) =>
+    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('');
+}
+/* Only actually going somewhere animates and scrolls to the top; a redraw
+   from a button on the same screen must not jump. */
+const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '');
+let lastScreen = null;
+function render(){
+  const key = screenKey(), moved = key !== lastScreen;
+  lastScreen = key;
+  renderNav();
+  document.getElementById('tabs').innerHTML = `<div class="tab${moved?' enter':''}">${SCREENS[state.tab]()}</div>`;
+  wire();
+  if (moved) scrollTo({ top:0 });
+}
+
+function wire(){
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
+  document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; render(); });
+
+  /* The fields save as you type, so leaving the tab loses nothing. */
+  const u=document.getElementById('bkUrl'), t=document.getElementById('bkTok');
+  if (u) u.oninput=()=>{ store.backend.url=u.value.trim(); save(); };
+  if (t) t.oninput=()=>{ store.backend.token=t.value.trim(); save(); };
+  document.querySelectorAll('[data-bktest]').forEach((el)=>el.onclick=async()=>{
+    if (u) store.backend.url=u.value.trim();
+    if (t) store.backend.token=t.value.trim();
+    save();
+    state.sync={ msg:'Testing…' }; render();
+    try {
+      const j = await BK.ping(store.backend);
+      store.backendVersion=j.backend; save();
+      state.sync={ msg:'Connected — backend v'+j.backend };
+    } catch (e) { state.sync={ msg:e.message, bad:true }; }
+    render(); });
+
+  document.querySelectorAll('[data-install]').forEach((el)=>el.onclick=async()=>{
+    if (INSTALL_EVT) { INSTALL_EVT.prompt(); try { await INSTALL_EVT.userChoice; } catch (e) {} INSTALL_EVT=null; render(); return; }
+    alert('Browser menu › Install app (or Add to Home Screen).'); });
+}
+
+render();
+
+if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+</script>
+</body>
+</html>
