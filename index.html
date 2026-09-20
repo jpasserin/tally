@@ -27,6 +27,11 @@
     margin:0 -16px 14px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);}
   header h1{font-size:20px;margin:0;letter-spacing:.3px;}
   header h1 .dot{color:var(--accent)}
+  header h1 .ver{font-size:11px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
+  /* The preferred currency: one toggle, two halves. */
+  .curtog{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
+  .curtog button{background:none;border:0;color:var(--muted);font-weight:700;font-size:13px;padding:3px 10px;cursor:pointer;font-family:inherit}
+  .curtog button.on{background:var(--accent);color:#fff}
   header .hdrright{display:flex;align-items:center;gap:10px;color:var(--muted);font-size:12px;font-weight:600}
   .hdrbtn{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:28px;height:26px;
     cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
@@ -62,6 +67,10 @@
   .tagbox input{flex:1;min-width:90px;width:auto;background:none;border:0;padding:2px 2px}
   .cap .x{margin-left:6px;opacity:.65;cursor:pointer;font-weight:700}
   .cap.fixed{border-color:var(--accent);color:var(--accent2)}
+  .hero{font-size:30px;font-weight:800;letter-spacing:-.5px;line-height:1.05;font-variant-numeric:tabular-nums}
+  .herosub{font-size:12px;color:var(--muted);margin-top:3px}
+  .neg{color:var(--bad)!important} .pos{color:var(--good)}
+  .row .v.neg,.row .v.pos{font-weight:700}
   table.fx{border-collapse:collapse;width:100%;font-size:12.5px}
   table.fx th,table.fx td{padding:5px 4px;text-align:right;white-space:nowrap;border-bottom:1px solid var(--line);font-variant-numeric:tabular-nums}
   table.fx th{color:var(--muted);font-weight:600;font-size:10px;text-transform:uppercase;letter-spacing:.4px}
@@ -151,25 +160,26 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Tally<span class="dot">.</span></h1><div class="hdrright"><span id="hdrRight"></span></div></header>
+  <header><h1>Tally<span class="dot">.</span> <span id="hdrRight" class="ver"></span></h1>
+    <div class="hdrright"><span class="curtog" id="curTog"></span></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=20"></script>
+<script src="backend.js?v=21"></script>
 <script>
-const APP_VERSION="20";
+const APP_VERSION="21";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], accounts:[], rates:[],
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], accounts:[], ops:{}, rates:[], cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null };
 
 /* ------------------------------------------------------------- the model --
    Categories: a unique name, a type, and tags that are unique across ALL
@@ -205,8 +215,36 @@ function checkCategory(name, type, tags, skip){
     if (owner) throw new Error('"'+t+'" is already in '+owner.name+'.');
   }
 }
+/* Operations of a cash account. Amount is signed as it reads on the
+   statement; the main tag takes the whole amount less the secondary tags,
+   each of which names its own part. Budget and one-off come later. */
+const TODAY = () => new Date().toISOString().slice(0,10);
+const uid = () => 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
+const allTags = () => store.categories.flatMap((c)=>c.tags.map((t)=>({ tag:t, cat:c.name })));
+const tagKnown = (t) => allTags().some((x)=>x.tag===t);
+const opsOf = (key) => store.ops[key] || (store.ops[key] = []);
+const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
+function checkOp(o){
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) throw new Error('A date.');
+  if (!o.name) throw new Error('A name.');
+  if (!isFinite(o.amount) || o.amount===0) throw new Error('An amount.');
+  if (!o.tag) throw new Error('A tag.');
+  let used = 0;
+  for (const sp of o.splits) {
+    if (!sp.tag) throw new Error('Every secondary tag needs a tag.');
+    if (sp.tag===o.tag) throw new Error('"'+sp.tag+'" is the main tag.');
+    if (!isFinite(sp.amount) || sp.amount===0) throw new Error('Every secondary tag needs an amount.');
+    used += Math.abs(sp.amount);
+  }
+  if (used >= Math.abs(o.amount)) throw new Error('Secondary tags must add up to less than the amount.');
+}
+const balanceOf = (a) => Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
+const SYM = { USD:'$', EUR:'€', AUD:'A$' };
+const money = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+
 function checkAccount(a, skip){
   if (!a.key) throw new Error('A key.');
+  if (!isFinite(a.opening)) throw new Error('A starting balance.');
   if (!CURRENCIES.includes(a.currency)) throw new Error('A currency.');
   if (!a.owners.length) throw new Error('An owner.');
   if (!ACCOUNT_CATEGORIES.some(([k])=>k===a.category)) throw new Error('A category.');
@@ -222,12 +260,38 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed'];
 function configTab(){
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
-    rows: store.categories.map((c)=>['category', c.name, c.type, c.tags.join(', '), '', '', ''])
-      .concat(store.people.map((p)=>['person', p.name, p.type, '', '', '', '']))
-      .concat(store.accounts.map((a)=>['account', a.key, a.type, '', a.currency, a.owners.join(', '), a.category])) };
+    rows: store.categories.map((c)=>['category', c.name, c.type, c.tags.join(', '), '', '', '', '', ''])
+      .concat(store.people.map((p)=>['person', p.name, p.type, '', '', '', '', '', '']))
+      .concat(store.accounts.map((a)=>['account', a.key, a.type, '', a.currency, a.owners.join(', '), a.category, a.opening||0, a.closed?'yes':''])) };
+}
+/* One tab per account, named by its key: the operations, one per row.
+   Secondary tags travel as "Tag:12.5; Other:3". */
+const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id'];
+function opsTab(a){
+  return { name:a.key, headers:OPS_HEADERS,
+    rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount, o.note||'', o.tag,
+      o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id]) };
+}
+function readOps(tab){
+  const heads = ((tab && tab.headers) || OPS_HEADERS).map((h)=>String(h).trim());
+  const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : r[i]; };
+  const str = (v) => String(v==null?'':v).trim();
+  const out = [];
+  for (const r of (tab && tab.rows) || []) {
+    let date = col(r,'Date');
+    date = date instanceof Date ? date.toISOString().slice(0,10) : str(date).slice(0,10);
+    const amount = num(col(r,'Amount'));
+    if (!date || !isFinite(amount)) continue;
+    out.push({ id: str(col(r,'Id')) || uid(), date, name: str(col(r,'Name')), amount, note: str(col(r,'Description')),
+      tag: str(col(r,'Tag')),
+      splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const i=x.lastIndexOf(':');
+        return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
+      budget: str(col(r,'Budget')), oneoff: str(col(r,'One-off'))==='yes' });
+  }
+  return out;
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
@@ -242,23 +306,35 @@ function readConfig(tab){
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       owners: splitTags(col(r,'Owners')),
-      category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash' });
+      category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash',
+      opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
+      closed: col(r,'Closed')==='yes' });
   }
   return { categories:cats, people, accounts };
 }
 const connected = () => !!(store.backend.url && store.backend.token);
 let pushTimer = null;
+/* Which tabs have changed since the last push: 'Config', or an account key.
+   Kept in the store, so a change made offline still goes when back. */
+const dirty = () => store.dirty || (store.dirty = []);
+const markDirty = (name) => { if (!dirty().includes(name)) dirty().push(name); };
 /* Every edit lands in the sheet shortly after; the status shows in Data. */
 function pushSoon(){
   if (!connected()) return;
   clearTimeout(pushTimer);
-  pushTimer = setTimeout(pushNow, 600);
+  pushTimer = setTimeout(()=>pushNow(false), 600);
 }
-async function pushNow(){
+/* everything=true (the Sync button) sends every tab; otherwise only the
+   changed ones. A tab the app does not send, the script leaves alone. */
+async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
+  const names = everything ? ['Config'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
+  const tabs = names.map((n)=> n==='Config' ? configTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   state.sync={ msg:'Syncing…' }; render();
   try {
-    const j = await BK.push(store.backend, [configTab()]);
+    const j = await BK.push(store.backend, tabs);
+    store.dirty = dirty().filter((n)=>!names.includes(n));
     store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
     state.sync={ msg:'Synced '+new Date().toTimeString().slice(0,5) };
   } catch (e) { state.sync={ msg:e.message, bad:true }; }
@@ -269,12 +345,14 @@ async function pullNow(){
   const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
   const got = readConfig(cfg);
   store.categories=got.categories; store.people=got.people; store.accounts=got.accounts;
+  store.ops = {};
+  for (const a of store.accounts) store.ops[a.key] = readOps((j.tabs||[]).find((t)=>t.name===a.key));
   store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   return got;
 }
-/* A change to the model: keep it, show it, send it. */
-function commit(){ save(); render(); pushSoon(); }
+/* A change to the model: keep it, show it, send the tabs it touched. */
+function commit(...tabs){ for (const t of tabs.length?tabs:['Config']) markDirty(t); save(); render(); pushSoon(); }
 const esc = (s) => String(s==null?'':s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* ------------------------------------------------------------------- tabs --*/
@@ -298,6 +376,8 @@ const SCREENS = {
 /* --------------------------------------------------------------- accounts --*/
 function tabAccount(){
   const p = state.page;
+  if (state.account && store.accounts.some((a)=>a.key===state.account)) return accountPage(store.accounts.find((a)=>a.key===state.account));
+  state.account = null;
   const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: store.accounts.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
   return (p && p.kind==='account' ? accountSheet(p) : '') + `
   <div class="card">
@@ -306,30 +386,102 @@ function tabAccount(){
       <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
         <span class="dot" style="background:${g.col}"></span>${g.k}</div>
       <div class="rows">${g.list.map((a)=>`
-        <div class="row tap" data-accedit="${store.accounts.indexOf(a)}">
-          <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${a.type!=='Cash'?' · '+esc(a.type):''}</span></div>
-          <span class="chev">›</span>
+        <div class="row tap" data-accopen="${esc(a.key)}">
+          <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${a.type!=='Cash'?' · '+esc(a.type):''}${a.closed?' · closed':''}</span></div>
+          <span class="v ${balanceOf(a)<0?'neg':''}">${money(balanceOf(a), a.currency)}</span>
         </div>`).join('')}</div>`).join('')
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
-const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type]);
+
+/* One account: its balance and its operations, newest first. Edit (top
+   right) opens the widget where only the owners and open/closed can change;
+   + opens a new operation. */
+function accountPage(a){
+  const p = state.page;
+  const ops = opsOf(a.key).slice().sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const bal = balanceOf(a);
+  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
+  <div class="card">
+    <h2><span class="act" data-accback="1">‹ Accounts</span>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}">Edit</button></h2>
+    <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
+    <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''}</div>
+  </div>
+  <div class="card">
+    <h2>Operations <button class="gbtn" data-opnew="1">+</button></h2>
+    ${ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap" data-opedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0">
+          <div class="k" style="font-weight:600">${esc(o.name)}</div>
+          <div class="sub">${esc(o.date)} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
+        </div>
+        <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>
+      </div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
+const tagOptions = (sel) => `<option value="">—</option>` + store.categories.map((c)=>
+  `<optgroup label="${esc(c.name)}">${c.tags.map((t)=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)}</option>`).join('')}</optgroup>`).join('');
+function opSheet(p, a){
+  const isNew = p.id==null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-opclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New operation':esc(p.was.name||'Operation')}</h3>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="oDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>Amount ${esc(SYM[a.currency]||a.currency)}</label><input id="oAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+      </div>
+      <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
+      <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
+      <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select></div>
+      <div class="field"><label>Secondary tags</label>
+        ${p.splits.map((sp,i)=>`<div class="btnrow" style="margin-bottom:5px">
+          <select id="oSpTag${i}" style="flex:1;min-width:0">${tagOptions(sp.tag)}</select>
+          <input id="oSpAmt${i}" inputmode="decimal" value="${esc(sp.amount)}" style="width:86px;text-align:right">
+          <button class="chip" data-opspdel="${i}" style="flex:none">×</button>
+        </div>`).join('')}
+        <button class="chip" data-opspadd="1">+ tag</button></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-opdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-opclose="1">${p.closeArm?'Close?':'Close'}</button>
+        <button class="btn primary" data-opsave="1">Save</button>
+      </div>
+    </div>
+  </div>`;
+}
+const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type, p.opening, p.closed]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type, p.was.opening, p.was.closed]);
+/* Creating: everything. Editing: only the owners and open/closed - the key,
+   currency, category, type and starting balance are shown, locked. */
 function accountSheet(p){
   const isNew = p.index==null;
+  const lockedRow = (label, value) => `<div class="field"><label>${label}</label><input value="${esc(value)}" disabled></div>`;
   return `
   <div class="sheetwrap">
     <div class="scrim" data-accclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
       <h3>${isNew?'New account':esc(store.accounts[p.index].key)}</h3>
-      <div class="field"><label>Key</label><input id="aKey" value="${esc(p.key)}" autocapitalize="characters"></div>
+      ${isNew ? `
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Key</label><input id="aKey" value="${esc(p.key)}" autocapitalize="characters"></div>
+        <div class="field" style="flex:1"><label>Starting balance</label><input id="aOpening" inputmode="decimal" value="${esc(p.opening)}" style="text-align:right"></div>
+      </div>
       <div class="field"><label>Currency</label>
-        <div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-acccur="${c}">${c}</button>`).join('')}</div></div>
+        <div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-acccur="${c}">${c}</button>`).join('')}</div></div>`
+      : `<div class="btnrow">${lockedRow('Key', p.key)}${lockedRow('Starting balance', money(+p.opening||0, p.currency))}</div>
+         <div class="btnrow">${lockedRow('Currency', p.currency)}${lockedRow('Category', p.category)}${lockedRow('Type', p.type)}</div>`}
       <div class="field"><label>Owners</label>
         <div class="chips">${store.people.map((x)=>`<button class="chip ${p.owners.includes(x.name)?'on':''}" data-accowner="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div></div>
+      ${isNew ? `
       <div class="field"><label>Category</label>
         <div class="chips">${ACCOUNT_CATEGORIES.map(([k,col])=>`<button class="chip ${p.category===k?'on':''}" data-acccat="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
       <div class="field"><label>Type</label>
-        <div class="chips">${ACCOUNT_TYPES.map((k)=>`<button class="chip ${p.type===k?'on':''}" data-acctype="${k}">${k}</button>`).join('')}</div></div>
+        <div class="chips">${ACCOUNT_TYPES.map((k)=>`<button class="chip ${p.type===k?'on':''}" data-acctype="${k}">${k}</button>`).join('')}</div></div>`
+      : `<div class="field"><label>Status</label>
+        <div class="chips"><button class="chip ${!p.closed?'on':''}" data-accclosed="0">Open</button><button class="chip ${p.closed?'on':''}" data-accclosed="1">Closed</button></div></div>`}
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-accdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-accclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -617,6 +769,8 @@ function render(){
   /* The version in the top bar, so a phone that has not picked up a deploy is
      obvious at a glance. */
   document.getElementById('hdrRight').textContent = 'v' + APP_VERSION;
+  const ct = document.getElementById('curTog');
+  ct.innerHTML = ['USD','EUR'].map((c)=>`<button class="${store.cur===c?'on':''}" data-cur="${c}">${SYM[c]}</button>`).join('');
   const tabs = document.getElementById('tabs');
   if (!moved && tabs.offsetHeight) tabs.style.minHeight = tabs.offsetHeight + 'px';
   tabs.innerHTML = `<div class="tab">${SCREENS[state.tab]()}</div>`;
@@ -638,7 +792,8 @@ async function hardReload(){
 
 function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; render(); });
+  document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
 
   /* categories - the widget */
@@ -722,30 +877,38 @@ function wire(){
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
-  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
+  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow(true));
 
   /* accounts - the widget */
-  const readAcc=()=>{ const k=document.getElementById('aKey'); if (k) state.page.key=k.value; state.page.closeArm=false; state.page.delArm=false; };
+  const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening');
+    if (k) state.page.key=k.value; if (o) state.page.opening=o.value; state.page.closeArm=false; state.page.delArm=false; };
   const openAcc=(index)=>{ const a=index==null?null:store.accounts[index];
-    const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash' };
+    const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash',
+      opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false };
     state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>openAcc(null));
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>openAcc(+el.dataset.accedit));
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; render(); });
+  document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; render(); });
+  document.querySelectorAll('[data-accclosed]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.closed=el.dataset.accclosed==='1'; render(); });
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
   document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; render(); });
   document.querySelectorAll('[data-accowner]').forEach((el)=>el.onclick=()=>{ readAcc(); const o=el.dataset.accowner, p=state.page;
     p.owners = p.owners.includes(o) ? p.owners.filter((x)=>x!==o) : [...p.owners, o]; render(); });
-  const ak=document.getElementById('aKey');
+  const ak=document.getElementById('aKey'), ao=document.getElementById('aOpening');
   if (ak && state.page && state.page.kind==='account') ak.oninput=()=>{ state.page.key=ak.value; state.page.closeArm=false; state.page.delArm=false; };
+  if (ao && state.page && state.page.kind==='account') ao.oninput=()=>{ state.page.opening=ao.value; state.page.closeArm=false; state.page.delArm=false; };
   document.querySelectorAll('[data-accsave]').forEach((el)=>el.onclick=()=>{
     readAcc(); const p=state.page;
-    const a = { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type };
     const cur = p.index==null ? null : store.accounts[p.index];
+    /* Editing changes only the owners and the status; the rest is what it was. */
+    const a = cur ? { ...cur, owners:p.owners.slice(), closed:!!p.closed }
+      : { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type, opening:num(p.opening||'0'), closed:false };
     try { checkAccount(a, cur); } catch (e) { alert(e.message); render(); return; }
-    if (cur) Object.assign(cur, a); else store.accounts.push(a);
-    state.page=null; commit(); });
+    if (cur) Object.assign(cur, a); else { store.accounts.push(a); store.ops[a.key] = []; }
+    state.page=null; commit('Config', a.key); });
   document.querySelectorAll('[data-accclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const k=document.getElementById('aKey'); if (k) p.key=k.value;
     if (accountDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
@@ -753,7 +916,48 @@ function wire(){
   document.querySelectorAll('[data-accdelete]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const k=document.getElementById('aKey'); if (k) p.key=k.value;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
-    store.accounts.splice(+el.dataset.accdelete, 1); state.page=null; commit(); });
+    const gone = store.accounts.splice(+el.dataset.accdelete, 1)[0];
+    if (gone) delete store.ops[gone.key];
+    state.account=null; state.page=null; commit(); });
+
+  /* operations - the widget */
+  const acct = () => store.accounts.find((a)=>a.key===state.account);
+  const readOp=()=>{ const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
+    for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oTag','tag']]) { const v=g(id); if (v!==undefined) p[f]=v; }
+    p.splits = p.splits.map((sp,i)=>({ tag: g('oSpTag'+i) ?? sp.tag, amount: g('oSpAmt'+i) ?? sp.amount }));
+    p.closeArm=false; p.delArm=false; };
+  const openOp=(id)=>{ const o = id==null ? null : opsOf(state.account).find((x)=>x.id===id);
+    const cur = { date:o?o.date:TODAY(), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'',
+      splits:o?o.splits.map((sp)=>({ tag:sp.tag, amount:String(sp.amount) })):[] };
+    state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
+    render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>openOp(null));
+  document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOp(el.dataset.opedit));
+  document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', amount:'' }); render(); });
+  document.querySelectorAll('[data-opspdel]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.splice(+el.dataset.opspdel,1); render(); });
+  if (state.page && state.page.kind==='op') {
+    for (const id of ['oDate','oName','oAmount','oNote','oTag'].concat(state.page.splits.flatMap((sp,i)=>['oSpTag'+i,'oSpAmt'+i]))) {
+      const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; };
+    }
+  }
+  document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
+    readOp(); const p=state.page, a=acct(); if (!a) return;
+    const o = { id: p.id || uid(), date:p.date, name:p.name.trim(), amount:num(p.amount), note:p.note.trim(), tag:p.tag,
+      splits: p.splits.map((sp)=>({ tag:sp.tag, amount:num(sp.amount) })), budget:'', oneoff:false };
+    try { checkOp(o); } catch (e) { alert(e.message); render(); return; }
+    const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
+    if (i>=0) Object.assign(list[i], o); else list.push(o);
+    state.page=null; commit(a.key); });
+  document.querySelectorAll('[data-opclose]').forEach((el)=>el.onclick=()=>{
+    const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
+    for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oTag','tag']]) { const v=g(id); if (v!==undefined) p[f]=v; }
+    if (opDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
+    state.page=null; render(); });
+  document.querySelectorAll('[data-opdelete]').forEach((el)=>el.onclick=()=>{
+    const p=state.page, a=acct(); if (!a) return;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.opdelete);
+    state.page=null; commit(a.key); });
 
   /* currencies */
   document.querySelectorAll('[data-fxbase]').forEach((el)=>el.onclick=()=>{ state.fxBase=el.dataset.fxbase; render(); });
