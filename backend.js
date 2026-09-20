@@ -21,12 +21,21 @@
       throw new Error('That is not an Apps Script /exec url.');
     }
     const body = Object.assign({ token: cfg.token || '', action }, extra || {});
-    const res = await fetch(cfg.url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify(body),
-      redirect: 'follow',
-    });
+    let res;
+    try {
+      res = await fetch(cfg.url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify(body),
+        redirect: 'follow',
+      });
+    } catch (e) {
+      /* The browser's "Failed to fetch": no response at all. With Apps
+         Script that is nearly always the deployment answering with a login
+         redirect, which carries no CORS headers - access is "only myself" or
+         "anyone with a Google account" instead of "anyone". */
+      throw new Error('Could not reach the script. Deployment access must be "Anyone", the url the /exec one - or you are offline.');
+    }
     if (!res.ok) throw new Error('Backend said ' + res.status + '.');
     const text = await res.text();
     let j;
