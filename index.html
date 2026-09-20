@@ -28,6 +28,12 @@
   header h1{font-size:20px;margin:0;letter-spacing:.3px;}
   header h1 .dot{color:var(--accent)}
   header h1 .ver{font-size:11px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
+  /* The year: first operation to last, stepped from the top bar. */
+  .ystep{display:flex;align-items:center;gap:2px}
+  .ystep button{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:26px;height:26px;
+    font-size:15px;line-height:1;cursor:pointer;font-family:inherit;padding:0}
+  .ystep button:disabled{opacity:.3;cursor:default}
+  .ystep b{font-size:14px;min-width:44px;text-align:center;font-variant-numeric:tabular-nums}
   /* The preferred currency: one toggle, two halves. */
   .curtog{display:inline-flex;border:1px solid var(--line);border-radius:9px;overflow:hidden}
   .curtog button{background:none;border:0;color:var(--muted);font-weight:700;font-size:13px;padding:3px 10px;cursor:pointer;font-family:inherit}
@@ -161,14 +167,15 @@
 <body>
 <div class="wrap">
   <header><h1>Tally<span class="dot">.</span> <span id="hdrRight" class="ver"></span></h1>
+    <div class="ystep" id="yearStep"></div>
     <div class="hdrright"><span class="curtog" id="curTog"></span></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=25"></script>
+<script src="backend.js?v=26"></script>
 <script>
-const APP_VERSION="25";
+const APP_VERSION="26";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -179,7 +186,7 @@ const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null,
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null, account:null };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null };
 
 /* ------------------------------------------------------------- the model --
    Categories: a unique name, a type, and tags that are unique across ALL
@@ -247,8 +254,43 @@ function checkOp(o){
   if (used >= Math.abs(o.amount)) throw new Error('Secondary tags must add up to less than the amount.');
 }
 const balanceOf = (a) => Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
+/* The years the records span - first operation to last - or just this one. */
+const THIS_YEAR = new Date().getFullYear();
+function years(){
+  let lo = null, hi = null;
+  for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const y = +o.date.slice(0,4); if (!y) continue;
+    lo = lo==null ? y : Math.min(lo, y); hi = hi==null ? y : Math.max(hi, y); }
+  if (lo==null) return [THIS_YEAR];
+  const out = []; for (let y = lo; y <= hi; y++) out.push(y); return out;
+}
+function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year = ys.includes(THIS_YEAR) ? THIS_YEAR : ys[ys.length-1]; return state.year; }
+/* The balance as it stood at the end of a year - every operation up to its
+   last day. The current year is simply everything. */
+const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a)
+  : Math.round(((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= year+'-12-31').reduce((t,o)=>t+o.amount, 0))*100)/100;
+/* The rate for a month: that month's end from the sheet; failing that the
+   latest month before it; for the current month, or when the sheet has
+   nothing yet, today's live rate. Null when there is nothing at all. */
+function rateRow(month){
+  const now = new Date().toISOString().slice(0,7);
+  if (month >= now && store.live) return store.live;
+  const rows = store.rates.filter((r)=>r.month <= month).sort((a,b)=>a.month<b.month?1:-1);
+  return rows[0] || store.live || null;
+}
+/* An amount in another currency, at a month's rate. Null when it cannot be. */
+function conv(amount, from, to, month){
+  if (from===to) return amount;
+  const r = rateRow(month); if (!r) return null;
+  return Math.round(amount * rateOf(r, from, to) * 100) / 100;
+}
+/* "(€10.00)" - or nothing when the currencies match or there is no rate. */
+const paren = (amount, from, month) => { if (from===store.cur) return ''; const v = conv(amount, from, store.cur, month);
+  return v==null ? '' : `<span class="muted" style="font-size:11.5px;margin-right:6px">(${money(v, store.cur)})</span>`; };
+const under = (amount, from, month) => { if (from===store.cur) return ''; const v = conv(amount, from, store.cur, month);
+  return v==null ? '' : `<div class="muted" style="font-size:11px;text-align:right">${money(v, store.cur)}</div>`; };
 const SYM = { USD:'$', EUR:'€', AUD:'A$' };
 const money = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+const money0 = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.round(Math.abs(v)).toLocaleString('en-US');
 
 function checkAccount(a, skip){
   if (!a.key) throw new Error('A key.');
@@ -418,22 +460,29 @@ const SCREENS = {
 };
 
 /* --------------------------------------------------------------- accounts --*/
+/* The month whose rate a year-end balance is converted at: December of that
+   year, or this month for the current year. */
+const yearMonth = (y) => y >= THIS_YEAR ? new Date().toISOString().slice(0,7) : y + '-12';
 function tabAccount(){
   const p = state.page;
+  const Y = theYear();
   if (state.account && store.accounts.some((a)=>a.key===state.account)) return accountPage(store.accounts.find((a)=>a.key===state.account));
   state.account = null;
   const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: store.accounts.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
   return (p && p.kind==='account' ? accountSheet(p) : '') + `
   <div class="card">
     <h2>Accounts <button class="gbtn" data-accnew="1">+</button></h2>
-    ${store.accounts.length ? groups.map((g)=>`
+    ${store.accounts.length ? groups.map((g)=>{
+      /* The group's balances, each converted at the year's rate, added up. */
+      const total = g.list.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, yearMonth(Y)); return v==null ? t : t + v; }, 0);
+      return `
       <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
-        <span class="dot" style="background:${g.col}"></span>${g.k}</div>
+        <span class="dot" style="background:${g.col}"></span>${g.k}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">(${money0(total, store.cur)})</span></div>
       <div class="rows">${g.list.map((a)=>`
         <div class="row tap" data-accopen="${esc(a.key)}">
           <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${a.type!=='Cash'?' · '+esc(a.type):''}${a.closed?' · closed':''}</span></div>
-          <span class="v ${balanceOf(a)<0?'neg':''}">${money(balanceOf(a), a.currency)}</span>
-        </div>`).join('')}</div>`).join('')
+          <span class="v ${balanceAt(a, Y)<0?'neg':''}">${paren(balanceAt(a, Y), a.currency, yearMonth(Y))}${money(balanceAt(a, Y), a.currency)}</span>
+        </div>`).join('')}</div>`; }).join('')
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
@@ -443,14 +492,17 @@ function tabAccount(){
    + opens a new operation. */
 function accountPage(a){
   const p = state.page;
-  const ops = opsOf(a.key).slice().sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
-  const bal = balanceOf(a);
+  const Y = theYear();
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const bal = balanceAt(a, Y);
+  const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
   return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
   <div class="card">
     <h2><span class="act" data-accback="1">‹ Accounts</span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}">Edit</button></h2>
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
-    <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''}</div>
+    ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
+    <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
   </div>
   <div class="card">
     <h2>Operations <button class="gbtn" data-opnew="1">+</button></h2>
@@ -460,9 +512,9 @@ function accountPage(a){
           <div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
           <div class="sub">${esc(o.date)} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
         </div>
-        <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>
+        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${under(o.amount, a.currency, o.date.slice(0,7))}</span>
       </div>`).join('')}</div>`
-    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+    : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
@@ -865,6 +917,9 @@ function render(){
   document.getElementById('hdrRight').textContent = 'v' + APP_VERSION;
   const ct = document.getElementById('curTog');
   ct.innerHTML = ['USD','EUR'].map((c)=>`<button class="${store.cur===c?'on':''}" data-cur="${c}">${SYM[c]}</button>`).join('');
+  const ys = years(), Y = theYear();
+  document.getElementById('yearStep').innerHTML =
+    `<button data-yearstep="-1" ${Y<=ys[0]?'disabled':''}>‹</button><b>${Y}</b><button data-yearstep="1" ${Y>=ys[ys.length-1]?'disabled':''}>›</button>`;
   const tabs = document.getElementById('tabs');
   if (!moved && tabs.offsetHeight) tabs.style.minHeight = tabs.offsetHeight + 'px';
   tabs.innerHTML = `<div class="tab">${SCREENS[state.tab]()}</div>`;
@@ -888,6 +943,8 @@ function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
+  document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
+    if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
 
   /* an unfiled tag, filed from its row */
@@ -1053,7 +1110,8 @@ function wire(){
     p.splits = p.splits.map((sp,i)=>({ tag: g('oSpTag'+i) ?? sp.tag, amount: g('oSpAmt'+i) ?? sp.amount }));
     p.closeArm=false; p.delArm=false; };
   const openOp=(id)=>{ const o = id==null ? null : opsOf(state.account).find((x)=>x.id===id);
-    const cur = { date:o?o.date:TODAY(), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'',
+    const Y = theYear();
+    const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'',
       splits:o?o.splits.map((sp)=>({ tag:sp.tag, amount:String(sp.amount) })):[] };
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
