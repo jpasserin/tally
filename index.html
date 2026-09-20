@@ -131,7 +131,7 @@
   .selbar.raised{bottom:calc(116px + env(safe-area-inset-bottom))}
   .chart .bar{cursor:pointer}
   .chart .tick.sel{fill:#fff;font-weight:700}
-  .chart .vlab{fill:var(--muted);font-size:9px}
+  .chart .vlab{fill:var(--muted);font-size:8px}
   /* Select box on an operation row, and the bar that appears once some are. */
   .ck{width:18px;height:18px;border:1.5px solid var(--muted);border-radius:5px;flex:none;display:inline-flex;align-items:center;
     justify-content:center;font-size:12px;color:#fff;cursor:pointer;margin-right:8px}
@@ -258,20 +258,20 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=48"></script>
+<script src="backend.js?v=49"></script>
 <script>
-const APP_VERSION="48";
+const APP_VERSION="49";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], rates:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], rates:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[] };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null };
 /* The operations filter, per visit of an account page. */
 const blankFilter = () => ({ q:'', min:'', max:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
 const opFilter = () => state.opf || (state.opf = blankFilter());
@@ -439,7 +439,8 @@ function configTab(){
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'' })))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
+      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' })))
+      .concat((store.dismissed||[]).map((d)=>row({ Kind:'dismissed', Name:d }))) };
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
@@ -479,7 +480,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[];
+  const cats=[], people=[], accounts=[], budgets=[], dismissed=[];
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -497,8 +498,9 @@ function readConfig(tab){
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
+    if (kind==='dismissed') dismissed.push(name);
   }
-  return { categories:cats, people, accounts, budgets };
+  return { categories:cats, people, accounts, budgets, dismissed };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -575,7 +577,7 @@ async function pullNow(){
   const j = await BK.pull(store.backend);
   const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
   const got = readConfig(cfg);
-  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets;
+  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.dismissed=got.dismissed;
   store.ops = {};
   for (const a of store.accounts) store.ops[a.key] = readOps((j.tabs||[]).find((t)=>t.name===a.key));
   store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
@@ -624,6 +626,8 @@ const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
    currency the money actually sits in. */
 const counted = () => store.accounts.filter((a)=>a.category!=='Excluded');
 const CUR_COLORS = { USD:'#f87171', EUR:'#3b82f6', AUD:'#fbbf24' };
+/* 13.1k, 2.4M, 870 - one decimal once in thousands. */
+const kfmt1 = (v) => { const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; };
 const kfmt = (v) => { const a = Math.abs(v); const t = a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e4 ? Math.round(v/1e3)+'k' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; return t; };
 /* by: each currency's share in the SHOWN currency (for the bar); native: the
    same money as it actually sits, in its own currency (for the legend). */
@@ -639,9 +643,10 @@ function tabSummary(){
   const nw = netWorthAt(Y);
   const pos = CURRENCIES.map((c)=>[c, Math.max(0, nw.by[c])]).filter(([,v])=>v>0);
   const sum = pos.reduce((t,[,v])=>t+v, 0);
-  return `
+  const p = state.page;
+  return (p && p.kind==='nwexplain' ? nwExplainSheet(Y, nw) : '') + `
   <div class="card">
-    <h2>Net worth <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
+    <h2>Net worth <button class="qbtn" style="position:static" data-nwexplain="1">?</button></h2>
     <div class="hero ${nw.total<0?'neg':''}">${money(nw.total, store.cur)}</div>
     ${sum>0 ? `
     <div class="pbar">${pos.map(([c,v])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${CUR_COLORS[c]}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>
@@ -649,6 +654,30 @@ function tabSummary(){
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>
   ${nwByMonthCard(Y)}`;
+}
+/* The ? on Net worth: every account behind the number, by currency, with
+   its balance at the year's end and what that is in the shown currency. */
+function nwExplainSheet(Y, nw){
+  const m = yearMonth(Y);
+  const groups = CURRENCIES.map((c)=>({ c, list: counted().filter((a)=>a.currency===c) })).filter((g)=>g.list.length);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-nwclose="1"></div>
+    <div class="sheet${state.page.fresh?' enter':''}">
+      <h3>Net worth <span class="muted" style="font-size:12px;font-weight:600">${Y}</span></h3>
+      <div class="hint" style="margin:0 0 6px">Every account but the Excluded ones, at the end of ${Y}, converted at ${Y>=THIS_YEAR?"today's":'the year-end'} rate.</div>
+      ${groups.map((g)=>`
+      <div class="rows">
+        <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${CUR_COLORS[g.c]}"></span><b>${g.c}</b></span>
+          <span class="v">${money(nw.native[g.c], g.c)}</span></div>
+        ${g.list.map((a)=>{ const b = balanceAt(a, Y), v = conv(b, a.currency, store.cur, m); return `
+        <div class="row" style="padding-left:17px"><span class="k">${esc(a.key)}${a.closed?' <span class="muted" style="font-size:11px">closed</span>':''}</span>
+          <span style="text-align:right"><span class="v ${b<0?'neg':''}">${money(b, a.currency)}</span>${a.currency!==store.cur&&v!=null?`<div class="muted" style="font-size:11px">${money(v, store.cur)}</div>`:''}</span></div>`; }).join('')}
+      </div>`).join('')}
+      <div class="row" style="border:0"><span class="k"><b>Total</b></span><span class="v"><b>${money(nw.total, store.cur)}</b></span></div>
+      <div class="foot"><button class="btn close" style="flex:1" data-nwclose="1">Close</button></div>
+    </div>
+  </div>`;
 }
 /* Net worth at the end of each month of the year, each at its own rate;
    months still to come are left empty. */
@@ -855,9 +884,21 @@ function tabOperations(){
    points at the operation (or account) behind it; tapping opens it. */
 const DAY = 86400000;
 const daysApart = (a, b) => Math.abs(new Date(a) - new Date(b)) / DAY;
+/* "This is correct": a finding put aside, by kind and what it points at.
+   Kept in Config, so every device agrees. */
+const dismissKey = (kind, o, a) => kind + '|' + (o ? o.id : a.key);
+const isDismissed = (kind, o, a) => (store.dismissed||[]).includes(dismissKey(kind, o, a));
+/* The usual tag of a payee - the one it carries most often. */
+function usualTag(name){
+  const t = {};
+  for (const a of store.accounts) for (const o of opsOf(a.key)) if (o.tag && same(o.name, name)) t[o.tag] = (t[o.tag]||0) + 1;
+  return Object.keys(t).sort((x,y)=>t[y]-t[x])[0] || '';
+}
 function warnings(){
   const out = [];
-  const add = (kind, title, o, a, text) => { let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text }); };
+  let hidden = 0;
+  const add = (kind, title, o, a, text) => { if (isDismissed(kind, o, a)) { hidden++; return; }
+    let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text }); };
   const all = store.accounts.flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
   const today = TODAY();
   const keys = store.accounts.map((a)=>a.key.toLowerCase());
@@ -890,31 +931,77 @@ function warnings(){
     if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag]) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
   /* accounts */
   for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
-  return out.sort((x,y)=>y.items.length-x.items.length);
+  out.sort((x,y)=>y.items.length-x.items.length);
+  out.hidden = hidden;
+  return out;
 }
+/* Which fixes fit which kind. */
+const WARN_FIXES = {
+  unknown:['tag','file','ok'], notag:['tag','ok'], inconsistent:['usual','tag','ok'], dup:['delete','ok'],
+  transfer:['ok','tag','delete'], creditspend:['ok','tag','delete'], debitincome:['ok','tag','delete'], future:['ok','delete'], noowner:['owner'],
+};
+const FIX_LABEL = { tag:'Tag', file:'File', ok:'Mark correct', usual:'Use usual', delete:'Delete', owner:'Owner' };
 function tabWarnings(){
   const p = state.page;
   const groups = warnings();
   const n = groups.reduce((t,g)=>t+g.items.length, 0);
-  return (p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : '') + `
+  const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : '';
+  const g = state.warnKind ? groups.find((x)=>x.kind===state.warnKind) : null;
+  if (state.warnKind && !g) state.warnKind = null;
+  if (g) return widget + warnPage(g);
+  return widget + `
   <div class="card">
     <h2>Warnings <span class="muted" style="text-transform:none;letter-spacing:0">${n}</span></h2>
-    ${n ? '' : `<div class="hint" style="margin-top:0">Nothing suspicious.</div>`}
-  </div>
-  ${groups.map((g)=>`
+    ${groups.length ? `<div class="rows">${groups.map((x)=>`
+      <div class="row tap" data-warnopen="${x.kind}"><span class="k">${esc(x.title)}</span>
+        <span style="display:flex;align-items:center;gap:10px"><span class="v">${x.items.length}</span><span class="chev">›</span></span></div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nothing suspicious.</div>`}
+    ${groups.hidden ? `<button class="btn" style="margin-top:10px" data-warnundo="1"${LK()}>Bring back ${groups.hidden} marked correct</button>` : ''}
+  </div>`;
+}
+/* One kind, every finding, a box on each; the bar below offers the fixes
+   that fit, applied to all the ticked ones. */
+function warnPage(g){
+  const on = (k) => state.sel.includes(k);
+  return `
   <div class="card">
     <h2>${esc(g.title)} <span class="muted" style="text-transform:none;letter-spacing:0">${g.items.length}</span></h2>
-    <div class="rows">${g.items.slice(0,25).map(({o,a,text})=> o ? `
+    <div class="rows">${g.items.map(({o,a,text})=>{ const k = o ? o.id : a.key; return o ? `
       <div class="row tap" data-opedit="${esc(o.id)}">
+        ${store.locked?'':`<span class="ck ${on(k)?'on':''}" data-selwarn="${esc(k)}">${on(k)?'✓':''}</span>`}
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
           <div class="sub">${esc(o.date)} · ${esc(a.key)} · ${esc(text)}</div></div>
         <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>
       </div>` : `
       <div class="row tap" data-accedit="${store.accounts.indexOf(a)}">
+        ${store.locked?'':`<span class="ck ${on(k)?'on':''}" data-selwarn="${esc(k)}">${on(k)?'✓':''}</span>`}
         <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(text)}</span></div><span class="chev">›</span>
-      </div>`).join('')}</div>
-    ${g.items.length>25?`<div class="hint">+ ${g.items.length-25} more.</div>`:''}
-  </div>`).join('')}`;
+      </div>`; }).join('')}</div>
+    ${store.locked?'':`<button class="btn" style="margin-top:8px" data-warnall="1">${state.sel.length===g.items.length?'Select none':'Select all'}</button>`}
+  </div>
+  <div style="height:56px"></div>
+  ${warnBar(g)}
+  <div class="closebar"><button class="btn" data-warnclose="1">Close</button></div>`;
+}
+function warnBar(g){
+  const n = state.sel.length; if (!n) return '';
+  const dot = (c) => `<span class="dot" style="background:${c}"></span>`;
+  const fixes = WARN_FIXES[g.kind] || ['ok'];
+  if (state.bulk==='tag' || state.bulk==='file' || state.bulk==='owner') {
+    const list = state.bulk==='tag'
+      ? store.categories.map((c)=>`<button class="cat" data-warnpick="tag|${esc(c.name)}">${dot(typeColor(c.type))}<b>${esc(c.name)}</b></button>`
+          + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-warnpick="tag|${esc(t)}">${dot(typeColor(c.type))}${esc(t)}</button>`).join('')).join('')
+      : state.bulk==='file'
+      ? store.categories.map((c)=>`<button data-warnpick="file|${esc(c.name)}">${dot(typeColor(c.type))}${esc(c.name)}</button>`).join('')
+      : store.people.map((x)=>`<button data-warnpick="owner|${esc(x.name)}">${esc(x.name)} <span class="muted" style="font-size:11px">${esc(x.type)}</span></button>`).join('');
+    return `<div class="selbar pick raised">
+      <div class="selhead"><span>${n} selected · ${FIX_LABEL[state.bulk]}</span><button class="gbtn ghost" data-bulk="">Back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>
+      <div class="selpick">${list || '<button disabled>Nothing to pick</button>'}</div></div>`;
+  }
+  return `<div class="selbar raised"><span>${n} selected</span>${fixes.map((f)=> f==='delete'
+    ? `<button class="gbtn" style="${state.bulk==='delete'?'background:var(--bad);border-color:var(--bad)':''}" data-warnfix="delete">${state.bulk==='delete'?'Delete?':'Delete'}</button>`
+    : (f==='tag'||f==='file'||f==='owner') ? `<button class="gbtn" data-bulk="${f}">${FIX_LABEL[f]}</button>`
+    : `<button class="gbtn" data-warnfix="${f}">${FIX_LABEL[f]}</button>`).join('')}<button class="gbtn ghost" data-selclear="1">✕</button></div>`;
 }
 
 /* ---------------------------------------------------------------- budgets --*/
@@ -1356,7 +1443,8 @@ function columns({ labels, values, color, keys, dataAttr, selected }){
   const W=352, H=150, T=14, B=16;
   const ih=H-T-B, n=labels.length||1;
   const max=Math.max(1,...values.map((v)=>Math.abs(v)));
-  const step=W/n, bw=Math.min(24, step*0.62);
+  /* wide columns, thin gaps; the value above each in a small figure with one decimal */
+  const step=W/n, bw=Math.min(30, step*0.84);
   const sel = new Set(selected||[]);
   let g=`<line class="gl" x1="0" y1="${T+ih}" x2="${W}" y2="${T+ih}"/>`;
   labels.forEach((lab,i)=>{
@@ -1364,7 +1452,7 @@ function columns({ labels, values, color, keys, dataAttr, selected }){
     const on = keys && sel.has(keys[i]);
     if (keys && dataAttr) g+=`<rect x="${(cx-step/2).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H}" fill="transparent" class="bar" ${dataAttr}="${esc(keys[i])}"/>`;
     if (h>0.4) g+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,h).toFixed(1)}" rx="3" fill="${on?'#fff':color}" pointer-events="none"/>`;
-    if (v > max*0.06) g+=`<text class="vlab" x="${cx.toFixed(1)}" y="${(y-3.5).toFixed(1)}" text-anchor="middle" pointer-events="none">${kfmt(v)}</text>`;
+    if (v > max*0.06) g+=`<text class="vlab" x="${cx.toFixed(1)}" y="${(y-3.5).toFixed(1)}" text-anchor="middle" pointer-events="none">${kfmt1(v)}</text>`;
     g+=`<text class="tick${on?' sel':''}" x="${cx.toFixed(1)}" y="${H-4}" text-anchor="middle" pointer-events="none">${esc(lab)}</text>`;
   });
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
@@ -1617,7 +1705,7 @@ function render(){
   const moved = state.tab !== lastTab;
   lastTab = state.tab;
   /* A selection belongs to the list it was made in. */
-  const where = [state.tab, (state.sub||{})[state.tab]||'', state.account||'', state.budget||'', state.cat||''].join('|');
+  const where = [state.tab, (state.sub||{})[state.tab]||'', state.account||'', state.budget||'', state.cat||'', state.warnKind||''].join('|');
   if (where !== lastWhere) { state.sel=[]; state.bulk=null; }
   lastWhere = where;
   renderNav();
@@ -1650,7 +1738,7 @@ async function hardReload(){
 
 function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; state.budget=null; state.cat=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; state.budget=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
     if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
@@ -1969,6 +2057,35 @@ function wire(){
     if (gone) for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) if (same(o.budget||'', gone.name)) { o.budget=''; markDirty(k); }
     state.budget=null; state.page=null; commit(); });
 
+  /* warnings: a kind opens its page; fixes act on the ticked findings */
+  document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnclose]').forEach((el)=>el.onclick=()=>{ state.warnKind=null; state.sel=[]; state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnundo]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; store.dismissed=[]; commit(); });
+  document.querySelectorAll('[data-selwarn]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
+    const k=el.dataset.selwarn; state.sel = state.sel.includes(k) ? state.sel.filter((x)=>x!==k) : [...state.sel, k]; if (!state.sel.length) state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const g = warnings().find((x)=>x.kind===state.warnKind); if (!g) return;
+    const all = g.items.map(({o,a})=> o ? o.id : a.key); state.sel = state.sel.length===all.length ? [] : all; state.bulk=null; render(); });
+  const warnItems = () => { const g = warnings().find((x)=>x.kind===state.warnKind); return g ? g.items.filter(({o,a})=>state.sel.includes(o ? o.id : a.key)) : []; };
+  document.querySelectorAll('[data-warnfix]').forEach((el)=>el.onclick=()=>{
+    const fix = el.dataset.warnfix, items = warnItems(), touched = new Set();
+    if (fix==='delete' && state.bulk!=='delete') { state.bulk='delete'; render(); return; }
+    for (const {o,a} of items) {
+      if (fix==='ok') { const k = dismissKey(state.warnKind, o, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); touched.add('Config'); }
+      else if (fix==='delete' && o) { store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==o.id); touched.add(a.key); }
+      else if (fix==='usual' && o) { const u = usualTag(o.name); if (u && u!==o.tag) { o.tag=u; o.splits=o.splits.filter((sp)=>sp.tag!==u); touched.add(a.key); } }
+    }
+    state.sel=[]; state.bulk=null; if (touched.size) commit(...touched); else render(); });
+  document.querySelectorAll('[data-warnpick]').forEach((el)=>el.onclick=()=>{
+    const i = el.dataset.warnpick.indexOf('|'); const what = el.dataset.warnpick.slice(0,i), val = el.dataset.warnpick.slice(i+1);
+    const items = warnItems(), touched = new Set();
+    for (const {o,a} of items) {
+      if (what==='tag' && o) { o.tag=val; o.splits=o.splits.filter((sp)=>sp.tag!==val); touched.add(a.key); }
+      else if (what==='file' && o) { const c = store.categories.find((x)=>x.name===val); if (!c) continue;
+        for (const t of opTags(o)) if (t && !tagKnown(t)) c.tags.push(t); touched.add('Config'); }
+      else if (what==='owner' && !o) { if (!a.owners.includes(val)) a.owners.push(val); touched.add('Config'); }
+    }
+    state.sel=[]; state.bulk=null; if (touched.size) commit(...touched); else render(); });
+
   /* several operations at once */
   document.querySelectorAll('[data-selop]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
     const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id];
@@ -1993,11 +2110,13 @@ function wire(){
     const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
-  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.cat=null; render(); });
+  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.cat=null; state.warnKind=null; render(); });
   document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; render(); });
   document.querySelectorAll('[data-rcatclose]').forEach((el)=>el.onclick=()=>{ state.cat=null; state.catMonths=[]; state.opf=null; state.page=null; render(); });
   document.querySelectorAll('[data-rcatmonth]').forEach((el)=>el.onclick=()=>{ const m=el.dataset.rcatmonth;
     state.catMonths = state.catMonths.includes(m) ? state.catMonths.filter((x)=>x!==m) : [...state.catMonths, m]; render(); });
+  document.querySelectorAll('[data-nwexplain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'nwexplain', fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-nwclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
