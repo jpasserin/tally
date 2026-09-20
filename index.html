@@ -262,9 +262,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=54"></script>
+<script src="backend.js?v=55"></script>
 <script>
-const APP_VERSION="54";
+const APP_VERSION="55";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -911,10 +911,16 @@ function usualTag(name){
   for (const a of store.accounts) for (const o of opsOf(a.key)) if (o.tag && same(o.name, name)) t[o.tag] = (t[o.tag]||0) + 1;
   return Object.keys(t).sort((x,y)=>t[y]-t[x])[0] || '';
 }
+/* Only the selected year's operations are judged - old oddities the balance
+   has long absorbed are not worth chasing. Payee habits and the other side
+   of a transfer are still looked for across every year. */
 function warnings(){
   const out = [], aside = [];
   let hidden = 0;
-  const add = (kind, title, o, a, text, group) => { if ((group||[o]).some((x)=>isDismissed(kind, x, a))) { hidden++; aside.push({ kind, title, o, a, text, group }); return; }
+  const Y = String(theYear());
+  /* a date in the future belongs to no year yet: it shows while looking at the current one */
+  const add = (kind, title, o, a, text, group) => { if (o && o.date.slice(0,4)!==Y && !(kind==='future' && +Y===THIS_YEAR)) return;
+    if ((group||[o]).some((x)=>isDismissed(kind, x, a))) { hidden++; aside.push({ kind, title, o, a, text, group }); return; }
     let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text, group }); };
   const all = store.accounts.flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
   const today = TODAY();
