@@ -15,7 +15,7 @@
  * Tally never requires redeploying this.
  */
 
-var BACKEND_VERSION = 1;
+var BACKEND_VERSION = 2;
 
 /* ── configure ─────────────────────────────────────────────────────────── */
 var SHEET_ID = 'PUT_YOUR_SPREADSHEET_ID_HERE';
@@ -67,6 +67,8 @@ function push(body) {
   var ss = book(), wrote = {};
   tabs.forEach(function (t) {
     var sh = ss.getSheetByName(t.name) || ss.insertSheet(t.name);
+    /* index: where the tab sits (1 = first). Config asks for 1. */
+    if (t.index) { ss.setActiveSheet(sh); ss.moveActiveSheet(t.index); }
     sh.clearContents();
     var rows = [t.headers].concat(t.rows || []);
     if (rows.length && t.headers.length) sh.getRange(1, 1, rows.length, t.headers.length).setValues(rows);

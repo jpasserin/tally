@@ -56,6 +56,25 @@
   .rows .row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 0;border-bottom:1px solid var(--line)}
   .rows .row:last-child{border-bottom:0}
   .row .k{font-size:13.5px} .row .v{font-weight:700;font-variant-numeric:tabular-nums}
+  .row.tap{cursor:pointer}
+  .row .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
+  .row .chev{color:var(--muted);font-weight:700}
+
+  /* Top-right group button: contour and the blue ground. */
+  .gbtn{background:var(--accent);border:1px solid var(--accent);color:#fff;border-radius:8px;min-width:26px;height:24px;
+    padding:0 7px;font-size:14px;font-weight:700;line-height:1;cursor:pointer;font-family:inherit;
+    display:inline-flex;align-items:center;justify-content:center;text-transform:none;letter-spacing:0}
+  .gbtn.ghost{background:none;color:var(--accent2);border-color:var(--line);font-weight:600;font-size:11.5px}
+  .btn.danger{background:none;border-color:var(--bad);color:var(--bad)}
+  .act{color:var(--accent2);cursor:pointer;text-transform:none;letter-spacing:0;font-weight:600}
+
+  .chips{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{background:var(--card2);border:1px solid var(--line);border-radius:18px;padding:5px 11px;color:var(--txt);
+    font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:6px}
+  .chip.on{background:var(--accent);border-color:var(--accent);color:#fff}
+  .dot{display:inline-block;width:9px;height:9px;border-radius:50%;flex:none}
+  .caps{display:flex;flex-wrap:wrap;gap:5px;margin-top:6px}
+  .cap{font-size:11px;font-weight:600;border-radius:12px;padding:2px 8px;border:1px solid var(--line);color:var(--txt);background:var(--card2)}
 
   nav{position:fixed;bottom:0;left:0;right:0;background:rgba(17,19,26,.92);backdrop-filter:blur(12px);
     border-top:1px solid var(--line);display:flex;justify-content:space-around;
@@ -78,17 +97,92 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="4";
+const APP_VERSION="5";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null }, loadStore());
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[] }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null };
+const state = { tab:'settings', settings:'data', sync:null, page:null };
+
+/* ------------------------------------------------------------- the model --
+   Categories: a unique name, a type, and tags that are unique across ALL
+   categories - one tag, one category. People: a unique name and a kind. */
+const TYPES = [
+  ['Necessity','#f87171'], ['Optional','#fbbf24'], ['Income','#4ade80'],
+  ['Taxes','#eef1f7'], ['Savings','#3b82f6'], ['Misc','#5b6170'],
+];
+const typeColor = (t) => (TYPES.find(([k])=>k===t) || ['','#5b6170'])[1];
+const PEOPLE_TYPES = ['Parent','Child'];
+const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
+
+/* Throws with the reason. `skip` is the category being edited. */
+function checkCategory(name, type, tags, skip){
+  if (!name) throw new Error('A name.');
+  if (!TYPES.some(([k])=>k===type)) throw new Error('A type.');
+  if (store.categories.some((c)=>c!==skip && same(c.name, name))) throw new Error('"'+name+'" already exists.');
+  for (const t of tags) {
+    const owner = store.categories.find((c)=>c!==skip && c.tags.some((x)=>same(x,t)));
+    if (owner) throw new Error('"'+t+'" is already in '+owner.name+'.');
+  }
+}
+function checkPerson(name, type, skip){
+  if (!name) throw new Error('A name.');
+  if (!PEOPLE_TYPES.includes(type)) throw new Error('A type.');
+  if (store.people.some((p)=>p!==skip && same(p.name, name))) throw new Error('"'+name+'" already exists.');
+}
+
+/* ----------------------------------------------------------- the sheet --
+   Config is the FIRST tab and holds settings only: one row per category and
+   per person. Financial records will get tabs of their own. */
+function configTab(){
+  return { name:'Config', index:1, headers:['Kind','Name','Type','Tags'],
+    rows: store.categories.map((c)=>['category', c.name, c.type, c.tags.join(', ')])
+      .concat(store.people.map((p)=>['person', p.name, p.type, ''])) };
+}
+function readConfig(tab){
+  const cats=[], people=[];
+  for (const r of (tab && tab.rows) || []) {
+    const [kind, name, type, tags] = r.map((x)=>String(x==null?'':x).trim());
+    if (!name) continue;
+    if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: splitTags(tags) });
+    if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
+  }
+  return { categories:cats, people };
+}
+const connected = () => !!(store.backend.url && store.backend.token);
+let pushTimer = null;
+/* Every edit lands in the sheet shortly after; the status shows in Data. */
+function pushSoon(){
+  if (!connected()) return;
+  clearTimeout(pushTimer);
+  pushTimer = setTimeout(pushNow, 600);
+}
+async function pushNow(){
+  if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
+  state.sync={ msg:'Syncing…' }; render();
+  try {
+    const j = await BK.push(store.backend, [configTab()]);
+    store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
+    state.sync={ msg:'Synced '+new Date().toTimeString().slice(0,5) };
+  } catch (e) { state.sync={ msg:e.message, bad:true }; }
+  render();
+}
+async function pullNow(){
+  const j = await BK.pull(store.backend);
+  const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
+  const got = readConfig(cfg);
+  store.categories=got.categories; store.people=got.people;
+  store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
+  return got;
+}
+/* A change to the model: keep it, show it, send it. */
+function commit(){ save(); render(); pushSoon(); }
 const esc = (s) => String(s==null?'':s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
 /* ------------------------------------------------------------------- tabs --*/
@@ -118,9 +212,77 @@ function tabSettings(){
   <div class="pillrow">${SETTINGS_TABS.map(([id,label])=>
     `<button class="pill ${which===id?'on':''}" data-set="${id}">${label}</button>`).join('')}</div>
   ${which==='data' ? settingsData()
-    : which==='tags' ? empty('Tags')
-    : which==='people' ? empty('People')
+    : which==='tags' ? settingsTags()
+    : which==='people' ? settingsPeople()
     : settingsAbout()}`;
+}
+
+/* A page one level down inside the tab: same chrome, a back link where the
+   heading would be. Nothing slides up from the bottom. */
+function settingsTags(){
+  const p = state.page;
+  if (p && p.kind==='cat') return catPage(p);
+  return `
+  <div class="card">
+    <h2>Categories <button class="gbtn" data-catnew="1">+</button></h2>
+    ${store.categories.length ? `<div class="rows">${store.categories.map((c,i)=>`
+      <div class="row tap" data-catedit="${i}">
+        <div style="flex:1;min-width:0">
+          <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(c.type)}"></span><b>${esc(c.name)}</b>
+            <span class="muted" style="font-size:11.5px">${esc(c.type)}</span></div>
+          ${c.tags.length?`<div class="caps">${c.tags.map((t)=>`<span class="cap">${esc(t)}</span>`).join('')}</div>`:''}
+        </div>
+        <span class="chev">›</span>
+      </div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+function catPage(p){
+  const isNew = p.index==null;
+  return `
+  <div class="card">
+    <h2><span class="act" data-pageback="1">‹ Categories</span> ${isNew?'New category':esc(store.categories[p.index].name)}</h2>
+    <div class="field"><label>Name</label><input id="cName" value="${esc(p.name)}"></div>
+    <div class="field"><label>Type</label>
+      <div class="chips">${TYPES.map(([k,col])=>
+        `<button class="chip ${p.type===k?'on':''}" data-cattype="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
+    <div class="field"><label>Tags</label><input id="cTags" value="${esc(p.tags)}" placeholder="comma separated"></div>
+    <div class="btnrow">
+      <button class="btn primary" data-catsave="1">${isNew?'Create':'Save'}</button>
+      <button class="btn" data-pageback="1">Cancel</button>
+    </div>
+    ${isNew?'':`<button class="btn danger" style="margin-top:7px;width:100%" data-catdelete="${p.index}">Delete</button>`}
+  </div>`;
+}
+function settingsPeople(){
+  const p = state.page;
+  if (p && p.kind==='person') return personPage(p);
+  return `
+  <div class="card">
+    <h2>People <button class="gbtn" data-personnew="1">+</button></h2>
+    ${store.people.length ? `<div class="rows">${store.people.map((x,i)=>`
+      <div class="row tap" data-personedit="${i}">
+        <div class="k"><b>${esc(x.name)}</b> <span class="muted" style="font-size:11.5px">${esc(x.type)}</span></div>
+        <span class="chev">›</span>
+      </div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">Nobody yet.</div>`}
+  </div>`;
+}
+function personPage(p){
+  const isNew = p.index==null;
+  return `
+  <div class="card">
+    <h2><span class="act" data-pageback="1">‹ People</span> ${isNew?'New person':esc(store.people[p.index].name)}</h2>
+    <div class="field"><label>Name</label><input id="pName" value="${esc(p.name)}"></div>
+    <div class="field"><label>Type</label>
+      <div class="chips">${PEOPLE_TYPES.map((k)=>
+        `<button class="chip ${p.type===k?'on':''}" data-persontype="${k}">${k}</button>`).join('')}</div></div>
+    <div class="btnrow">
+      <button class="btn primary" data-personsave="1">${isNew?'Create':'Save'}</button>
+      <button class="btn" data-pageback="1">Cancel</button>
+    </div>
+    ${isNew?'':`<button class="btn danger" style="margin-top:7px;width:100%" data-persondelete="${p.index}">Delete</button>`}
+  </div>`;
 }
 
 function settingsData(){
@@ -134,7 +296,8 @@ function settingsData(){
     <div class="field"><label>Token</label>
       <input id="bkTok" value="${esc(b.token)}" type="password" autocapitalize="off"></div>
     <div class="btnrow">
-      <button class="btn primary" data-bktest="1">Test</button>
+      <button class="btn" data-bktest="1">Test</button>
+      <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>Sync</button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
   </div>`;
@@ -168,7 +331,7 @@ function renderNav(){
 }
 /* Only actually going somewhere animates and scrolls to the top; a redraw
    from a button on the same screen must not jump. */
-const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '');
+const screenKey = () => state.tab + '|' + (state.tab==='settings' ? state.settings : '') + '|' + (state.page ? state.page.kind + (state.page.index==null?'new':state.page.index) : '');
 let lastScreen = null;
 function render(){
   const key = screenKey(), moved = key !== lastScreen;
@@ -184,7 +347,49 @@ function render(){
 
 function wire(){
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
-  document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; render(); });
+  document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
+  document.querySelectorAll('[data-pageback]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+
+  /* categories */
+  const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTags');
+    if (n) state.page.name=n.value; if (t) state.page.tags=t.value; };
+  document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>{
+    state.page={ kind:'cat', index:null, name:'', type:'Necessity', tags:'' }; render(); });
+  document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{
+    const c=store.categories[+el.dataset.catedit]; if (!c) return;
+    state.page={ kind:'cat', index:+el.dataset.catedit, name:c.name, type:c.type, tags:c.tags.join(', ') }; render(); });
+  document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
+  document.querySelectorAll('[data-catsave]').forEach((el)=>el.onclick=()=>{
+    readCat(); const p=state.page;
+    const name=p.name.trim(), tags=splitTags(p.tags);
+    const cur = p.index==null ? null : store.categories[p.index];
+    try { checkCategory(name, p.type, tags, cur); } catch (e) { alert(e.message); return; }
+    if (cur) Object.assign(cur, { name, type:p.type, tags });
+    else store.categories.push({ name, type:p.type, tags });
+    state.page=null; commit(); });
+  document.querySelectorAll('[data-catdelete]').forEach((el)=>el.onclick=()=>{
+    if (!confirm('Delete this category?')) return;
+    store.categories.splice(+el.dataset.catdelete, 1); state.page=null; commit(); });
+
+  /* people */
+  const readPerson=()=>{ const n=document.getElementById('pName'); if (n) state.page.name=n.value; };
+  document.querySelectorAll('[data-personnew]').forEach((el)=>el.onclick=()=>{
+    state.page={ kind:'person', index:null, name:'', type:'Parent' }; render(); });
+  document.querySelectorAll('[data-personedit]').forEach((el)=>el.onclick=()=>{
+    const x=store.people[+el.dataset.personedit]; if (!x) return;
+    state.page={ kind:'person', index:+el.dataset.personedit, name:x.name, type:x.type }; render(); });
+  document.querySelectorAll('[data-persontype]').forEach((el)=>el.onclick=()=>{ readPerson(); state.page.type=el.dataset.persontype; render(); });
+  document.querySelectorAll('[data-personsave]').forEach((el)=>el.onclick=()=>{
+    readPerson(); const p=state.page; const name=p.name.trim();
+    const cur = p.index==null ? null : store.people[p.index];
+    try { checkPerson(name, p.type, cur); } catch (e) { alert(e.message); return; }
+    if (cur) Object.assign(cur, { name, type:p.type }); else store.people.push({ name, type:p.type });
+    state.page=null; commit(); });
+  document.querySelectorAll('[data-persondelete]').forEach((el)=>el.onclick=()=>{
+    if (!confirm('Delete this person?')) return;
+    store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
+
+  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
 
   /* The fields save as you type, so leaving the tab loses nothing. */
   const u=document.getElementById('bkUrl'), t=document.getElementById('bkTok');
@@ -208,6 +413,13 @@ function wire(){
 }
 
 render();
+
+/* A fresh install with a connected sheet takes its config from the sheet, so
+   a second phone starts where the first left off. A store with anything in
+   it is left alone - what is here wins until it is pushed. */
+if (connected() && !store.categories.length && !store.people.length) {
+  pullNow().then((got)=>{ if (got.categories.length || got.people.length) render(); }).catch(()=>{});
+}
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
   navigator.serviceWorker.register('sw.js').catch(()=>{});
