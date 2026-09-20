@@ -166,9 +166,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=23"></script>
+<script src="backend.js?v=24"></script>
 <script>
-const APP_VERSION="23";
+const APP_VERSION="24";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -235,7 +235,6 @@ const opsOf = (key) => store.ops[key] || (store.ops[key] = []);
 const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
 function checkOp(o){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) throw new Error('A date.');
-  if (!o.name) throw new Error('A name.');
   if (!isFinite(o.amount) || o.amount===0) throw new Error('An amount.');
   if (!o.tag) throw new Error('A tag.');
   let used = 0;
@@ -321,6 +320,42 @@ function readConfig(tab){
   }
   return { categories:cats, people, accounts };
 }
+/* A tally-import file (xlsx2tally.py): accounts and their operations.
+   Accounts already here are kept as they are; operations merge by id, so
+   the same file twice changes nothing. Returns what was added. */
+/* What a file holds, before anything is touched: each account, its
+   operation count, and whether it is already here. */
+function previewImport(j){
+  if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
+  return j.accounts.filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
+    exists: store.accounts.some((x)=>same(x.key, a.key)) }));
+}
+function importFile(j){
+  if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
+  let accounts=0, ops=0; const touched=new Set(['Config']);
+  for (const a of j.accounts) {
+    if (!a.key) continue;
+    if (!store.accounts.some((x)=>same(x.key, a.key))) {
+      store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
+        category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
+        opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed });
+      accounts++;
+    }
+    const key = store.accounts.find((x)=>same(x.key, a.key)).key;
+    const list = opsOf(key);
+    for (const o of (j.ops && j.ops[a.key]) || []) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || !isFinite(+o.amount) || +o.amount===0) continue;
+      const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount:Math.round(+o.amount*100)/100, note:String(o.note||''),
+        tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount })),
+        budget:String(o.budget||''), oneoff:!!o.oneoff };
+      const i = list.findIndex((x)=>x.id===clean.id);
+      if (i>=0) Object.assign(list[i], clean); else { list.push(clean); ops++; }
+    }
+    touched.add(key);
+  }
+  return { accounts, ops, touched:[...touched] };
+}
+
 const connected = () => !!(store.backend.url && store.backend.token);
 let pushTimer = null;
 /* Which tabs have changed since the last push: 'Config', or an account key.
@@ -422,7 +457,7 @@ function accountPage(a){
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap" data-opedit="${esc(o.id)}">
         <div style="flex:1;min-width:0">
-          <div class="k" style="font-weight:600">${esc(o.name)}</div>
+          <div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
           <div class="sub">${esc(o.date)} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
         </div>
         <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>
@@ -748,6 +783,20 @@ function settingsData(){
       <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>Sync</button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
+  </div>
+  <div class="card">
+    <h2>Import${state.pending?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(state.pending.name)}</span>`:''}</h2>
+    <input type="file" id="fImport" accept=".json,application/json" style="display:none">
+    ${state.pending ? `
+    <div class="rows">${state.pending.list.map((a)=>`
+      <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
+        <span class="v">${a.n}</span></div>`).join('')}</div>
+    <div class="btnrow" style="margin-top:8px">
+      <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
+      <button class="btn primary" data-importgo="1">Import</button>
+    </div>`
+    : `<button class="btn" data-import="1">Import a file</button>`}
+    ${state.imp?`<div class="status ${state.imp.bad?'bad':'ok'}">${esc(state.imp.msg)}</div>`:''}
   </div>`;
 }
 
@@ -905,6 +954,32 @@ function wire(){
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow(true));
+  document.querySelectorAll('[data-import]').forEach((el)=>el.onclick=()=>{
+    const inp=document.getElementById('fImport'); if (!inp) return;
+    inp.onchange=()=>{
+      const f=inp.files && inp.files[0]; if (!f) return;
+      const rd=new FileReader();
+      rd.onload=()=>{
+        try {
+          const j = JSON.parse(String(rd.result));
+          state.pending = { name:f.name||'', file:j, list:previewImport(j) };
+          state.imp = null;
+        } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; }
+        render();
+      };
+      rd.onerror=()=>{ state.imp={ msg:'Could not read that file.', bad:true }; render(); };
+      rd.readAsText(f);
+    };
+    inp.click(); });
+  document.querySelectorAll('[data-importcancel]').forEach((el)=>el.onclick=()=>{ state.pending=null; render(); });
+  document.querySelectorAll('[data-importgo]').forEach((el)=>el.onclick=()=>{
+    const pend=state.pending; if (!pend) return;
+    try {
+      const got = importFile(pend.file);
+      state.pending=null;
+      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s') };
+      commit(...got.touched);
+    } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
 
   /* accounts - the widget */
   const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening');
