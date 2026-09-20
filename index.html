@@ -176,9 +176,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=27"></script>
+<script src="backend.js?v=28"></script>
 <script>
-const APP_VERSION="27";
+const APP_VERSION="28";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -479,11 +479,14 @@ const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
 const counted = () => store.accounts.filter((a)=>a.category!=='Excluded');
 const CUR_COLORS = { USD:'#f87171', EUR:'#3b82f6', AUD:'#fbbf24' };
 const kfmt = (v) => { const a = Math.abs(v); const t = a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e4 ? Math.round(v/1e3)+'k' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; return t; };
+/* by: each currency's share in the SHOWN currency (for the bar); native: the
+   same money as it actually sits, in its own currency (for the legend). */
 function netWorthAt(year){
   const m = yearMonth(year);
-  let total = 0; const by = { USD:0, EUR:0, AUD:0 };
-  for (const a of counted()) { const v = conv(balanceAt(a, year), a.currency, store.cur, m); if (v==null) continue; total += v; by[a.currency] += v; }
-  return { total: Math.round(total*100)/100, by };
+  let total = 0; const by = { USD:0, EUR:0, AUD:0 }, native = { USD:0, EUR:0, AUD:0 };
+  for (const a of counted()) { const b = balanceAt(a, year); native[a.currency] += b;
+    const v = conv(b, a.currency, store.cur, m); if (v==null) continue; total += v; by[a.currency] += v; }
+  return { total: Math.round(total*100)/100, by, native };
 }
 function tabSummary(){
   const Y = theYear();
@@ -496,7 +499,7 @@ function tabSummary(){
     <div class="hero ${nw.total<0?'neg':''}">${money(nw.total, store.cur)}</div>
     ${sum>0 ? `
     <div class="pbar">${pos.map(([c,v])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${CUR_COLORS[c]}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>
-    <div class="legend" style="margin-top:6px">${CURRENCIES.map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c} (${SYM[store.cur]}${kfmt(nw.by[c])})</span>`).join('')}</div>`
+    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c} (${money(nw.native[c], c)})</span>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
