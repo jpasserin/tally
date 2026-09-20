@@ -135,9 +135,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js"></script>
+<script src="backend.js?v=16"></script>
 <script>
-const APP_VERSION="15";
+const APP_VERSION="16";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -602,6 +602,11 @@ render();
    it is left alone - what is here wins until it is pushed. */
 if (connected() && !store.categories.length && !store.people.length && !store.rates.length) {
   pullNow().then(()=>render()).catch(()=>{});
+}
+/* The backend version shown in About is whatever the script answered last.
+   Ask again on every start, so a redeploy - and a hard reload - shows. */
+if (connected()) {
+  BK.ping(store.backend).then((j)=>{ if (j.backend !== store.backendVersion) { store.backendVersion=j.backend; save(); render(); } }).catch(()=>{});
 }
 
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
