@@ -242,9 +242,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=39"></script>
+<script src="backend.js?v=40"></script>
 <script>
-const APP_VERSION="39";
+const APP_VERSION="40";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -633,13 +633,15 @@ function reportGroup(title, types, sums){
   const rows = store.categories.filter((c)=>types.includes(c.type) && sums.out[c.name]).map((c)=>({ c, v:sums.out[c.name] }))
     .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
   const total = rows.reduce((t,r)=>t+r.v, 0);
+  const div = monthsIn(theYear());
+  const mo = (v) => `<span class="muted" style="font-size:11px;margin-right:8px;font-weight:600">${money(Math.round(v/div*100)/100, store.cur)}/mo</span>`;
   return `
   <div class="card">
     <h2>${title} <span class="v ${total<0?'neg':'pos'}" style="text-transform:none;letter-spacing:0">${money(total, store.cur)}</span></h2>
     ${rows.length ? `<div class="rows">${rows.map((r)=>`
       <div class="row tap" data-rcatopen="${esc(r.c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
         <span class="muted" style="font-size:11.5px">${esc(r.c.type)}</span></span>
-        <span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></div>`).join('')}</div>`
+        <span style="white-space:nowrap">${mo(r.v)}<span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></span></div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing this year.</div>`}
   </div>`;
 }
