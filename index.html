@@ -114,15 +114,14 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Tally<span class="dot">.</span></h1><div class="hdrright"><span id="hdrRight"></span><button class="hdrbtn" id="hardReload" title="Reload">
-    <svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button></div></header>
+  <header><h1>Tally<span class="dot">.</span></h1><div class="hdrright"><span id="hdrRight"></span></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="7";
+const APP_VERSION="8";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -349,7 +348,8 @@ function settingsAbout(){
   <div class="card">
     <h2>Versions</h2>
     <div class="rows">
-      <div class="row"><span class="k">App</span><span class="v">v${APP_VERSION}</span></div>
+      <div class="row"><span class="k">App</span><span class="v" style="display:flex;align-items:center;gap:10px">v${APP_VERSION}
+        <button class="hdrbtn" data-reload="1" title="Reload"><svg viewBox="0 0 24 24"><path d="M20 12a8 8 0 1 1-2.6-5.9"/><path d="M20 4v5h-5"/></svg></button></span></div>
       <div class="row"><span class="k">Backend</span><span class="v">${store.backendVersion?'v'+esc(store.backendVersion):'—'}</span></div>
     </div>
   </div>
@@ -391,7 +391,7 @@ async function hardReload(){
 }
 
 function wire(){
-  const hr=document.getElementById('hardReload'); if (hr) hr.onclick=hardReload;
+  document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
   document.querySelectorAll('[data-pageback]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
