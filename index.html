@@ -184,6 +184,10 @@
     color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
   .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
+  /* The lock: dark and open, or blue and shut. */
+  .lockbtn{flex:0 0 auto;width:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:var(--bg2)}
+  .lockbtn svg{width:18px;height:18px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+  .lockbtn.on{background:var(--accent);border-color:var(--accent);color:#fff}
   .field{margin-bottom:5px}
   .field label{display:block;font-size:10.5px;color:var(--muted);margin-bottom:2px;text-transform:uppercase;letter-spacing:.5px}
   input,select{width:100%;background:var(--bg2);border:1px solid var(--line);color:var(--txt);border-radius:10px;
@@ -212,6 +216,8 @@
     padding:0 7px;font-size:14px;font-weight:700;line-height:1;cursor:pointer;font-family:inherit;
     display:inline-flex;align-items:center;justify-content:center;text-transform:none;letter-spacing:0}
   .gbtn.ghost{background:none;color:var(--accent2);border-color:var(--line);font-weight:600;font-size:11.5px}
+  .gbtn:disabled{opacity:.35;cursor:default}
+  .locked .row.tap{cursor:default}
   .btn.danger{background:none;border-color:var(--bad);color:var(--bad)}
   .btn.danger.arm{background:var(--bad);color:#fff}
   .act{color:var(--accent2);cursor:pointer;text-transform:none;letter-spacing:0;font-weight:600}
@@ -252,16 +258,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=46"></script>
+<script src="backend.js?v=47"></script>
 <script>
-const APP_VERSION="46";
+const APP_VERSION="47";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, categories:[], people:[], accounts:[], ops:{}, budgets:[], rates:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], rates:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -531,6 +537,10 @@ function importFile(j){
 }
 
 const connected = () => !!(store.backend.url && store.backend.token);
+/* Locked: every create and edit control is unavailable. */
+const LK = () => (store.locked ? ' disabled' : '');
+const ICON_LOCK = '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>';
+const ICON_UNLOCK = '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>';
 let pushTimer = null;
 /* Which tabs have changed since the last push: 'Config', or an account key.
    Kept in the store, so a change made offline still goes when back. */
@@ -538,7 +548,7 @@ const dirty = () => store.dirty || (store.dirty = []);
 const markDirty = (name) => { if (!dirty().includes(name)) dirty().push(name); };
 /* Every edit lands in the sheet shortly after; the status shows in Data. */
 function pushSoon(){
-  if (!connected()) return;
+  if (!connected() || store.locked) return;
   clearTimeout(pushTimer);
   pushTimer = setTimeout(()=>pushNow(false), 600);
 }
@@ -546,6 +556,7 @@ function pushSoon(){
    changed ones. A tab the app does not send, the script leaves alone. */
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
+  if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
   const names = everything ? ['Config'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
   const tabs = names.map((n)=> n==='Config' ? configTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
@@ -827,7 +838,7 @@ function tabBudgets(){
   state.budget = null;
   return widget + `
   <div class="card">
-    <h2>Budgets <button class="gbtn" data-budnew="1">+</button></h2>
+    <h2>Budgets <button class="gbtn" data-budnew="1"${LK()}>+</button></h2>
     ${store.budgets.length ? `<div class="rows">${budgetsSorted().map((b)=>{
       const spent = budgetSpent(b.name), amt = budgetAmountIn(b), pc = amt ? Math.min(100, spent/amt*100) : 0;
       return `<div class="row tap" data-budopen="${esc(b.name)}" ${b.closed?'style="opacity:.75"':''}>
@@ -852,7 +863,7 @@ function budgetPage(b){
   return `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">Budget</span>
-      <button class="gbtn ghost" data-budedit="${store.budgets.indexOf(b)}">Edit</button></h2>
+      <button class="gbtn ghost" data-budedit="${store.budgets.indexOf(b)}"${LK()}>Edit</button></h2>
     <div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}${b.closed?'<span class="muted" style="font-size:11px;font-weight:600">Closed</span>':''}</div>
     <div class="hero ${left!=null&&left<0?'neg':''}">${money(spent, store.cur)}</div>
     ${amt!=null?`<div class="herosub">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+' at '+esc(b.created)+')':''} · <b style="color:${left>=0?'var(--good)':'var(--bad)'}">${left>=0?money(left, store.cur)+' left':money(-left, store.cur)+' over'}</b></div>
@@ -951,7 +962,7 @@ function tabAccount(){
   const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: store.accounts.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
   return (p && p.kind==='account' ? accountSheet(p) : '') + `
   <div class="card">
-    <h2>Accounts <button class="gbtn" data-accnew="1">+</button></h2>
+    <h2>Accounts <button class="gbtn" data-accnew="1"${LK()}>+</button></h2>
     ${store.accounts.length ? groups.map((g)=>{
       /* The group's balances, each converted at the year's rate, added up. */
       const total = g.list.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, yearMonth(Y)); return v==null ? t : t + v; }, 0);
@@ -1035,7 +1046,7 @@ function opRow(o, a, withAccount){
   const on = state.sel.includes(o.id);
   return `
       <div class="row tap" data-opedit="${esc(o.id)}">
-        <span class="ck ${on?'on':''}" data-selop="${esc(o.id)}">${on?'✓':''}</span>
+        ${store.locked?'':`<span class="ck ${on?'on':''}" data-selop="${esc(o.id)}">${on?'✓':''}</span>`}
         <div style="flex:1;min-width:0">
           <div class="k" style="font-weight:600">${esc(o.name||'—')}${b?`<span class="cap bcap" style="color:${b.color}">${esc(b.name)}</span>`:''}</div>
           <div class="sub">${esc(o.date)}${withAccount?' · '+esc(a.key):''} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
@@ -1078,7 +1089,7 @@ function accountPage(a){
   return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
-      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}">Edit</button></h2>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
     <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
@@ -1087,7 +1098,7 @@ function accountPage(a){
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
-        <button class="gbtn" data-opnew="1">+</button></span></h2>
+        <button class="gbtn" data-opnew="1"${LK()}>+</button></span></h2>
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
   </div>
@@ -1347,7 +1358,7 @@ function settingsFx(){
     <div class="btnrow" style="align-items:flex-end">
       <div class="field" style="flex:1;margin:0"><label>From</label>${sel('fxFrom', store.fxFrom, years)}</div>
       <div class="field" style="flex:1;margin:0"><label>To</label>${sel('fxTo', store.fxTo, years)}</div>
-      <button class="btn primary" style="flex:0 0 auto" data-fxfetch="1" ${connected()?'':'disabled'}>Fetch</button>
+      <button class="btn primary" style="flex:0 0 auto" data-fxfetch="1" ${connected()&&!store.locked?'':'disabled'}>Fetch</button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
   </div>`;
@@ -1359,10 +1370,10 @@ function settingsTags(){
   const p = state.page;
   return (p && p.kind==='cat' ? catSheet(p) : '') + `
   <div class="card">
-    <h2>Categories <button class="gbtn" data-catnew="1">+</button></h2>
+    <h2>Categories <button class="gbtn" data-catnew="1"${LK()}>+</button></h2>
     ${store.categories.length ? `<div class="rows" id="catRows">${store.categories.map((c,i)=>`
       <div class="row tap ${state.dragIdx===i?'lift':''}" data-catedit="${i}" data-catrow="${i}">
-        <span class="drag" data-catdrag="${i}">≡</span>
+        ${store.locked?'':`<span class="drag" data-catdrag="${i}">≡</span>`}
         <div style="flex:1;min-width:0">
           <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(c.type)}"></span><b>${esc(c.name)}</b>
             <span class="muted" style="font-size:11.5px">${esc(c.type)}</span></div>
@@ -1379,7 +1390,7 @@ function settingsTags(){
     <div class="rows">${un.map((u)=>`
       <div class="row">
         <div class="k"><b>${esc(u.tag)}</b> <span class="muted" style="font-size:11.5px">${u.n}</span></div>
-        <select data-file="${esc(u.tag)}" style="width:auto;max-width:55%;padding:3px 8px;font-size:12.5px">
+        <select data-file="${esc(u.tag)}" style="width:auto;max-width:55%;padding:3px 8px;font-size:12.5px"${LK()}>
           <option value="">—</option>${store.categories.map((c)=>`<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('')}</select>
       </div>`).join('')}</div>
   </div>`; })()}`;
@@ -1417,7 +1428,7 @@ function settingsPeople(){
   const p = state.page;
   return (p && p.kind==='person' ? personSheet(p) : '') + `
   <div class="card">
-    <h2>People <button class="gbtn" data-personnew="1">+</button></h2>
+    <h2>People <button class="gbtn" data-personnew="1"${LK()}>+</button></h2>
     ${store.people.length ? `<div class="rows">${store.people.map((x,i)=>`
       <div class="row tap" data-personedit="${i}">
         <div class="k"><b>${esc(x.name)}</b> <span class="muted" style="font-size:11.5px">${esc(x.type)}</span></div>
@@ -1461,9 +1472,11 @@ function settingsData(){
       <input id="bkTok" value="${esc(b.token)}" type="password" autocapitalize="off"></div>
     <div class="btnrow">
       <button class="btn" data-bktest="1">Test</button>
-      <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>Sync</button>
+      <button class="btn primary" data-bksync="1" ${connected()&&!store.locked?'':'disabled'}>Sync</button>
+      <button class="btn lockbtn ${store.locked?'on':''}" data-lock="1" aria-pressed="${store.locked?'true':'false'}"><svg viewBox="0 0 24 24">${store.locked?ICON_LOCK:ICON_UNLOCK}</svg></button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
+    ${store.locked?`<div class="status bad" style="margin-top:6px">Read only${dirty().length?' · '+dirty().length+' tab'+(dirty().length===1?'':'s')+' waiting':''}</div>`:''}
   </div>
   <div class="card">
     <h2>Import${state.pending?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(state.pending.name)}</span>`:''}</h2>
@@ -1474,9 +1487,9 @@ function settingsData(){
         <span class="v">${a.n}</span></div>`).join('')}</div>
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
-      <button class="btn primary" data-importgo="1">Import</button>
+      <button class="btn primary" data-importgo="1"${LK()}>Import</button>
     </div>`
-    : `<button class="btn" data-import="1">Import a file</button>`}
+    : `<button class="btn" data-import="1"${LK()}>Import a file</button>`}
     ${state.imp?`<div class="status ${state.imp.bad?'bad':'ok'}">${esc(state.imp.msg)}</div>`:''}
   </div>`;
 }
@@ -1506,7 +1519,7 @@ function settingsAbout(){
 /* ----------------------------------------------------------------- render --*/
 function renderNav(){
   document.getElementById('nav').innerHTML = TABS.map(([id,label,icon]) =>
-    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('');
+    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><svg viewBox="0 0 24 24">${id==='settings'&&store.locked?ICON_LOCK:icon}</svg>${label}</button>`).join('');
 }
 /* Nothing animates on a tap. The page scrolls to the top only when the
    bottom tab changes; every other redraw keeps its place - the content area
@@ -1531,7 +1544,7 @@ function render(){
     `<button data-yearstep="-1" ${Y<=ys[0]?'disabled':''}>‹</button><b>${Y}</b><button data-yearstep="1" ${Y>=ys[ys.length-1]?'disabled':''}>›</button>`;
   const tabs = document.getElementById('tabs');
   if (!moved && tabs.offsetHeight) tabs.style.minHeight = tabs.offsetHeight + 'px';
-  tabs.innerHTML = `<div class="tab">${SCREENS[state.tab]()}</div>`;
+  tabs.innerHTML = `<div class="tab${store.locked?' locked':''}">${SCREENS[state.tab]()}</div>`;
   wire();
   if (moved) scrollTo({ top:0 });
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(()=>{ tabs.style.minHeight=''; });
@@ -1558,6 +1571,7 @@ function wire(){
 
   /* an unfiled tag, filed from its row */
   document.querySelectorAll('[data-file]').forEach((el)=>el.onchange=()=>{
+    if (store.locked) return;
     const c = store.categories.find((x)=>x.name===el.value); if (!c) return;
     if (!c.tags.some((t)=>same(t, el.dataset.file))) c.tags.push(el.dataset.file);
     commit(); });
@@ -1593,8 +1607,8 @@ function wire(){
   const addTag=()=>{ const p=state.page; const t=(p.draft||'').replace(/,/g,'').trim();
     if (t && !p.tags.some((x)=>same(x,t)) && !same(t, p.name)) p.tags.push(t);
     p.draft=''; p.focus=true; render(); };
-  document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>openCat(null));
-  document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>openCat(+el.dataset.catedit));
+  document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(null); });
+  document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(+el.dataset.catedit); });
   document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
   /* The name capsule follows the name as it is typed - no redraw, the field
      you are typing in must stay put. */
@@ -1641,8 +1655,8 @@ function wire(){
     state.page={ kind:'person', index, name:x?x.name:'', type:x?x.type:'Parent',
       was:{ name:x?x.name:'', type:x?x.type:'Parent' }, closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
-  document.querySelectorAll('[data-personnew]').forEach((el)=>el.onclick=()=>openPerson(null));
-  document.querySelectorAll('[data-personedit]').forEach((el)=>el.onclick=()=>openPerson(+el.dataset.personedit));
+  document.querySelectorAll('[data-personnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openPerson(null); });
+  document.querySelectorAll('[data-personedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openPerson(+el.dataset.personedit); });
   document.querySelectorAll('[data-persontype]').forEach((el)=>el.onclick=()=>{ readPerson(); state.page.type=el.dataset.persontype; render(); });
   const pn=document.getElementById('pName');
   if (pn && state.page && state.page.kind==='person') pn.oninput=()=>{ state.page.name=pn.value; state.page.closeArm=false; state.page.delArm=false; };
@@ -1662,7 +1676,11 @@ function wire(){
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow(true));
+  /* Locked: the app reads the sheet and never writes it. Edits stay here and
+     go out when the lock comes off. */
+  document.querySelectorAll('[data-lock]').forEach((el)=>el.onclick=()=>{ store.locked=!store.locked; if (store.locked) { state.page=null; state.sel=[]; state.bulk=null; } save(); state.sync=null; render(); if (!store.locked && dirty().length) pushSoon(); });
   document.querySelectorAll('[data-import]').forEach((el)=>el.onclick=()=>{
+    if (store.locked) return;
     const inp=document.getElementById('fImport'); if (!inp) return;
     inp.onchange=()=>{
       const f=inp.files && inp.files[0]; if (!f) return;
@@ -1681,6 +1699,7 @@ function wire(){
     inp.click(); });
   document.querySelectorAll('[data-importcancel]').forEach((el)=>el.onclick=()=>{ state.pending=null; render(); });
   document.querySelectorAll('[data-importgo]').forEach((el)=>el.onclick=()=>{
+    if (store.locked) return;
     const pend=state.pending; if (!pend) return;
     try {
       const got = importFile(pend.file);
@@ -1697,8 +1716,8 @@ function wire(){
       opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false };
     state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
-  document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>openAcc(null));
-  document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>openAcc(+el.dataset.accedit));
+  document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null); });
+  document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
   document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
 
@@ -1724,7 +1743,7 @@ function wire(){
       if (l) l.innerHTML = (state.tab==='account' && !filterActive(F)) ? `<div class="hint" style="margin-top:0">Search or filter.</div>` : opRowsMixed(shown);
       if (c) c.textContent = filterActive(F) ? shown.length+' · '+money(sum, store.cur) : (state.tab==='account' ? '' : String(shown.length));
     }
-    document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOpById(el.dataset.opedit));
+    document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOpById(el.dataset.opedit); });
     document.querySelectorAll('[data-selop]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
       const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id]; render(); }); };
   document.querySelectorAll('[data-fopen]').forEach((el)=>el.onclick=()=>{ F.open=!F.open; F.picking=null; render(); });
@@ -1792,8 +1811,8 @@ function wire(){
       splits:o?o.splits.map((sp)=>({ tag:sp.tag, amount:String(sp.amount) })):[] };
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; }
-  document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>openOp(null));
-  document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOp(el.dataset.opedit));
+  document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOp(null); });
+  document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOp(el.dataset.opedit); });
   document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', amount:'' }); render(); });
   document.querySelectorAll('[data-opspdel]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.splice(+el.dataset.opspdel,1); render(); });
   if (state.page && state.page.kind==='op') {
@@ -1827,8 +1846,8 @@ function wire(){
     const cur = { name:b?b.name:'', color:b?b.color:freeBudgetColor(), amount:b&&b.amount!=null?String(b.amount):'', currency:b?b.currency:store.cur, created:b?(b.created||TODAY()):TODAY(), closed:b?!!b.closed:false };
     state.page={ kind:'budget', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
-  document.querySelectorAll('[data-budnew]').forEach((el)=>el.onclick=()=>openBud(null));
-  document.querySelectorAll('[data-budedit]').forEach((el)=>el.onclick=()=>openBud(+el.dataset.budedit));
+  document.querySelectorAll('[data-budnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBud(null); });
+  document.querySelectorAll('[data-budedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBud(+el.dataset.budedit); });
   document.querySelectorAll('[data-budopen]').forEach((el)=>el.onclick=()=>{ state.budget=el.dataset.budopen; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budback]').forEach((el)=>el.onclick=()=>{ state.budget=null; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budcolor]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.color=el.dataset.budcolor; render(); });
@@ -1902,6 +1921,7 @@ function wire(){
   if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
   if (ft) ft.onchange=()=>{ store.fxTo=+ft.value; save(); };
   document.querySelectorAll('[data-fxfetch]').forEach((el)=>el.onclick=async()=>{
+    if (store.locked) { state.fx={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
     if (ff) store.fxFrom=+ff.value; if (ft) store.fxTo=+ft.value;
     if (store.fxFrom > store.fxTo) { const t=store.fxFrom; store.fxFrom=store.fxTo; store.fxTo=t; }
     save();
