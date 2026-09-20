@@ -133,7 +133,8 @@
   .selbar{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));z-index:15;margin:0 auto;max-width:528px;
     display:flex;align-items:center;gap:7px;padding:9px 12px;background:rgba(24,27,36,.97);border:1px solid var(--line);border-radius:14px;
     box-shadow:0 6px 22px rgba(0,0,0,.45);font-size:12.5px}
-  .selbar span{flex:1;font-weight:600}
+  .selbar>span,.selbar .selhead>span{flex:1;font-weight:600}
+  .selbar .dot{flex:0 0 9px;width:9px;height:9px}
   .selbar.pick{flex-direction:column;align-items:stretch;gap:4px;padding:8px}
   .selbar .selpick{max-height:40vh;overflow:auto;display:flex;flex-direction:column}
   .selbar .selpick button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;color:var(--txt);
@@ -242,9 +243,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=40"></script>
+<script src="backend.js?v=41"></script>
 <script>
-const APP_VERSION="40";
+const APP_VERSION="41";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
