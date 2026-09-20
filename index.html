@@ -92,7 +92,7 @@
   .chart .gl{stroke:var(--line);stroke-width:1}
   .chart .yl{fill:var(--muted);font-size:9.5px}
   .chart .tick{fill:var(--muted);font-size:9.5px}
-  .chart .endlab{font-size:10px;font-weight:700}
+  .chart .endlab{font-size:11px;font-weight:700;fill:#fff;paint-order:stroke;stroke:var(--card);stroke-width:3px;stroke-linejoin:round}
   /* The track is drawn once, by the container; both inputs' own tracks are
      transparent, so neither thumb can sit behind the other input's line. */
   .dslider{position:relative;height:28px;margin-top:4px}
@@ -176,9 +176,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=28"></script>
+<script src="backend.js?v=29"></script>
 <script>
-const APP_VERSION="28";
+const APP_VERSION="29";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -786,7 +786,9 @@ function rangePlot(pts, series, lo, hi){
     const d = shown.map((p,i)=>`${x(i).toFixed(1)},${y(p.values[sr.key]).toFixed(1)}`).join(' ');
     const last = shown[n-1].values[sr.key];
     g += `<polyline points="${d}" fill="none" stroke="${sr.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-    g += `<text class="endlab" x="${(W-R).toFixed(1)}" y="${(y(last)-5).toFixed(1)}" text-anchor="end" fill="${sr.color}">${last.toFixed(3)}</text>`;
+    /* The value at the end of the line, white on a dark halo so it reads
+       against the line itself; whole numbers for money, four decimals for rates. */
+    g += `<text class="endlab" x="${(W-R).toFixed(1)}" y="${(y(last)-6).toFixed(1)}" text-anchor="end">${Math.abs(last)>=100 ? Math.round(last).toLocaleString('en-US') : last.toFixed(4)}</text>`;
   }
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
 }
