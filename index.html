@@ -243,9 +243,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=42"></script>
+<script src="backend.js?v=43"></script>
 <script>
-const APP_VERSION="42";
+const APP_VERSION="43";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -743,6 +743,7 @@ function categoryPage(c){
     <h2><span style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}</span>
       <span class="muted" style="text-transform:none;letter-spacing:0">${esc(c.type)} · ${Y}</span></h2>
     <div class="hero ${total<0?'neg':'pos'}">${money(total, store.cur)}</div>
+    <div class="herosub" style="font-size:13px;font-weight:600">${money(Math.round(total/monthsIn(Y)*100)/100, store.cur)}/mo</div>
   </div>
   <div class="card">
     <h2>By month${selM.length?` <span class="muted" style="text-transform:none;letter-spacing:0">${selM.map((m)=>MON[+m.slice(5,7)-1]).join(', ')}</span>`:''}</h2>
