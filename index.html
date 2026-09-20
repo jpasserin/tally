@@ -68,6 +68,24 @@
   table.fx th:first-child,table.fx td:first-child{text-align:left}
   table.fx tr:last-child td{border-bottom:0}
   table.fx tr.muted td{color:var(--muted)}
+  /* A line chart with a zoom: two thumbs on one track, only the thumbs take
+     the finger, so the two inputs can sit on top of each other. */
+  svg.chart{width:100%;height:auto;display:block}
+  .chart .gl{stroke:var(--line);stroke-width:1}
+  .chart .yl{fill:var(--muted);font-size:9.5px}
+  .chart .tick{fill:var(--muted);font-size:9.5px}
+  .chart .endlab{font-size:10px;font-weight:700}
+  .dslider{position:relative;height:28px;margin-top:4px}
+  .dslider input{position:absolute;left:0;top:0;width:100%;height:28px;margin:0;background:none;
+    -webkit-appearance:none;appearance:none;pointer-events:none;outline:none;border:0;padding:0}
+  .dslider input::-webkit-slider-runnable-track{height:4px;background:var(--line);border-radius:2px}
+  .dslider input::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;border-radius:50%;background:var(--accent);
+    border:2px solid #fff;margin-top:-9px;pointer-events:auto;cursor:pointer}
+  .dslider input::-moz-range-track{height:4px;background:var(--line);border-radius:2px}
+  .dslider input::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--accent);border:2px solid #fff;pointer-events:auto}
+  .drange{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
+  .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+  .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
   .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
     color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
   .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
@@ -135,9 +153,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=17"></script>
+<script src="backend.js?v=18"></script>
 <script>
-const APP_VERSION="17";
+const APP_VERSION="18";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -280,13 +298,86 @@ const rateRows = (tab) => ((tab && tab.rows) || []).map((r) => ({
   month: String(r[0]||'').slice(0,7), eur: +r[1], aud: +r[2], date: String(r[3]||'').slice(0,10) }))
   .filter((r) => /^\d{4}-\d{2}$/.test(r.month) && r.eur > 0 && r.aud > 0);
 const fx4 = (v) => (v > 0 ? v.toFixed(4) : '—');
+const CURRENCIES = ['USD','EUR','AUD'];
+/* USD per one unit of each currency, for one month's row. */
+const usdPer = (r) => ({ USD:1, EUR:r.eur, AUD:r.aud });
+/* How much of `to` one unit of `base` buys, that month. */
+const rateOf = (r, base, to) => usdPer(r)[base] / usdPer(r)[to];
+const mLabel = (m) => MON[+m.slice(5,7)-1] + ' ' + m.slice(0,4);
+
+/* ---------------------------------------------------- a chart with a zoom --
+   REUSABLE. Lines over time with a double slider under them: the left thumb
+   is the start, the right thumb the end. Dragging redraws the plot alone -
+   never the sliders, because re-rendering the input under a finger cancels
+   the drag. One axis for every series; each line is labelled at its end.
+
+     pts     [{ label, values:{ key: number } }]  in time order
+     series  [{ key, label, color }]
+     lo, hi  indices into pts, inclusive                                     */
+function rangeChart(id, pts, series, lo, hi){
+  const n = pts.length;
+  return `
+  <div class="legend">${series.map((sr)=>`<span><i style="background:${sr.color}"></i>${esc(sr.label)}</span>`).join('')}</div>
+  <div id="${id}Plot">${rangePlot(pts, series, lo, hi)}</div>
+  <div class="dslider">
+    <input type="range" id="${id}Lo" min="0" max="${n-1}" value="${lo}">
+    <input type="range" id="${id}Hi" min="0" max="${n-1}" value="${hi}">
+  </div>
+  <div class="drange"><span id="${id}LoLab">${esc(pts[lo]?pts[lo].label:'')}</span><span id="${id}HiLab">${esc(pts[hi]?pts[hi].label:'')}</span></div>`;
+}
+function rangePlot(pts, series, lo, hi){
+  const W=352, H=160, T=10, B=18, L=36, R=8;
+  const shown = pts.slice(lo, hi+1);
+  const n = shown.length;
+  if (n < 2) return `<div class="hint" style="margin-top:0">Widen the range.</div>`;
+  const vals = shown.flatMap((p)=>series.map((sr)=>p.values[sr.key])).filter((v)=>v>0);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  const pad = (max-min || max*0.05 || 1) * 0.08; min -= pad; max += pad;
+  const x = (i) => L + (W-L-R) * i / (n-1);
+  const y = (v) => T + (H-T-B) * (1 - (v-min)/(max-min));
+  let g = '';
+  for (let k=0;k<3;k++){ const v = min + (max-min)*k/2; const yy = y(v);
+    g += `<line class="gl" x1="${L}" y1="${yy.toFixed(1)}" x2="${W-R}" y2="${yy.toFixed(1)}"/>
+      <text class="yl" x="${L-4}" y="${(yy+3).toFixed(1)}" text-anchor="end">${v.toFixed(2)}</text>`; }
+  const ticks = n > 4 ? [0, Math.round((n-1)/2), n-1] : [0, n-1];
+  for (const i of ticks) g += `<text class="tick" x="${x(i).toFixed(1)}" y="${H-4}" text-anchor="${i===0?'start':i===n-1?'end':'middle'}">${esc(shown[i].label)}</text>`;
+  for (const sr of series) {
+    const d = shown.map((p,i)=>`${x(i).toFixed(1)},${y(p.values[sr.key]).toFixed(1)}`).join(' ');
+    const last = shown[n-1].values[sr.key];
+    g += `<polyline points="${d}" fill="none" stroke="${sr.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+    g += `<text class="endlab" x="${(W-R).toFixed(1)}" y="${(y(last)-5).toFixed(1)}" text-anchor="end" fill="${sr.color}">${last.toFixed(3)}</text>`;
+  }
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+/* Wires the two thumbs: left never passes right; the plot and the two date
+   labels are redrawn in place. */
+function wireRangeChart(id, pts, series, get, set){
+  const lo=document.getElementById(id+'Lo'), hi=document.getElementById(id+'Hi');
+  if (!lo || !hi) return;
+  const redraw=()=>{ const r=get();
+    const plot=document.getElementById(id+'Plot'); if (plot) plot.innerHTML = rangePlot(pts, series, r.lo, r.hi);
+    const a=document.getElementById(id+'LoLab'), b=document.getElementById(id+'HiLab');
+    if (a) a.textContent = pts[r.lo] ? pts[r.lo].label : ''; if (b) b.textContent = pts[r.hi] ? pts[r.hi].label : ''; };
+  lo.oninput=()=>{ const r=get(); let v=+lo.value; if (v > r.hi-1) { v=r.hi-1; lo.value=v; } set(v, r.hi); redraw(); };
+  hi.oninput=()=>{ const r=get(); let v=+hi.value; if (v < r.lo+1) { v=r.lo+1; hi.value=v; } set(r.lo, v); redraw(); };
+}
+const FX_COLORS = { USD:'#3b82f6', EUR:'#4ade80', AUD:'#fbbf24' };
 const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 function settingsFx(){
   const now = new Date().getFullYear();
   const years = []; for (let y = 2013; y <= now; y++) years.push(y);
+  const sorted = store.rates.slice().sort((a,b)=>a.month<b.month?-1:1);
   /* The last twelve months in the sheet, newest first. */
-  const last12 = store.rates.slice().sort((a,b)=>a.month<b.month?1:-1).slice(0,12);
+  const last12 = sorted.slice(-12).reverse();
+  const base = CURRENCIES.includes(state.fxBase) ? state.fxBase : 'USD';
+  const others = CURRENCIES.filter((c)=>c!==base);
   const st = state.fx;
+  /* The zoom: whole history until you narrow it. */
+  const n = sorted.length;
+  if (state.fxHi==null || state.fxHi > n-1 || state.fxHi < 1) state.fxHi = n-1;
+  if (state.fxLo==null || state.fxLo >= state.fxHi) state.fxLo = 0;
+  const pts = sorted.map((r)=>({ label: mLabel(r.month), values: Object.fromEntries(others.map((c)=>[c, rateOf(r, base, c)])) }));
+  const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
   const sel = (id, val, list) => `<select id="${id}">${list.map((y)=>`<option value="${y}" ${y===val?'selected':''}>${y}</option>`).join('')}</select>`;
   return `
   <div class="card">
@@ -299,11 +390,17 @@ function settingsFx(){
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
   </div>
 
+  ${n>1?`<div class="card">
+    <h2>1 ${base} over time
+      <span class="chips">${CURRENCIES.map((c)=>`<button class="chip ${c===base?'on':''}" style="padding:2px 9px;font-size:11.5px" data-fxbase="${c}">${c}</button>`).join('')}</span></h2>
+    ${rangeChart('fx', pts, series, state.fxLo, state.fxHi)}
+  </div>`:''}
+
   <div class="card">
-    <h2>USD per unit <span class="muted" style="text-transform:none;letter-spacing:0">${store.rates.length?store.rates.length+' months':''}</span></h2>
+    <h2>1 ${base} in <span class="muted" style="text-transform:none;letter-spacing:0">${store.rates.length?store.rates.length+' months':''}</span></h2>
     ${last12.length ? `<table class="fx">
-      <thead><tr><th>Month</th><th>EUR</th><th>AUD</th></tr></thead>
-      <tbody>${last12.map((r)=>`<tr><td>${MON[+r.month.slice(5,7)-1]} ${r.month.slice(0,4)}</td><td>${fx4(r.eur)}</td><td>${fx4(r.aud)}</td></tr>`).join('')}</tbody>
+      <thead><tr><th>Month</th>${others.map((c)=>`<th>${c}</th>`).join('')}</tr></thead>
+      <tbody>${last12.map((r)=>`<tr><td>${mLabel(r.month)}</td>${others.map((c)=>`<td>${fx4(rateOf(r, base, c))}</td>`).join('')}</tr>`).join('')}</tbody>
     </table>`
     : `<div class="hint" style="margin-top:0">No rates yet.</div>`}
   </div>`;
@@ -558,6 +655,15 @@ function wire(){
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
 
   /* currencies */
+  document.querySelectorAll('[data-fxbase]').forEach((el)=>el.onclick=()=>{ state.fxBase=el.dataset.fxbase; render(); });
+  if (state.tab==='settings' && state.settings==='fx' && store.rates.length > 1) {
+    const sorted = store.rates.slice().sort((a,b)=>a.month<b.month?-1:1);
+    const base = CURRENCIES.includes(state.fxBase) ? state.fxBase : 'USD';
+    const others = CURRENCIES.filter((c)=>c!==base);
+    const pts = sorted.map((r)=>({ label: mLabel(r.month), values: Object.fromEntries(others.map((c)=>[c, rateOf(r, base, c)])) }));
+    const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
+    wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
+  }
   const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
   if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
   if (ft) ft.onchange=()=>{ store.fxTo=+ft.value; save(); };
@@ -570,6 +676,7 @@ function wire(){
       const j = await BK.rates(store.backend, store.fxFrom, store.fxTo);
       store.rates = rateRows({ rows: (j.rows||[]).map((r)=>[r.month, r.eur, r.aud, r.date]) });
       store.backendVersion=j.backend; save();
+      state.fxLo=null; state.fxHi=null;        // new history: show all of it
       state.fx={ msg:store.rates.length+' months in the sheet' };
     } catch (e) { state.fx={ msg:e.message, bad:true }; }
     render(); });
