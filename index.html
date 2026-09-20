@@ -117,6 +117,14 @@
   .fchip.exc{background:#ff5c6c}
   .fchip.plain{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
   .fchip b{cursor:pointer;opacity:.75;font-weight:700}
+  /* A page's Close, always at the bottom above the nav; the selection bar
+     rises above it when both are there. */
+  .closebar{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));z-index:14;margin:0 auto;max-width:528px;padding:0 12px}
+  .closebar .btn{width:100%;background:rgba(24,27,36,.97);border-color:var(--line);box-shadow:0 6px 22px rgba(0,0,0,.45)}
+  .selbar.raised{bottom:calc(116px + env(safe-area-inset-bottom))}
+  .chart .bar{cursor:pointer}
+  .chart .tick.sel{fill:#fff;font-weight:700}
+  .chart .vlab{fill:var(--muted);font-size:9px}
   /* Select box on an operation row, and the bar that appears once some are. */
   .ck{width:18px;height:18px;border:1.5px solid var(--muted);border-radius:5px;flex:none;display:inline-flex;align-items:center;
     justify-content:center;font-size:12px;color:#fff;cursor:pointer;margin-right:8px}
@@ -228,9 +236,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=35"></script>
+<script src="backend.js?v=36"></script>
 <script>
-const APP_VERSION="35";
+const APP_VERSION="36";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -241,7 +249,7 @@ const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null,
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null };
+const state = { tab:'settings', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[] };
 /* The operations filter, per visit of an account page. */
 const blankFilter = () => ({ q:'', min:'', max:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
 const opFilter = () => state.opf || (state.opf = blankFilter());
@@ -357,8 +365,13 @@ const money0 = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.round(Math.abs(v
 const BUDGET_COLORS = ['#3b82f6','#4ade80','#fbbf24','#f87171','#c155ba','#7cb8ff','#33a569','#b68320'];
 const budgetOf = (name) => store.budgets.find((b)=>same(b.name, name)) || null;
 const freeBudgetColor = () => BUDGET_COLORS.find((c)=>!store.budgets.some((b)=>b.color===c)) || BUDGET_COLORS[store.budgets.length % BUDGET_COLORS.length];
+/* The budget's amount in the shown currency, at the rate of the month it
+   was created - the operations convert at their own months, never this. */
+const budgetAmountIn = (b) => b.amount==null ? null : conv(b.amount, b.currency, store.cur, (b.created||TODAY()).slice(0,7));
 function checkBudget(b, skip){
   if (!b.name) throw new Error('A name.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(b.created)) throw new Error('A date.');
+  if (!CURRENCIES.includes(b.currency)) throw new Error('A currency.');
   if (store.budgets.some((x)=>x!==skip && same(x.name, b.name))) throw new Error('"'+b.name+'" already exists.');
   if (b.amount!=null && !(isFinite(b.amount) && b.amount>0)) throw new Error('An amount above zero, or none.');
 }
@@ -385,14 +398,14 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'' })))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount }))) };
+      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'' }))) };
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
@@ -436,9 +449,10 @@ function readConfig(tab){
       category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash',
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes' });
-    if (kind==='budget') budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
+    if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
-      amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null });
+      amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
+      created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY() }); }
   }
   return { categories:cats, people, accounts, budgets };
 }
@@ -612,7 +626,7 @@ function reportGroup(title, types, sums){
   <div class="card">
     <h2>${title} <span class="v ${total<0?'neg':'pos'}" style="text-transform:none;letter-spacing:0">${money(total, store.cur)}</span></h2>
     ${rows.length ? `<div class="rows">${rows.map((r)=>`
-      <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
+      <div class="row tap" data-rcatopen="${esc(r.c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)}
         <span class="muted" style="font-size:11.5px">${esc(r.c.type)}</span></span>
         <span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing this year.</div>`}
@@ -673,8 +687,57 @@ function summaryCard(Y){
     </div>
   </div>`;
 }
+/* The year's operations that touch a category - through the main tag or a
+   secondary one - and how much of each belongs to it (a secondary tag's
+   part, or the whole less the parts), in the shown currency. */
+function categoryOps(name, year){
+  const out = [];
+  for (const a of store.accounts) for (const o of opsOf(a.key)) {
+    if (o.date.slice(0,4)!==String(year)) continue;
+    let part = 0, hit = false;
+    for (const sp of o.splits) if ((catOfTag(sp.tag)||{}).name===name) { part += sp.amount; hit = true; }
+    if ((catOfTag(o.tag)||{}).name===name) { part += o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0); hit = true; }
+    if (hit) out.push({ o, a, part: conv(part, a.currency, store.cur, o.date.slice(0,7)) || 0 });
+  }
+  return out;
+}
+function categoryPage(c){
+  const Y = theYear();
+  const f = opFilter();
+  const all = categoryOps(c.name, Y);
+  const total = Math.round(all.reduce((t,x)=>t+x.part, 0)*100)/100;
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0'));
+  const perMonth = months.map((m)=>Math.round(all.filter((x)=>x.o.date.slice(0,7)===m).reduce((t,x)=>t+x.part, 0)*100)/100);
+  const selM = state.catMonths.filter((m)=>months.includes(m));
+  const pool = selM.length ? all.filter((x)=>selM.includes(x.o.date.slice(0,7))) : all;
+  const byId = Object.fromEntries(pool.map(({o,a})=>[o.id, a]));
+  const shown = filterOps(pool.map(({o})=>o), f).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0).map((o)=>({ o, a:byId[o.id] }));
+  const p = state.page;
+  return (p && p.kind==='op' ? opSheet(p, opAcct()) : '') + `
+  <div class="card">
+    <h2><span style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}</span>
+      <span class="muted" style="text-transform:none;letter-spacing:0">${esc(c.type)} · ${Y}</span></h2>
+    <div class="hero ${total<0?'neg':'pos'}">${money(total, store.cur)}</div>
+  </div>
+  <div class="card">
+    <h2>By month${selM.length?` <span class="muted" style="text-transform:none;letter-spacing:0">${selM.map((m)=>MON[+m.slice(5,7)-1]).join(', ')}</span>`:''}</h2>
+    ${columns({ labels:MON, values:perMonth, color:typeColor(c.type), keys:months, dataAttr:'data-rcatmonth', selected:selM })}
+  </div>
+  <div class="card">
+    <h2>Operations
+      <span class="fbar"><span class="muted" id="opCount">${shown.length}${filterActive(f)?' · '+money(Math.round(shown.reduce((t,{o,a})=>t+(conv(o.amount, a.currency, store.cur, o.date.slice(0,7))||0),0)*100)/100, store.cur):''}</span>
+        <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span></span></h2>
+    ${filterChips(f)}
+    <div id="opsList">${opRowsMixed(shown)}</div>
+  </div>
+  <div style="height:56px"></div>
+  ${selBar(true)}
+  <div class="closebar"><button class="btn" data-rcatclose="1">Close</button></div>`;
+}
 function tabReport(){
   const Y = theYear();
+  if (state.cat && store.categories.some((c)=>c.name===state.cat)) return categoryPage(store.categories.find((c)=>c.name===state.cat));
+  state.cat = null;
   const sums = sumsByCategory(Y);
   return summaryCard(Y)
     + reportGroup('Spendings', ['Necessity','Optional','Misc'], sums)
@@ -713,13 +776,13 @@ function tabBudgets(){
   <div class="card">
     <h2>Budgets <button class="gbtn" data-budnew="1">+</button></h2>
     ${store.budgets.length ? `<div class="rows">${store.budgets.map((b,i)=>{
-      const spent = budgetSpent(b.name), pc = b.amount ? Math.min(100, spent/b.amount*100) : 0;
+      const spent = budgetSpent(b.name), amt = budgetAmountIn(b), pc = amt ? Math.min(100, spent/amt*100) : 0;
       return `<div class="row tap" data-budopen="${esc(b.name)}">
         <div style="flex:1;min-width:0">
           <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span><b>${esc(b.name)}</b></div>
-          ${b.amount?`<div class="bbar"><i style="width:${pc.toFixed(1)}%;background:${spent>b.amount?'var(--bad)':b.color}"></i></div>`:''}
+          ${amt?`<div class="bbar"><i style="width:${pc.toFixed(1)}%;background:${spent>amt?'var(--bad)':b.color}"></i></div>`:''}
         </div>
-        <span style="text-align:right"><span class="v ${b.amount&&spent>b.amount?'neg':''}">${money(spent, store.cur)}</span>${b.amount?`<div class="muted" style="font-size:11px">of ${money(b.amount, b.currency)}</div>`:''}</span>
+        <span style="text-align:right"><span class="v ${amt&&spent>amt?'neg':''}">${money(spent, store.cur)}</span>${amt?`<div class="muted" style="font-size:11px">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+')':''}</div>`:''}</span>
       </div>`; }).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
@@ -731,15 +794,16 @@ function budgetPage(b){
   const all = budgetOps(b.name).sort((x,y)=>x.o.date<y.o.date?1:x.o.date>y.o.date?-1:0);
   const shown = filterOps(all.map(({o})=>o), f);
   const byId = Object.fromEntries(all.map(({o,a})=>[o.id, a]));
-  const spent = budgetSpent(b.name), left = b.amount!=null ? Math.round((b.amount - spent)*100)/100 : null;
+  const amt = budgetAmountIn(b);
+  const spent = budgetSpent(b.name), left = amt!=null ? Math.round((amt - spent)*100)/100 : null;
   return `
   <div class="card">
     <h2><span class="act" data-budback="1">‹ Budgets</span>
       <button class="gbtn ghost" data-budedit="${store.budgets.indexOf(b)}">Edit</button></h2>
     <div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</div>
     <div class="hero ${left!=null&&left<0?'neg':''}">${money(spent, store.cur)}</div>
-    ${b.amount!=null?`<div class="herosub">of ${money(b.amount, b.currency)} · <b style="color:${left>=0?'var(--good)':'var(--bad)'}">${left>=0?money(left, b.currency)+' left':money(-left, b.currency)+' over'}</b></div>
-    <div class="bbar" style="height:9px;margin-top:8px"><i style="width:${Math.min(100, spent/b.amount*100).toFixed(1)}%;background:${left<0?'var(--bad)':b.color}"></i></div>`:''}
+    ${amt!=null?`<div class="herosub">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+' at '+esc(b.created)+')':''} · <b style="color:${left>=0?'var(--good)':'var(--bad)'}">${left>=0?money(left, store.cur)+' left':money(-left, store.cur)+' over'}</b></div>
+    <div class="bbar" style="height:9px;margin-top:8px"><i style="width:${Math.min(100, spent/amt*100).toFixed(1)}%;background:${left<0?'var(--bad)':b.color}"></i></div>`:''}
   </div>
   <div class="card">
     <h2>Operations
@@ -755,7 +819,7 @@ function opRowsMixed(list){
   return list.length ? `<div class="rows">${list.map(({o,a})=>opRow(o, a, true)).join('')}</div>`
     : `<div class="hint" style="margin-top:0">${filterActive(opFilter())?'Nothing matches.':'Nothing yet.'}</div>`;
 }
-const budgetDirty = (p) => JSON.stringify([p.name.trim(), p.color, p.amount]) !== JSON.stringify([p.was.name, p.was.color, p.was.amount]);
+const budgetDirty = (p) => JSON.stringify([p.name.trim(), p.color, p.amount, p.currency, p.created]) !== JSON.stringify([p.was.name, p.was.color, p.was.amount, p.was.currency, p.was.created]);
 function budgetSheet(p){
   const isNew = p.index==null;
   return `
@@ -765,7 +829,12 @@ function budgetSheet(p){
       <h3>${isNew?'New budget':esc(store.budgets[p.index].name)}</h3>
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Name</label><input id="bName" value="${esc(p.name)}"></div>
+        <div class="field" style="flex:1"><label>Date</label><input id="bDate" type="date" value="${esc(p.created)}"></div>
+      </div>
+      <div class="btnrow" style="align-items:flex-end">
         <div class="field" style="flex:1"><label>Amount ${esc(SYM[p.currency]||'')}</label><input id="bAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+        <div class="field" style="flex:0 0 auto"><label>Currency</label>
+          <div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-budcur="${c}">${c}</button>`).join('')}</div></div>
       </div>
       <div class="field"><label>Colour</label>
         <div class="swatches">${BUDGET_COLORS.map((c)=>`<span class="swatch ${p.color===c?'on':''}" style="background:${c}" data-budcolor="${c}"></span>`).join('')}</div></div>
@@ -923,14 +992,14 @@ function opRows(a, ops){
 }
 /* The bar above the nav once operations are ticked: give them all a tag, or
    put them on a budget. */
-function selBar(){
+function selBar(raised){
   const n = state.sel.length; if (!n) return '';
   const body = state.bulk==='tag'
     ? `<select id="bulkTag">${tagOptions('')}</select><button class="gbtn" data-bulkapply="tag">Apply</button>`
     : state.bulk==='budget'
     ? `<select id="bulkBudget"><option value="">none</option>${store.budgets.map((b)=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('')}</select><button class="gbtn" data-bulkapply="budget">Apply</button>`
     : `<span>${n} selected</span><button class="gbtn" data-bulk="tag">Tag</button><button class="gbtn" data-bulk="budget" ${store.budgets.length?'':'disabled'}>Budget</button>`;
-  return `<div class="selbar">${body}<button class="gbtn ghost" data-selclear="1">✕</button></div>`;
+  return `<div class="selbar${raised?' raised':''}">${body}<button class="gbtn ghost" data-selclear="1">✕</button></div>`;
 }
 /* The account an operation belongs to, wherever it is listed from. */
 const accountOfOp = (id) => store.accounts.find((a)=>opsOf(a.key).some((o)=>o.id===id)) || null;
@@ -945,7 +1014,7 @@ function accountPage(a){
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
   return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
   <div class="card">
-    <h2><span class="act" data-accback="1">‹ Accounts</span>
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}">Edit</button></h2>
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
@@ -959,7 +1028,9 @@ function accountPage(a){
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
   </div>
-  ${selBar()}`;
+  <div style="height:56px"></div>
+  ${selBar(true)}
+  <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
 const tagOptions = (sel) => `<option value="">—</option>` + store.categories.map((c)=>
@@ -1117,6 +1188,27 @@ function rangePlot(pts, series, lo, hi){
   }
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
 }
+/* REUSABLE. Columns, one per label, in one colour; the selected ones white,
+   their labels too. The hit area is the whole column height, label included,
+   so a month with almost nothing in it is still a target. */
+function columns({ labels, values, color, keys, dataAttr, selected }){
+  const W=352, H=150, T=14, B=16;
+  const ih=H-T-B, n=labels.length||1;
+  const max=Math.max(1,...values.map((v)=>Math.abs(v)));
+  const step=W/n, bw=Math.min(24, step*0.62);
+  const sel = new Set(selected||[]);
+  let g=`<line class="gl" x1="0" y1="${T+ih}" x2="${W}" y2="${T+ih}"/>`;
+  labels.forEach((lab,i)=>{
+    const v=Math.abs(values[i]||0), cx=step*i+step/2, h=v/max*ih, y=T+ih-h;
+    const on = keys && sel.has(keys[i]);
+    if (keys && dataAttr) g+=`<rect x="${(cx-step/2).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H}" fill="transparent" class="bar" ${dataAttr}="${esc(keys[i])}"/>`;
+    if (h>0.4) g+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,h).toFixed(1)}" rx="3" fill="${on?'#fff':color}" pointer-events="none"/>`;
+    if (v > max*0.06) g+=`<text class="vlab" x="${cx.toFixed(1)}" y="${(y-3.5).toFixed(1)}" text-anchor="middle" pointer-events="none">${kfmt(v)}</text>`;
+    g+=`<text class="tick${on?' sel':''}" x="${cx.toFixed(1)}" y="${H-4}" text-anchor="middle" pointer-events="none">${esc(lab)}</text>`;
+  });
+  return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
+}
+
 /* Wires the two thumbs: left never passes right; the plot and the two date
    labels are redrawn in place. */
 function wireRangeChart(id, pts, series, get, set){
@@ -1361,7 +1453,7 @@ function render(){
   const moved = state.tab !== lastTab;
   lastTab = state.tab;
   /* A selection belongs to the list it was made in. */
-  const where = [state.tab, (state.sub||{})[state.tab]||'', state.account||'', state.budget||''].join('|');
+  const where = [state.tab, (state.sub||{})[state.tab]||'', state.account||'', state.budget||'', state.cat||''].join('|');
   if (where !== lastWhere) { state.sel=[]; state.bulk=null; }
   lastWhere = where;
   renderNav();
@@ -1394,7 +1486,7 @@ async function hardReload(){
 
 function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; state.budget=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; state.budget=null; state.cat=null; state.opf=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
     if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
@@ -1542,6 +1634,7 @@ function wire(){
     } else {
       /* a mixed list: the search page or a budget */
       const pool = state.tab==='account' ? store.accounts.flatMap((x)=>opsOf(x.key).map((o)=>({ o, a:x })))
+        : state.cat ? categoryOps(state.cat, theYear()).filter((x)=>!state.catMonths.length || state.catMonths.includes(x.o.date.slice(0,7)))
         : state.budget ? budgetOps(state.budget) : [];
       const byId = Object.fromEntries(pool.map(({o,a})=>[o.id, a]));
       const shown = (state.tab==='account' && !filterActive(F)) ? [] : filterOps(pool.map(({o})=>o), F).map((o)=>({ o, a:byId[o.id] }));
@@ -1646,10 +1739,10 @@ function wire(){
     state.page=null; state.opAccount=null; commit(a.key); });
 
   /* budgets */
-  const readBud=()=>{ const n=document.getElementById('bName'), a=document.getElementById('bAmount');
-    if (n) state.page.name=n.value; if (a) state.page.amount=a.value; state.page.closeArm=false; state.page.delArm=false; };
+  const readBud=()=>{ const n=document.getElementById('bName'), a=document.getElementById('bAmount'), d=document.getElementById('bDate');
+    if (n) state.page.name=n.value; if (a) state.page.amount=a.value; if (d) state.page.created=d.value; state.page.closeArm=false; state.page.delArm=false; };
   const openBud=(index)=>{ const b=index==null?null:store.budgets[index];
-    const cur = { name:b?b.name:'', color:b?b.color:freeBudgetColor(), amount:b&&b.amount!=null?String(b.amount):'', currency:b?b.currency:store.cur };
+    const cur = { name:b?b.name:'', color:b?b.color:freeBudgetColor(), amount:b&&b.amount!=null?String(b.amount):'', currency:b?b.currency:store.cur, created:b?(b.created||TODAY()):TODAY() };
     state.page={ kind:'budget', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-budnew]').forEach((el)=>el.onclick=()=>openBud(null));
@@ -1657,13 +1750,16 @@ function wire(){
   document.querySelectorAll('[data-budopen]').forEach((el)=>el.onclick=()=>{ state.budget=el.dataset.budopen; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budback]').forEach((el)=>el.onclick=()=>{ state.budget=null; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budcolor]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.color=el.dataset.budcolor; render(); });
+  document.querySelectorAll('[data-budcur]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.currency=el.dataset.budcur; render(); });
+  const bd=document.getElementById('bDate');
+  if (bd && state.page && state.page.kind==='budget') bd.oninput=bd.onchange=()=>{ state.page.created=bd.value; state.page.closeArm=false; state.page.delArm=false; };
   const bn=document.getElementById('bName'), ba=document.getElementById('bAmount');
   if (bn && state.page && state.page.kind==='budget') bn.oninput=()=>{ state.page.name=bn.value; state.page.closeArm=false; state.page.delArm=false; };
   if (ba && state.page && state.page.kind==='budget') ba.oninput=()=>{ state.page.amount=ba.value; state.page.closeArm=false; state.page.delArm=false; };
   document.querySelectorAll('[data-budsave]').forEach((el)=>el.onclick=()=>{
     readBud(); const p=state.page;
     const cur = p.index==null ? null : store.budgets[p.index];
-    const b = { name:p.name.trim(), color:p.color, currency:p.currency, amount: String(p.amount).trim()==='' ? null : num(p.amount) };
+    const b = { name:p.name.trim(), color:p.color, currency:p.currency, created:p.created, amount: String(p.amount).trim()==='' ? null : num(p.amount) };
     try { checkBudget(b, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) {
       /* A renamed budget takes its operations with it. */
@@ -1673,7 +1769,7 @@ function wire(){
     } else store.budgets.push(b);
     state.page=null; commit(); });
   document.querySelectorAll('[data-budclose]').forEach((el)=>el.onclick=()=>{
-    const p=state.page; const n=document.getElementById('bName'), a=document.getElementById('bAmount'); if (n) p.name=n.value; if (a) p.amount=a.value;
+    const p=state.page; const n=document.getElementById('bName'), a=document.getElementById('bAmount'), d=document.getElementById('bDate'); if (n) p.name=n.value; if (a) p.amount=a.value; if (d) p.created=d.value;
     if (budgetDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
     state.page=null; render(); });
   document.querySelectorAll('[data-buddelete]').forEach((el)=>el.onclick=()=>{
@@ -1711,7 +1807,11 @@ function wire(){
     const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
-  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; render(); });
+  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.cat=null; render(); });
+  document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; render(); });
+  document.querySelectorAll('[data-rcatclose]').forEach((el)=>el.onclick=()=>{ state.cat=null; state.catMonths=[]; state.opf=null; state.page=null; render(); });
+  document.querySelectorAll('[data-rcatmonth]').forEach((el)=>el.onclick=()=>{ const m=el.dataset.rcatmonth;
+    state.catMonths = state.catMonths.includes(m) ? state.catMonths.filter((x)=>x!==m) : [...state.catMonths, m]; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
