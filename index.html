@@ -258,9 +258,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=47"></script>
+<script src="backend.js?v=48"></script>
 <script>
-const APP_VERSION="47";
+const APP_VERSION="48";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -599,14 +599,15 @@ const SCREENS = {
   summary: () => subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
   report:  () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '')
     + subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? tabBudgets() : tabReport()),
-  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : tabAccount()),
+  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   settings: tabSettings,
 };
 
 /* Sub-tabs under the header, the same bar Settings uses. */
 const SUBS = {
   account: [['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
-            ['operations','Operations','<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>']],
+            ['operations','Operations','<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>'],
+            ['warnings','Warnings','<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>']],
   summary: [['current','Current','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
             ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>']],
   report:  [['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
@@ -646,6 +647,25 @@ function tabSummary(){
     <div class="pbar">${pos.map(([c,v])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${CUR_COLORS[c]}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>
     <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c} (${money(nw.native[c], c)})</span>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>
+  ${nwByMonthCard(Y)}`;
+}
+/* Net worth at the end of each month of the year, each at its own rate;
+   months still to come are left empty. */
+function nwByMonthCard(Y){
+  const now = new Date().toISOString().slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0'));
+  const vals = months.map((m)=>{
+    if (m > now) return 0;
+    let total = 0;
+    for (const a of counted()) { const bal = (+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= m+'-31').reduce((t,o)=>t+o.amount, 0);
+      const v = conv(bal, a.currency, store.cur, m); if (v!=null) total += v; }
+    return Math.round(total);
+  });
+  return `
+  <div class="card">
+    <h2>Net worth by month <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}</span></h2>
+    ${vals.some((v)=>v) ? columns({ labels:MON, values:vals, color:'#3b82f6' }) : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
 
@@ -828,6 +848,73 @@ function tabOperations(){
     <div id="opsList">${filterActive(f) ? opRowsMixed(shown) : `<div class="hint" style="margin-top:0">Search or filter.</div>`}</div>
   </div>
   ${selBar()}`;
+}
+
+/* --------------------------------------------------------------- warnings --
+   What looks wrong in the records, for a person to judge. Each finding
+   points at the operation (or account) behind it; tapping opens it. */
+const DAY = 86400000;
+const daysApart = (a, b) => Math.abs(new Date(a) - new Date(b)) / DAY;
+function warnings(){
+  const out = [];
+  const add = (kind, title, o, a, text) => { let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text }); };
+  const all = store.accounts.flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
+  const today = TODAY();
+  const keys = store.accounts.map((a)=>a.key.toLowerCase());
+  for (const {o,a} of all) {
+    const tags = opTags(o);
+    if (!o.tag) add('notag', 'No tag', o, a, 'no tag at all');
+    for (const t of tags) if (t && !tagKnown(t)) add('unknown', 'Tag in no category', o, a, '"'+t+'" belongs to no category');
+    if (o.date > today) add('future', 'Dated in the future', o, a, o.date);
+    const c = catOfTag(o.tag);
+    if (c && ['Necessity','Optional','Misc'].includes(c.type) && o.amount > 0) add('creditspend', 'Credit in a spending category', o, a, c.name);
+    if (c && c.type==='Income' && o.amount < 0) add('debitincome', 'Debit in an income category', o, a, c.name);
+    /* a transfer: named after another account, or tagged x - the other side
+       should exist, close in date, opposite in sign */
+    const other = store.accounts.find((b)=>b.key!==a.key && (same(b.key, o.name) || same(b.key, o.note||'')));
+    if (other || same(o.tag, 'x')) {
+      const pool = other ? opsOf(other.key) : all.filter((x)=>x.a.key!==a.key).map((x)=>x.o);
+      const match = pool.some((p)=>daysApart(p.date, o.date) <= 5 && Math.sign(p.amount) === -Math.sign(o.amount)
+        && (Math.abs(Math.abs(p.amount) - Math.abs(o.amount)) < 0.005 || (other && other.currency!==a.currency)));
+      if (!match) add('transfer', 'Transfer with one side', o, a, other ? 'nothing matching in '+other.key : 'no opposite anywhere within 5 days');
+    }
+  }
+  /* the same thing twice: same account, date, amount and name */
+  const seen = {};
+  for (const {o,a} of all) { const k = [a.key, o.date, o.amount, o.name.toLowerCase()].join('|'); (seen[k] = seen[k] || []).push({ o, a }); }
+  for (const k of Object.keys(seen)) if (seen[k].length > 1) for (const x of seen[k].slice(1)) add('dup', 'Possible double entry', x.o, x.a, seen[k].length+' identical');
+  /* one payee, several tags */
+  const byName = {};
+  for (const {o,a} of all) if (o.name && o.tag) { const n = o.name.toLowerCase(); (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
+  for (const {o,a} of all) if (o.name && o.tag) { const t = byName[o.name.toLowerCase()]; const tags = Object.keys(t);
+    if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag]) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
+  /* accounts */
+  for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
+  return out.sort((x,y)=>y.items.length-x.items.length);
+}
+function tabWarnings(){
+  const p = state.page;
+  const groups = warnings();
+  const n = groups.reduce((t,g)=>t+g.items.length, 0);
+  return (p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : '') + `
+  <div class="card">
+    <h2>Warnings <span class="muted" style="text-transform:none;letter-spacing:0">${n}</span></h2>
+    ${n ? '' : `<div class="hint" style="margin-top:0">Nothing suspicious.</div>`}
+  </div>
+  ${groups.map((g)=>`
+  <div class="card">
+    <h2>${esc(g.title)} <span class="muted" style="text-transform:none;letter-spacing:0">${g.items.length}</span></h2>
+    <div class="rows">${g.items.slice(0,25).map(({o,a,text})=> o ? `
+      <div class="row tap" data-opedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
+          <div class="sub">${esc(o.date)} · ${esc(a.key)} · ${esc(text)}</div></div>
+        <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>
+      </div>` : `
+      <div class="row tap" data-accedit="${store.accounts.indexOf(a)}">
+        <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(text)}</span></div><span class="chev">›</span>
+      </div>`).join('')}</div>
+    ${g.items.length>25?`<div class="hint">+ ${g.items.length-25} more.</div>`:''}
+  </div>`).join('')}`;
 }
 
 /* ---------------------------------------------------------------- budgets --*/
