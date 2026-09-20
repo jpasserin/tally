@@ -166,9 +166,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=22"></script>
+<script src="backend.js?v=23"></script>
 <script>
-const APP_VERSION="22";
+const APP_VERSION="23";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -222,6 +222,15 @@ const TODAY = () => new Date().toISOString().slice(0,10);
 const uid = () => 'o' + Date.now().toString(36) + Math.random().toString(36).slice(2,6);
 const allTags = () => store.categories.flatMap((c)=>c.tags.map((t)=>({ tag:t, cat:c.name })));
 const tagKnown = (t) => allTags().some((x)=>x.tag===t);
+/* Tags the records carry - main or secondary, any account - that no
+   category claims, with how many operations use each. */
+function unfiledTags(){
+  const n = {};
+  for (const key of Object.keys(store.ops)) for (const o of store.ops[key]) {
+    for (const t of [o.tag].concat(o.splits.map((sp)=>sp.tag))) if (t && !tagKnown(t)) n[t] = (n[t]||0) + 1;
+  }
+  return Object.keys(n).sort().map((t)=>({ tag:t, n:n[t] }));
+}
 const opsOf = (key) => store.ops[key] || (store.ops[key] = []);
 const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
 function checkOp(o){
@@ -646,7 +655,18 @@ function settingsTags(){
         <span class="chev">›</span>
       </div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
-  </div>`;
+  </div>
+  ${(function(){ const un = unfiledTags(); if (!un.length) return '';
+    /* A tag with no category: pick one from the row and it is filed. */
+    return `<div class="card">
+    <h2>Unfiled <span class="muted" style="text-transform:none;letter-spacing:0">${un.length}</span></h2>
+    <div class="rows">${un.map((u)=>`
+      <div class="row">
+        <div class="k"><b>${esc(u.tag)}</b> <span class="muted" style="font-size:11.5px">${u.n}</span></div>
+        <select data-file="${esc(u.tag)}" style="width:auto;max-width:55%;padding:3px 8px;font-size:12.5px">
+          <option value="">—</option>${store.categories.map((c)=>`<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('')}</select>
+      </div>`).join('')}</div>
+  </div>`; })()}`;
 }
 /* The widget: name, type, and a tag field that turns each Enter into a
    capsule. Close asks once (red) if anything was typed; Save is the wide blue
@@ -796,6 +816,12 @@ function wire(){
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
+
+  /* an unfiled tag, filed from its row */
+  document.querySelectorAll('[data-file]').forEach((el)=>el.onchange=()=>{
+    const c = store.categories.find((x)=>x.name===el.value); if (!c) return;
+    if (!c.tags.some((t)=>same(t, el.dataset.file))) c.tags.push(el.dataset.file);
+    commit(); });
 
   /* categories - the widget */
   const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
