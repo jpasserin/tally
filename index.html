@@ -258,9 +258,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=49"></script>
+<script src="backend.js?v=50"></script>
 <script>
-const APP_VERSION="49";
+const APP_VERSION="50";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -907,7 +907,10 @@ function warnings(){
     if (!o.tag) add('notag', 'No tag', o, a, 'no tag at all');
     for (const t of tags) if (t && !tagKnown(t)) add('unknown', 'Tag in no category', o, a, '"'+t+'" belongs to no category');
     if (o.date > today) add('future', 'Dated in the future', o, a, o.date);
-    const c = catOfTag(o.tag);
+    /* x marks a transfer between your own accounts: money in on one side is
+       the point, not a credit to be questioned - the transfer check below
+       covers it instead, wherever x is filed. */
+    const c = same(o.tag, 'x') ? null : catOfTag(o.tag);
     if (c && ['Necessity','Optional','Misc'].includes(c.type) && o.amount > 0) add('creditspend', 'Credit in a spending category', o, a, c.name);
     if (c && c.type==='Income' && o.amount < 0) add('debitincome', 'Debit in an income category', o, a, c.name);
     /* a transfer: named after another account, or tagged x - the other side
