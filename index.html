@@ -133,7 +133,12 @@
     display:flex;align-items:center;gap:7px;padding:9px 12px;background:rgba(24,27,36,.97);border:1px solid var(--line);border-radius:14px;
     box-shadow:0 6px 22px rgba(0,0,0,.45);font-size:12.5px}
   .selbar span{flex:1;font-weight:600}
-  .selbar select{flex:1;min-width:0;padding:5px 8px;font-size:12.5px}
+  .selbar.pick{flex-direction:column;align-items:stretch;gap:4px;padding:8px}
+  .selbar .selpick{max-height:40vh;overflow:auto;display:flex;flex-direction:column}
+  .selbar .selpick button{display:flex;align-items:center;gap:8px;width:100%;text-align:left;background:none;border:none;color:var(--txt);
+    font-size:13px;padding:7px 9px;border-radius:7px;cursor:pointer;font-family:inherit}
+  .selbar .selpick button.tag{padding-left:24px;color:var(--muted)}
+  .selbar .selhead{display:flex;align-items:center;gap:7px;font-size:12.5px}
   .bcap{font-size:10px;padding:1px 7px;margin-left:6px;vertical-align:1px;border-color:currentColor;color:currentColor}
   .swatches{display:flex;gap:8px;flex-wrap:wrap}
   .swatch{width:26px;height:26px;border-radius:8px;border:2px solid transparent;cursor:pointer}
@@ -236,9 +241,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=37"></script>
+<script src="backend.js?v=38"></script>
 <script>
-const APP_VERSION="37";
+const APP_VERSION="38";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -998,15 +1003,21 @@ function opRows(a, ops){
     : `<div class="hint" style="margin-top:0">${filterActive(opFilter())?'Nothing matches.':'Nothing in '+theYear()+'.'}</div>`;
 }
 /* The bar above the nav once operations are ticked: give them all a tag, or
-   put them on a budget. */
+   put them on a budget. Tag and Budget open a list with each colour's dot -
+   a native dropdown cannot show one - and a tap applies at once. */
 function selBar(raised){
   const n = state.sel.length; if (!n) return '';
-  const body = state.bulk==='tag'
-    ? `<select id="bulkTag">${tagOptions('')}</select><button class="gbtn" data-bulkapply="tag">Apply</button>`
-    : state.bulk==='budget'
-    ? `<select id="bulkBudget"><option value="">none</option>${budgetsFor().map((b)=>`<option value="${esc(b.name)}">${esc(b.name)}</option>`).join('')}</select><button class="gbtn" data-bulkapply="budget">Apply</button>`
-    : `<span>${n} selected</span><button class="gbtn" data-bulk="tag">Tag</button><button class="gbtn" data-bulk="budget" ${budgetsFor().length?'':'disabled'}>Budget</button>`;
-  return `<div class="selbar${raised?' raised':''}">${body}<button class="gbtn ghost" data-selclear="1">✕</button></div>`;
+  const dot = (c) => `<span class="dot" style="background:${c}"></span>`;
+  if (state.bulk==='tag' || state.bulk==='budget') {
+    const list = state.bulk==='tag'
+      ? store.categories.map((c)=>`<button class="cat" data-bulkpick="tag|${esc(c.name)}">${dot(typeColor(c.type))}<b>${esc(c.name)}</b></button>`
+          + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-bulkpick="tag|${esc(t)}">${dot(typeColor(c.type))}${esc(t)}</button>`).join('')).join('')
+      : `<button data-bulkpick="budget|">${dot('var(--line)')}none</button>` + budgetsFor().map((b)=>`<button data-bulkpick="budget|${esc(b.name)}">${dot(b.color)}${esc(b.name)}</button>`).join('');
+    return `<div class="selbar pick${raised?' raised':''}">
+      <div class="selhead"><span>${n} selected · ${state.bulk==='tag'?'Tag':'Budget'}</span><button class="gbtn ghost" data-bulk="">Back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>
+      <div class="selpick">${list || '<button disabled>Nothing to pick</button>'}</div></div>`;
+  }
+  return `<div class="selbar${raised?' raised':''}"><span>${n} selected</span><button class="gbtn" data-bulk="tag">Tag</button><button class="gbtn" data-bulk="budget" ${budgetsFor().length?'':'disabled'}>Budget</button><button class="gbtn ghost" data-selclear="1">✕</button></div>`;
 }
 /* The account an operation belongs to, wherever it is listed from. */
 const accountOfOp = (id) => store.accounts.find((a)=>opsOf(a.key).some((o)=>o.id===id)) || null;
@@ -1793,16 +1804,13 @@ function wire(){
     const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id];
     if (!state.sel.length) state.bulk=null; render(); });
   document.querySelectorAll('[data-selclear]').forEach((el)=>el.onclick=()=>{ state.sel=[]; state.bulk=null; render(); });
-  document.querySelectorAll('[data-bulk]').forEach((el)=>el.onclick=()=>{ state.bulk=el.dataset.bulk; render(); });
-  document.querySelectorAll('[data-bulkapply]').forEach((el)=>el.onclick=()=>{
+  document.querySelectorAll('[data-bulk]').forEach((el)=>el.onclick=()=>{ state.bulk=el.dataset.bulk||null; render(); });
+  document.querySelectorAll('[data-bulkpick]').forEach((el)=>el.onclick=()=>{
+    const i = el.dataset.bulkpick.indexOf('|'); const what = el.dataset.bulkpick.slice(0,i), val = el.dataset.bulkpick.slice(i+1);
     const touched = new Set();
-    if (el.dataset.bulkapply==='tag') {
-      const sel=document.getElementById('bulkTag'); const tag=sel?sel.value:''; if (!tag) { alert('Pick a tag.'); return; }
-      for (const id of state.sel) { const a=accountOfOp(id); if (!a) continue; const o=opsOf(a.key).find((x)=>x.id===id); o.tag=tag; o.splits=o.splits.filter((sp)=>sp.tag!==tag); touched.add(a.key); }
-    } else {
-      const sel=document.getElementById('bulkBudget'); const name=sel?sel.value:'';
-      for (const id of state.sel) { const a=accountOfOp(id); if (!a) continue; opsOf(a.key).find((x)=>x.id===id).budget=name; touched.add(a.key); }
-    }
+    for (const id of state.sel) { const a=accountOfOp(id); if (!a) continue; const o=opsOf(a.key).find((x)=>x.id===id); if (!o) continue;
+      if (what==='tag') { o.tag=val; o.splits=o.splits.filter((sp)=>sp.tag!==val); } else o.budget=val;
+      touched.add(a.key); }
     state.sel=[]; state.bulk=null; commit(...touched); });
 
   /* currencies */
