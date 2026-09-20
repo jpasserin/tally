@@ -210,9 +210,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=32"></script>
+<script src="backend.js?v=33"></script>
 <script>
-const APP_VERSION="32";
+const APP_VERSION="33";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -718,6 +718,7 @@ function filterMenu(f){
     </div>
     <div class="ovf-sort">Sort <select id="fsort">${SORTS.map(([k,l])=>`<option value="${k}" ${f.sort===k?'selected':''}>${l}</option>`).join('')}</select>
       <button class="chip" data-fdesc="1">${f.desc?'↓ Desc':'↑ Asc'}</button></div>
+    <button class="ovf-exclf" style="margin-top:4px;border-top:1px solid var(--line);border-radius:0 0 7px 7px" data-freset="1" ${filterActive(f)?'':'disabled'}>Clear filter</button>
   </div>`;
 }
 function filterChips(f){
@@ -729,6 +730,9 @@ function filterChips(f){
   f.exc.forEach((x,i)=>chips.push(['exc','exc'+i,'− '+esc(x.name)]));
   return chips.length ? `<div class="fchips">${chips.map(([cls,key,label])=>`<span class="fchip ${cls}">${label}<b data-funfilter="${key}">×</b></span>`).join('')}</div>` : '';
 }
+/* "12" - or "12 · -$10,450.00" while something is filtered, the sum of what
+   is showing, in the account's currency. */
+const opCountText = (a, ops, f) => ops.length + (filterActive(f) ? ' · ' + money(Math.round(ops.reduce((t,o)=>t+o.amount, 0)*100)/100, a.currency) : '');
 function opRows(a, ops){
   return ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap" data-opedit="${esc(o.id)}">
@@ -758,7 +762,7 @@ function accountPage(a){
   </div>
   <div class="card">
     <h2>Operations
-      <span class="fbar"><span class="muted" id="opCount">${ops.length}</span>
+      <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
         <button class="gbtn" data-opnew="1">+</button></span></h2>
     ${filterChips(f)}
@@ -1332,13 +1336,14 @@ function wire(){
   const refreshOps = () => { const a=acctNow(); if (!a) return;
     const ops = filterOps(opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(theYear())), F);
     const l=document.getElementById('opsList'); if (l) l.innerHTML = opRows(a, ops);
-    const c=document.getElementById('opCount'); if (c) c.textContent = String(ops.length);
+    const c=document.getElementById('opCount'); if (c) c.textContent = opCountText(a, ops, F);
     document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>openOpById(el.dataset.opedit)); };
   document.querySelectorAll('[data-fopen]').forEach((el)=>el.onclick=()=>{ F.open=!F.open; F.picking=null; render(); });
   const fq=document.getElementById('fq'); if (fq) fq.oninput=()=>{ F.q=fq.value; refreshOps(); };
   const fmin=document.getElementById('fmin'); if (fmin) fmin.oninput=()=>{ F.min=fmin.value; refreshOps(); };
   const fmax=document.getElementById('fmax'); if (fmax) fmax.oninput=()=>{ F.max=fmax.value; refreshOps(); };
   document.querySelectorAll('[data-fclear]').forEach((el)=>el.onclick=()=>{ F.q=''; render(); });
+  document.querySelectorAll('[data-freset]').forEach((el)=>el.onclick=()=>{ state.opf = Object.assign(blankFilter(), { open:true, sort:F.sort, desc:F.desc }); render(); });
   document.querySelectorAll('[data-fdir]').forEach((el)=>el.onclick=()=>{ F.dir=el.dataset.fdir; render(); });
   const fsort=document.getElementById('fsort'); if (fsort) fsort.onchange=()=>{ F.sort=fsort.value; render(); };
   document.querySelectorAll('[data-fdesc]').forEach((el)=>el.onclick=()=>{ F.desc=!F.desc; render(); });
