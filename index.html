@@ -131,7 +131,7 @@
 
 <script src="backend.js"></script>
 <script>
-const APP_VERSION="12";
+const APP_VERSION="13";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -311,8 +311,7 @@ function catSheet(p){
 }
 function settingsPeople(){
   const p = state.page;
-  if (p && p.kind==='person') return personPage(p);
-  return `
+  return (p && p.kind==='person' ? personSheet(p) : '') + `
   <div class="card">
     <h2>People <button class="gbtn" data-personnew="1">+</button></h2>
     ${store.people.length ? `<div class="rows">${store.people.map((x,i)=>`
@@ -323,20 +322,26 @@ function settingsPeople(){
     : `<div class="hint" style="margin-top:0">Nobody yet.</div>`}
   </div>`;
 }
-function personPage(p){
+/* The same widget as categories: slides up, Close asks once in red when
+   something was entered, Delete asks once in red, Save is the wide blue one. */
+const personDirty = (p) => p.name.trim()!==p.was.name || p.type!==p.was.type;
+function personSheet(p){
   const isNew = p.index==null;
   return `
-  <div class="card">
-    <h2><span class="act" data-pageback="1">‹ People</span> ${isNew?'New person':esc(store.people[p.index].name)}</h2>
-    <div class="field"><label>Name</label><input id="pName" value="${esc(p.name)}"></div>
-    <div class="field"><label>Type</label>
-      <div class="chips">${PEOPLE_TYPES.map((k)=>
-        `<button class="chip ${p.type===k?'on':''}" data-persontype="${k}">${k}</button>`).join('')}</div></div>
-    <div class="btnrow">
-      <button class="btn primary" data-personsave="1">${isNew?'Create':'Save'}</button>
-      <button class="btn" data-pageback="1">Cancel</button>
+  <div class="sheetwrap">
+    <div class="scrim" data-personclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New person':esc(store.people[p.index].name)}</h3>
+      <div class="field"><label>Name</label><input id="pName" value="${esc(p.name)}"></div>
+      <div class="field"><label>Type</label>
+        <div class="chips">${PEOPLE_TYPES.map((k)=>
+          `<button class="chip ${p.type===k?'on':''}" data-persontype="${k}">${k}</button>`).join('')}</div></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-persondelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-personclose="1">${p.closeArm?'Close?':'Close'}</button>
+        <button class="btn primary" data-personsave="1">Save</button>
+      </div>
     </div>
-    ${isNew?'':`<button class="btn danger" style="margin-top:7px;width:100%" data-persondelete="${p.index}">Delete</button>`}
   </div>`;
 }
 
@@ -420,7 +425,6 @@ function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
   document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; render(); });
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
-  document.querySelectorAll('[data-pageback]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
 
   /* categories - the widget */
   const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
@@ -477,22 +481,30 @@ function wire(){
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.categories.splice(+el.dataset.catdelete, 1); state.page=null; commit(); });
 
-  /* people */
-  const readPerson=()=>{ const n=document.getElementById('pName'); if (n) state.page.name=n.value; };
-  document.querySelectorAll('[data-personnew]').forEach((el)=>el.onclick=()=>{
-    state.page={ kind:'person', index:null, name:'', type:'Parent' }; render(); });
-  document.querySelectorAll('[data-personedit]').forEach((el)=>el.onclick=()=>{
-    const x=store.people[+el.dataset.personedit]; if (!x) return;
-    state.page={ kind:'person', index:+el.dataset.personedit, name:x.name, type:x.type }; render(); });
+  /* people - the same widget */
+  const readPerson=()=>{ const n=document.getElementById('pName'); if (n) state.page.name=n.value; state.page.closeArm=false; state.page.delArm=false; };
+  const openPerson=(index)=>{ const x=index==null?null:store.people[index];
+    state.page={ kind:'person', index, name:x?x.name:'', type:x?x.type:'Parent',
+      was:{ name:x?x.name:'', type:x?x.type:'Parent' }, closeArm:false, delArm:false, fresh:true };
+    render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-personnew]').forEach((el)=>el.onclick=()=>openPerson(null));
+  document.querySelectorAll('[data-personedit]').forEach((el)=>el.onclick=()=>openPerson(+el.dataset.personedit));
   document.querySelectorAll('[data-persontype]').forEach((el)=>el.onclick=()=>{ readPerson(); state.page.type=el.dataset.persontype; render(); });
+  const pn=document.getElementById('pName');
+  if (pn && state.page && state.page.kind==='person') pn.oninput=()=>{ state.page.name=pn.value; state.page.closeArm=false; state.page.delArm=false; };
   document.querySelectorAll('[data-personsave]').forEach((el)=>el.onclick=()=>{
     readPerson(); const p=state.page; const name=p.name.trim();
     const cur = p.index==null ? null : store.people[p.index];
-    try { checkPerson(name, p.type, cur); } catch (e) { alert(e.message); return; }
+    try { checkPerson(name, p.type, cur); } catch (e) { alert(e.message); render(); return; }
     if (cur) Object.assign(cur, { name, type:p.type }); else store.people.push({ name, type:p.type });
     state.page=null; commit(); });
+  document.querySelectorAll('[data-personclose]').forEach((el)=>el.onclick=()=>{
+    const p=state.page; const n=document.getElementById('pName'); if (n) p.name=n.value;
+    if (personDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
+    state.page=null; render(); });
   document.querySelectorAll('[data-persondelete]').forEach((el)=>el.onclick=()=>{
-    if (!confirm('Delete this person?')) return;
+    const p=state.page; const n=document.getElementById('pName'); if (n) p.name=n.value;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow());
