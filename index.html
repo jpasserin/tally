@@ -121,7 +121,7 @@
   /* A page's Close, always at the bottom above the nav; the selection bar
      rises above it when both are there. */
   .closebar{position:fixed;left:0;right:0;bottom:calc(64px + env(safe-area-inset-bottom));z-index:14;margin:0 auto;max-width:528px;padding:0 12px}
-  .closebar .btn{width:100%;background:rgba(24,27,36,.97);border-color:var(--line);box-shadow:0 6px 22px rgba(0,0,0,.45)}
+  .closebar .btn{width:100%;background:var(--accent);border-color:var(--accent);color:#fff;box-shadow:0 6px 22px rgba(0,0,0,.45)}
   .selbar.raised{bottom:calc(116px + env(safe-area-inset-bottom))}
   .chart .bar{cursor:pointer}
   .chart .tick.sel{fill:#fff;font-weight:700}
@@ -243,9 +243,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=41"></script>
+<script src="backend.js?v=42"></script>
 <script>
-const APP_VERSION="41";
+const APP_VERSION="42";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -823,7 +823,7 @@ function budgetPage(b){
   const spent = budgetSpent(b.name), left = amt!=null ? Math.round((amt - spent)*100)/100 : null;
   return `
   <div class="card">
-    <h2><span class="act" data-budback="1">‹ Budgets</span>
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">Budget</span>
       <button class="gbtn ghost" data-budedit="${store.budgets.indexOf(b)}">Edit</button></h2>
     <div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);display:flex;align-items:center;gap:8px"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}${b.closed?'<span class="muted" style="font-size:11px;font-weight:600">Closed</span>':''}</div>
     <div class="hero ${left!=null&&left<0?'neg':''}">${money(spent, store.cur)}</div>
@@ -837,7 +837,9 @@ function budgetPage(b){
     ${filterChips(f)}
     <div id="opsList">${opRowsMixed(shown.map((o)=>({ o, a:byId[o.id] })))}</div>
   </div>
-  ${selBar()}`;
+  <div style="height:56px"></div>
+  ${selBar(true)}
+  <div class="closebar"><button class="btn" data-budback="1">Close</button></div>`;
 }
 /* Rows from several accounts: each says which account, in its own currency. */
 function opRowsMixed(list){
