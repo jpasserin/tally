@@ -201,6 +201,9 @@
   .rows .row:last-child{border-bottom:0}
   .row .k{font-size:13.5px} .row .v{font-weight:700;font-variant-numeric:tabular-nums}
   .row.tap{cursor:pointer}
+  /* The handle to drag a row by; the row being dragged lifts a little. */
+  .drag{color:var(--muted);font-size:18px;line-height:1;padding:4px 10px 4px 2px;cursor:grab;touch-action:none;user-select:none;flex:none}
+  .row.lift{background:var(--card2);border-radius:10px;box-shadow:0 4px 14px rgba(0,0,0,.4)}
   .row .sub{font-size:11.5px;color:var(--muted);margin-top:3px}
   .row .chev{color:var(--muted);font-weight:700}
 
@@ -249,9 +252,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=45"></script>
+<script src="backend.js?v=46"></script>
 <script>
-const APP_VERSION="45";
+const APP_VERSION="46";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -291,6 +294,13 @@ const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(','
    name, then the others - never the name twice. */
 const withName = (name, tags) => [name].concat(tags.filter((t)=>!same(t,name)));
 const withoutName = (name, tags) => tags.filter((t)=>!same(t,name));
+
+/* Reordering: the array's order IS the order, everywhere categories are
+   listed. Move one from a place to another. */
+function moveCategory(from, to){
+  if (from===to || from<0 || to<0 || from>=store.categories.length || to>=store.categories.length) return false;
+  const [c] = store.categories.splice(from, 1); store.categories.splice(to, 0, c); return true;
+}
 
 /* Throws with the reason. `skip` is the category being edited. */
 function checkCategory(name, type, tags, skip){
@@ -649,8 +659,8 @@ function sumsByCategory(year){
   return { out, unfiled };
 }
 function reportGroup(title, types, sums){
-  const rows = store.categories.filter((c)=>types.includes(c.type) && sums.out[c.name]).map((c)=>({ c, v:sums.out[c.name] }))
-    .sort((a,b)=>Math.abs(b.v)-Math.abs(a.v));
+  /* In the order the categories are kept in, not by size. */
+  const rows = store.categories.filter((c)=>types.includes(c.type) && sums.out[c.name]).map((c)=>({ c, v:sums.out[c.name] }));
   const total = rows.reduce((t,r)=>t+r.v, 0);
   const div = monthsIn(theYear());
   const perMo = (v) => money(Math.round(v/div*100)/100, store.cur) + '/mo';
@@ -688,7 +698,6 @@ function explainSheet(which){
   const Y = theYear(), sums = sumsByCategory(Y), f = yearFigures(sums);
   const rows = e.types
     ? store.categories.filter((c)=>e.types.includes(c.type) && sums.out[c.name]).map((c)=>[c.name, (e.flip?-1:1)*sums.out[c.name], typeColor(c.type)])
-        .sort((a,b)=>Math.abs(b[1])-Math.abs(a[1]))
     : e.parts.map((k)=>[EXPLAIN[k].label, (k==='in'?1:-1)*f[k], null]);
   return `
   <div class="sheetwrap">
@@ -1351,8 +1360,9 @@ function settingsTags(){
   return (p && p.kind==='cat' ? catSheet(p) : '') + `
   <div class="card">
     <h2>Categories <button class="gbtn" data-catnew="1">+</button></h2>
-    ${store.categories.length ? `<div class="rows">${store.categories.map((c,i)=>`
-      <div class="row tap" data-catedit="${i}">
+    ${store.categories.length ? `<div class="rows" id="catRows">${store.categories.map((c,i)=>`
+      <div class="row tap ${state.dragIdx===i?'lift':''}" data-catedit="${i}" data-catrow="${i}">
+        <span class="drag" data-catdrag="${i}">≡</span>
         <div style="flex:1;min-width:0">
           <div class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${typeColor(c.type)}"></span><b>${esc(c.name)}</b>
             <span class="muted" style="font-size:11.5px">${esc(c.type)}</span></div>
@@ -1552,6 +1562,24 @@ function wire(){
     if (!c.tags.some((t)=>same(t, el.dataset.file))) c.tags.push(el.dataset.file);
     commit(); });
 
+  /* categories - drag a row by its handle to reorder; pointer events on the
+     document, so redrawing the list mid-drag does not drop the drag. */
+  document.querySelectorAll('[data-catdrag]').forEach((el)=>{
+    el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation(); };
+    el.onpointerdown=(e)=>{
+      if (e && e.preventDefault) e.preventDefault(); if (e && e.stopPropagation) e.stopPropagation();
+      state.dragIdx=+el.dataset.catdrag; state.dragMoved=false; render();
+      const move=(ev)=>{
+        const rows=[...document.querySelectorAll('[data-catrow]')];
+        let to=state.dragIdx;
+        rows.forEach((r)=>{ const b=r.getBoundingClientRect(); if (ev.clientY > b.top && ev.clientY < b.bottom) to=+r.dataset.catrow; });
+        if (to!==state.dragIdx && moveCategory(state.dragIdx, to)) { state.dragIdx=to; state.dragMoved=true; render(); }
+      };
+      const up=()=>{ document.removeEventListener('pointermove', move); document.removeEventListener('pointerup', up); document.removeEventListener('pointercancel', up);
+        const moved=state.dragMoved; state.dragIdx=null; state.dragMoved=false; if (moved) commit(); else render(); };
+      if (document.addEventListener) { document.addEventListener('pointermove', move); document.addEventListener('pointerup', up); document.addEventListener('pointercancel', up); }
+    }; });
+  /* the row itself opens the widget - unless a drag just happened */
   /* categories - the widget */
   const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
     if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; state.page.delArm=false; };
