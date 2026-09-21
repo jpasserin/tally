@@ -89,6 +89,9 @@
   .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
   .kpi{background:var(--card2);border-radius:12px;padding:8px 9px;min-width:0;position:relative}
   table.fx td.neg{color:var(--bad)}
+  /* Accounts framed by the currency they sit in. */
+  .cframe{border:1.5px solid;border-radius:12px;padding:0 9px;margin:5px 0}
+  .cframe .row:last-child{border-bottom:0}
   .qbtn{position:absolute;top:5px;right:5px;width:17px;height:17px;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);
     font-size:10px;font-weight:700;line-height:1;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;font-family:inherit}
   .kpi .l{padding-right:18px}
@@ -268,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=58"></script>
+<script src="backend.js?v=59"></script>
 <script>
-const APP_VERSION="58";
+const APP_VERSION="59";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -300,7 +303,7 @@ const CURRENCIES = ['USD','EUR','AUD'];
 /* Accounts: a unique key, a currency, owners from People, a category (is the
    money reachable) and a type (how it is recorded). Cash first; other types
    will bring their own settings later. */
-const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Children','#c084fc'], ['Excluded','#5b6170']];
+const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
 const ACCOUNT_TYPES = ['Cash','Fund'];
 /* A Fund account holds funds: Cash (uninvested, earns a little interest) or
@@ -329,10 +332,10 @@ function fundAt(a, f, end){
   if (shares==null) shares = ops.filter((o)=>o.kind!=='Price').reduce((t,o)=>t+(o.shares||0), 0);
   const price = last ? last.price : null;
   const raw = price!=null ? shares*price : paid, value = r2(raw);
-  return { paid:r2(paid), interest:r2(value-paid), value, raw, shares:r4(shares), price };
+  return { paid:r2(paid), interest:r2(value-paid), value, raw, shares:r3(shares), price };
 }
 const r2 = (v) => Math.round((v+Number.EPSILON)*100)/100;
-const r4 = (v) => Math.round((v+Number.EPSILON)*1e4)/1e4;
+const r3 = (v) => Math.round((v+Number.EPSILON)*1e3)/1e3;
 const fundValueAt = (a, end) => r2(fundsOf(a).reduce((t,f)=>t+fundAt(a, f, end).raw, 0));
 const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
@@ -378,6 +381,7 @@ function unfiledTags(){
 }
 const opsOf = (key) => store.ops[key] || (store.ops[key] = []);
 const num = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
+const num3 = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*1e3)/1e3 : NaN; };
 const num4 = (v) => { const n = parseFloat(String(v).replace(',', '.')); return isFinite(n) ? Math.round(n*1e4)/1e4 : NaN; };
 function checkOp(o){
   if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) throw new Error('A date.');
@@ -532,7 +536,7 @@ function readOps(tab){
     const fund = str(col(r,'Fund')), kind = str(col(r,'Kind'));
     if (!date || (!isFinite(amount) && kind!=='Price')) continue;
     out.push({ id: str(col(r,'Id')) || uid(), date, name: str(col(r,'Name')), amount: isFinite(amount) ? amount : null, note: str(col(r,'Description')),
-      fund: fund || undefined, kind: kind || undefined, shares: isFinite(num4(col(r,'Shares'))) ? num4(col(r,'Shares')) : undefined, price: isFinite(num4(col(r,'Unit price'))) ? num4(col(r,'Unit price')) : undefined,
+      fund: fund || undefined, kind: kind || undefined, shares: isFinite(num3(col(r,'Shares'))) ? num3(col(r,'Shares')) : undefined, price: isFinite(num4(col(r,'Unit price'))) ? num4(col(r,'Unit price')) : undefined,
       tag: str(col(r,'Tag')),
       splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const i=x.lastIndexOf(':');
         return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
@@ -703,10 +707,12 @@ const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
   `<button class="${sub(tab)===id?'active':''}" data-sub="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('')}</div>`;
 
 /* ---------------------------------------------------------------- summary --
-   Net worth: every account except the Children's and the Excluded ones, at the end of the year,
+   Net worth: every account except the children's (every owner a Child) and the Excluded ones, at the end of the year,
    in the shown currency at the year-end rate; then how it splits by the
    currency the money actually sits in. */
-const counted = () => store.accounts.filter((a)=>a.category!=='Excluded' && a.category!=='Children');
+/* A child's account: it has owners, and each of them is a Child in People. */
+const isChilds = (a) => a.owners.length > 0 && a.owners.every((n)=>(store.people.find((p)=>same(p.name, n))||{}).type==='Child');
+const counted = () => store.accounts.filter((a)=>a.category!=='Excluded' && !isChilds(a));
 /* "31 Dec 2013" */
 const dLabel = (d) => d && /^\d{4}-\d{2}-\d{2}/.test(d) ? +d.slice(8,10) + ' ' + MON[+d.slice(5,7)-1] + ' ' + d.slice(0,4) : '';
 /* "31 Dec 2013 · 0.85€ · A$1.02": the day the rate is from and what one unit
@@ -1340,11 +1346,12 @@ function tabAccount(){
       return `
       <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
         <span class="dot" style="background:${g.col}"></span>${g.k}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">(${money0(total, store.cur)})</span></div>
-      <div class="rows">${g.list.map((a)=>`
+      ${CURRENCIES.map((c)=>({ c, list:g.list.filter((a)=>a.currency===c) })).filter((f)=>f.list.length).map((f)=>`
+      <div class="cframe" style="border-color:${CUR_COLORS[f.c]}"><div class="rows">${f.list.map((a)=>`
         <div class="row tap" data-accopen="${esc(a.key)}">
           <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${isFund(a)?' · '+fundsOf(a).length+' fund'+(fundsOf(a).length===1?'':'s'):''}${a.closed?' · closed':''}</span></div>
           <span class="v ${balanceAt(a, Y)<0?'neg':''}">${paren(balanceAt(a, Y), a.currency, yearMonth(Y))}${money(balanceAt(a, Y), a.currency)}</span>
-        </div>`).join('')}</div>`; }).join('')
+        </div>`).join('')}</div></div>`).join('')}`; }).join('')
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
@@ -1503,6 +1510,7 @@ function fundAccountPage(a){
     <div class="hero ${at.value<0?'neg':''}" style="font-size:24px">${money(at.value, a.currency)}</div>
     <div class="herosub">${money(at.paid, a.currency)} paid in · <span style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</span> ${inv?'growth':'interest'}${inv&&at.shares!=null?' · '+at.shares.toLocaleString('en-US',{maximumFractionDigits:3})+' shares'+(at.price!=null?' at '+at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):''):''}</div>
   </div>
+  ${fundChartCard(a, f, Y)}
   <div class="card">
     <h2>By month</h2>
     <div style="overflow-x:auto"><table class="fx">
@@ -1523,6 +1531,37 @@ function fundAccountPage(a){
   </div>
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+/* One fund over the year on the zoomable chart: the figure chosen by the
+   chips, at the year's start and at each month's end so far. */
+const FUND_METRICS = [['price','Unit price',true], ['paid','Paid in'], ['interest','Growth'], ['value','Balance'], ['shares','Shares',true]];
+const fmt3 = (v) => v.toLocaleString('en-US', { maximumFractionDigits:3 });
+const fmtPrice = (v) => v.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
+function fundPoints(a, f, Y, key){
+  const now = new Date().toISOString().slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
+  const at = (end) => { const x = fundAt(a, f, end); const v = x[key]; return isFinite(v) && v!=null ? v : 0; };
+  return [{ label:'1 Jan', values:{ v: at((Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ v: at(m+'-31') } })));
+}
+function fundSeries(f, key){
+  const m = FUND_METRICS.find((x)=>x[0]===key) || FUND_METRICS[3];
+  return [{ key:'v', label:(key==='interest'&&f.kind!=='invested')?'Interest':m[1], color:'#3b82f6', money: key!=='shares' && key!=='price', fmt: key==='shares' ? fmt3 : key==='price' ? fmtPrice : undefined }];
+}
+const fundMetric = (f) => { const ok = FUND_METRICS.filter(([,,inv])=>!inv || f.kind==='invested').map(([k])=>k); return ok.includes(state.fmet) ? state.fmet : 'value'; };
+function fundChartCard(a, f, Y){
+  const key = fundMetric(f);
+  const pts = fundPoints(a, f, Y, key);
+  const n = pts.length;
+  if (n < 2) return '';
+  if (state.fbHi==null || state.fbHi > n-1 || state.fbHi < 1) state.fbHi = n-1;
+  if (state.fbLo==null || state.fbLo >= state.fbHi) state.fbLo = 0;
+  const inv = f.kind==='invested';
+  return `
+  <div class="card">
+    <h2>${esc(f.name)} <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
+    <div class="chips" style="margin-bottom:6px">${FUND_METRICS.filter(([,,i])=>!i || inv).map(([k,l])=>`<button class="chip ${key===k?'on':''}" data-fmet="${k}">${k==='interest'&&!inv?'Interest':l}</button>`).join('')}</div>
+    ${rangeChart('fb', pts, fundSeries(f, key), state.fbLo, state.fbHi)}
+  </div>`;
 }
 const fopDirty = (p) => JSON.stringify([p.date,p.fkind,p.amount,p.shares,p.price,p.note.trim()]) !== JSON.stringify([p.was.date,p.was.fkind,p.was.amount,p.was.shares,p.was.price,p.was.note]);
 function fopSheet(p, a, f){
@@ -1795,11 +1834,11 @@ function rangePlot(pts, series, lo, hi){
   const y = (v) => T + (H-T-B) * (1 - (v-min)/(max-min));
   const money = series.some((sr)=>sr.money);
   /* whole numbers for money, four decimals for rates */
-  const lab = (v) => money || Math.abs(v)>=100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(4);
+  const lab = (v) => series[0].fmt ? series[0].fmt(v) : money || Math.abs(v)>=100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(4);
   let g = '';
   for (let k=0;k<3;k++){ const v = min + (max-min)*k/2; const yy = y(v);
     g += `<line class="gl" x1="${L}" y1="${yy.toFixed(1)}" x2="${W-R}" y2="${yy.toFixed(1)}"/>
-      <text class="yl" x="${L-4}" y="${(yy+3).toFixed(1)}" text-anchor="end">${money ? kfmt1(v) : v.toFixed(2)}</text>`; }
+      <text class="yl" x="${L-4}" y="${(yy+3).toFixed(1)}" text-anchor="end">${money ? kfmt1(v) : series[0].fmt ? series[0].fmt(v) : v.toFixed(2)}</text>`; }
   const ticks = n > 4 ? [0, Math.round((n-1)/2), n-1] : [0, n-1];
   for (const i of ticks) g += `<text class="tick" x="${x(i).toFixed(1)}" y="${H-4}" text-anchor="${i===0?'start':i===n-1?'end':'middle'}">${esc(shown[i].label)}</text>`;
   for (const sr of series) {
@@ -2278,7 +2317,7 @@ function wire(){
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
   if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ab', balancePoints(a, theYear()), AB_SERIES, ()=>({ lo:state.abLo, hi:state.abHi }), (lo,hi)=>{ state.abLo=lo; state.abHi=hi; }); }
   document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
@@ -2332,7 +2371,11 @@ function wire(){
   document.querySelectorAll('[data-accfundadd]').forEach((el)=>el.onclick=()=>{ readAcc(); (state.page.funds=state.page.funds||[]).push({ name:'', kind:'cash', index:'' }); render(); });
   document.querySelectorAll('[data-accfunddel]').forEach((el)=>el.onclick=()=>{ readAcc(); const f=state.page.funds[+el.dataset.accfunddel]; if (f && !f.locked) state.page.funds.splice(+el.dataset.accfunddel,1); render(); });
   document.querySelectorAll('[data-accfundkind]').forEach((el)=>el.onclick=()=>{ readAcc(); const [i,k]=el.dataset.accfundkind.split('|'); const f=state.page.funds[+i]; if (f && !f.locked) f.kind=k; render(); });
-  document.querySelectorAll('[data-fundsel]').forEach((el)=>el.onclick=()=>{ state.fund=el.dataset.fundsel; state.page=null; render(); });
+  document.querySelectorAll('[data-fundsel]').forEach((el)=>el.onclick=()=>{ state.fund=el.dataset.fundsel; state.page=null; state.fbLo=state.fbHi=null; render(); });
+  document.querySelectorAll('[data-fmet]').forEach((el)=>el.onclick=()=>{ state.fmet=el.dataset.fmet; render(); });
+  if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
+    const f = a && isFund(a) ? (fundsOf(a).find((x)=>x.name===state.fund) || fundsOf(a)[0]) : null;
+    if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
   document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; render(); });
@@ -2384,7 +2427,7 @@ function wire(){
     readFop(); const p=state.page, a=acct(), f=fundNow(); if (!a || !f) return;
     const inv = f.kind==='invested';
     const o = { id:p.id||uid(), date:p.date, fund:f.name, kind:p.fkind, amount: p.fkind==='Price' ? null : num(p.amount),
-      shares: inv && String(p.shares).trim()!=='' ? num4(p.shares) : undefined, price: inv && String(p.price).trim()!=='' ? num4(p.price) : undefined,
+      shares: inv && String(p.shares).trim()!=='' ? num3(p.shares) : undefined, price: inv && String(p.price).trim()!=='' ? num4(p.price) : undefined,
       name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (o.shares!==undefined && !isFinite(o.shares)) o.shares = undefined; if (o.price!==undefined && !isFinite(o.price)) o.price = undefined;
     try { checkFop(o, inv); } catch (e) { alert(e.message); render(); return; }
