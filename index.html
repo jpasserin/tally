@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=68"></script>
+<script src="backend.js?v=69"></script>
 <script>
-const APP_VERSION="68";
+const APP_VERSION="69";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -830,8 +830,8 @@ function savingsCard(Y){
   const pc = (r) => r.paid ? (r.growth/r.paid*100).toFixed(1)+'%' : '—';
   /* the year so far against where the year before ended */
   const last = rows[rows.length-1], prev = at((Y-1)+'-12');
-  const box = (label, v) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${v<0?'var(--bad)':'var(--good)'}">${money(v, cur)}</div></div>`;
-  const boxes = last ? `<div class="kpis" style="margin-top:8px">${box('Paid in this year', r2(last.paid-prev.paid))}${box('Growth this year', r2(last.growth-prev.growth))}${box('Balance change', r2(last.value-prev.value))}</div>` : '';
+  const box = (label, v, color) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${color || (v<0?'var(--bad)':'var(--good)')}">${money(v, cur)}</div></div>`;
+  const boxes = last ? `<div class="kpis" style="margin-top:8px">${box('Paid in this year', r2(last.paid-prev.paid), 'var(--accent)')}${box('Growth this year', r2(last.growth-prev.growth))}${box('Balance change', r2(last.value-prev.value))}</div>` : '';
   return `
   <div class="card">
     <h2>Savings <span class="chips" style="margin-left:auto">${[['all','All'],['USD','USD'],['EUR','EUR']].map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-savcur="${k}">${l}</button>`).join('')}</span></h2>
@@ -1417,7 +1417,9 @@ function budgetSheet(p){
 /* ---------------------------------------------------------------- history --
    Net worth month by month, each month at its own rate, on the zoomable
    chart. */
-function netWorthMonths(){
+/* Every month from the first record to now: the net worth - or one account
+   category of it. */
+function netWorthMonths(cat){
   let first = null;
   for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
   if (!first) return [];
@@ -1428,6 +1430,7 @@ function netWorthMonths(){
     const end = m + '-31';
     let total = 0;
     for (const a of counted()) {
+      if (cat && a.category!==cat) continue;
       const v = conv(valueAt(a, end), a.currency, store.cur, m); if (v!=null) total += v;
     }
     out.push({ label: mLabel(m), values: { nw: Math.round(total) } });
@@ -1435,7 +1438,9 @@ function netWorthMonths(){
   }
   return out;
 }
-const NW_SERIES = [{ key:'nw', label:'Net worth', color:'#3b82f6', money:true }];
+/* The History chart: all of it in red, or one category in its own colour. */
+const nwHistCat = () => NW_CATS.includes(state.nwHist) ? state.nwHist : null;
+const nwSeries = () => { const c = nwHistCat(); return [{ key:'nw', label: c || 'Net worth', color: c ? CAT_COLORS[c] : '#f87171', money:true }]; };
 /* Start, end and change over the range the slider shows. */
 function nwKpis(pts, lo, hi){
   const a = pts[lo] ? pts[lo].values.nw : 0, b = pts[hi] ? pts[hi].values.nw : 0, d = b - a;
@@ -1452,16 +1457,17 @@ function netWorthByYear(){
   });
 }
 function tabHistory(){
-  const pts = netWorthMonths();
+  const pts = netWorthMonths(nwHistCat());
   const n = pts.length;
   if (n < 2) return `<div class="card"><h2>Net worth</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
   if (state.nwHi==null || state.nwHi > n-1 || state.nwHi < 1) state.nwHi = n-1;
   if (state.nwLo==null || state.nwLo >= state.nwHi) state.nwLo = 0;
   const cell = (v) => `<td class="${v<0?'neg':''}">${money0(v, store.cur)}</td>`;
+  const pick = nwHistCat() || 'all';
   return `
   <div class="card">
-    <h2>Net worth <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])} by month</span></h2>
-    ${rangeChart('nw', pts, NW_SERIES, state.nwLo, state.nwHi)}
+    <h2>Net worth <span class="chips" style="margin-left:auto">${[['all','All']].concat(NW_CATS.map((c)=>[c,c])).map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nwhist="${k}">${l}</button>`).join('')}</span></h2>
+    ${rangeChart('nw', pts, nwSeries(), state.nwLo, state.nwHi)}
     <div class="kpis" id="nwKpis" style="margin-top:8px">${nwKpis(pts, state.nwLo, state.nwHi)}</div>
   </div>
   <div class="card">
@@ -2844,12 +2850,13 @@ function wire(){
   document.querySelectorAll('[data-nwexplain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'nwexplain', fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-nwclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-nwcat]').forEach((el)=>el.onclick=()=>{ state.nwCat=el.dataset.nwcat; render(); });
+  document.querySelectorAll('[data-nwhist]').forEach((el)=>el.onclick=()=>{ state.nwHist=el.dataset.nwhist; render(); });
   document.querySelectorAll('[data-savcur]').forEach((el)=>el.onclick=()=>{ state.savCur=el.dataset.savcur; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
-    const pts = netWorthMonths();
-    if (pts.length > 1) wireRangeChart('nw', pts, NW_SERIES, ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; },
+    const pts = netWorthMonths(nwHistCat());
+    if (pts.length > 1) wireRangeChart('nw', pts, nwSeries(), ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; },
       (r)=>{ const k=document.getElementById('nwKpis'); if (k) k.innerHTML = nwKpis(pts, r.lo, r.hi); });
   }
   const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
