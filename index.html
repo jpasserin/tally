@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=79"></script>
+<script src="backend.js?v=80"></script>
 <script>
-const APP_VERSION="79";
+const APP_VERSION="80";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -444,9 +444,7 @@ function years(){
 function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year = ys.includes(THIS_YEAR) ? THIS_YEAR : ys[ys.length-1]; return state.year; }
 /* The balance as it stood at the end of a year - every operation up to its
    last day. The current year is simply everything. */
-const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a)
-  : isFund(a) ? fundValueAt(a, year+'-12-31')
-  : Math.round(((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= year+'-12-31').reduce((t,o)=>t+o.amount, 0))*100)/100;
+const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a) : valueAt(a, year+'-12-31');
 /* Any account at the end of any day. */
 const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
 /* The rate for a month: that month's end from the sheet; failing that the
