@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=69"></script>
+<script src="backend.js?v=70"></script>
 <script>
-const APP_VERSION="69";
+const APP_VERSION="70";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1093,6 +1093,8 @@ function categoryPage(c){
   const byId = Object.fromEntries(pool.map(({o,a})=>[o.id, a]));
   const shown = filterOps(pool.map(({o})=>o), f).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0).map((o)=>({ o, a:byId[o.id] }));
   const p = state.page;
+  const hist = state.catView==='history';
+  const views = `<span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-rcatview="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-rcatview="history">History</button></span>`;
   return (p && p.kind==='op' ? opSheet(p, opAcct()) : '') + `
   <div class="card">
     <h2><span style="display:flex;align-items:center;gap:8px;text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}</span>
@@ -1100,8 +1102,9 @@ function categoryPage(c){
     <div class="hero ${total<0?'neg':'pos'}">${money(total, store.cur)}</div>
     <div class="herosub" style="font-size:13px;font-weight:600">${money(Math.round(total/monthsIn(Y)*100)/100, store.cur)}/mo</div>
   </div>
+  ${hist ? categoryHistory(c) : `
   <div class="card">
-    <h2>By month${selM.length?` <span class="muted" style="text-transform:none;letter-spacing:0">${selM.map((m)=>MON[+m.slice(5,7)-1]).join(', ')}</span>`:''}</h2>
+    <h2>By month${selM.length?` <span class="muted" style="text-transform:none;letter-spacing:0">${selM.map((m)=>MON[+m.slice(5,7)-1]).join(', ')}</span>`:''}${views}</h2>
     ${columns({ labels:MON, values:perMonth, color:typeColor(c.type), keys:months, dataAttr:'data-rcatmonth', selected:selM })}
   </div>
   <div class="card">
@@ -1110,10 +1113,47 @@ function categoryPage(c){
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span></span></h2>
     ${filterChips(f)}
     <div id="opsList">${opRowsMixed(shown)}</div>
-  </div>
+  </div>`}
   <div style="height:56px"></div>
   ${selBar(true)}
   <div class="closebar"><button class="btn" data-rcatclose="1">Close</button></div>`;
+}
+/* A category over every year: its month-by-month amount on the zoomable
+   chart (outflows read positive), then a table with each year's total and
+   monthly average. */
+function categoryMonths(c){
+  const sign = c.type==='Income' ? 1 : -1;
+  const out = [];
+  for (const y of years().filter((y)=>y<=THIS_YEAR)) {
+    const by = {};
+    for (const x of categoryOps(c.name, y)) { const m = x.o.date.slice(0,7); by[m] = (by[m]||0) + x.part; }
+    const last = y===THIS_YEAR ? new Date().getMonth()+1 : 12;
+    for (let mo = 1; mo <= last; mo++) { const m = y+'-'+String(mo).padStart(2,'0'); out.push({ label: mLabel(m), values: { v: r2(sign*(by[m]||0)) } }); }
+  }
+  const first = out.findIndex((p)=>p.values.v);
+  return first < 0 ? [] : out.slice(first);
+}
+const chSeries = (c) => [{ key:'v', label:c.name, color:typeColor(c.type), money:true }];
+function categoryHistory(c){
+  const pts = categoryMonths(c);
+  const n = pts.length;
+  if (state.chHi==null || state.chHi > n-1 || state.chHi < 1) state.chHi = n-1;
+  if (state.chLo==null || state.chLo >= state.chHi) state.chLo = 0;
+  const sign = c.type==='Income' ? 1 : -1;
+  const rows = years().filter((y)=>y<=THIS_YEAR).reverse().map((y)=>{ const t = r2(sign*categoryOps(c.name, y).reduce((s,x)=>s+x.part, 0)); return { y, t, avg:r2(t/monthsIn(y)) }; }).filter((r)=>r.t);
+  const views = `<span class="chips" style="margin-left:auto"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-rcatview="year">This year</button><button class="chip on" style="padding:2px 9px;font-size:11.5px" data-rcatview="history">History</button></span>`;
+  return `
+  <div class="card">
+    <h2>By month${views}</h2>
+    ${n > 1 ? rangeChart('ch', pts, chSeries(c), state.chLo, state.chHi) : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>
+  <div class="card">
+    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}</span></h2>
+    ${rows.length ? `<table class="fx">
+      <thead><tr><th>Year</th><th>Total</th><th>Per month</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${r.y}</td><td class="${r.t<0?'neg':''}">${money(r.t, store.cur)}</td><td class="${r.avg<0?'neg':''}"><b>${money(r.avg, store.cur)}</b></td></tr>`).join('')}</tbody>
+    </table>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
 }
 function tabReport(){
   const Y = theYear();
@@ -2843,7 +2883,10 @@ function wire(){
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
   document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.cat=null; state.warnKind=null; render(); });
-  document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; render(); });
+  document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; state.catView='year'; state.chLo=state.chHi=null; render(); });
+  document.querySelectorAll('[data-rcatview]').forEach((el)=>el.onclick=()=>{ state.catView=el.dataset.rcatview; state.page=null; render(); });
+  if (state.tab==='report' && state.cat && state.catView==='history') { const c = store.categories.find((x)=>x.name===state.cat);
+    if (c) wireRangeChart('ch', categoryMonths(c), chSeries(c), ()=>({ lo:state.chLo, hi:state.chHi }), (lo,hi)=>{ state.chLo=lo; state.chHi=hi; }); }
   document.querySelectorAll('[data-rcatclose]').forEach((el)=>el.onclick=()=>{ state.cat=null; state.catMonths=[]; state.opf=null; state.page=null; render(); });
   document.querySelectorAll('[data-rcatmonth]').forEach((el)=>el.onclick=()=>{ const m=el.dataset.rcatmonth;
     state.catMonths = state.catMonths.includes(m) ? state.catMonths.filter((x)=>x!==m) : [...state.catMonths, m]; render(); });
