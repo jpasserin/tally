@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=71"></script>
+<script src="backend.js?v=72"></script>
 <script>
-const APP_VERSION="71";
+const APP_VERSION="72";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -914,7 +914,7 @@ function nwByMonthCard(Y){
   const any = series.some((sr)=>sr.values.some((v)=>v));
   return `
   <div class="card">
-    <h2>Net worth by month <span class="chips" style="margin-left:auto">${[['all','All']].concat(NW_CATS.map((c)=>[c,c])).map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nwcat="${k}">${l}</button>`).join('')}</span></h2>
+    <h2>By month <span class="chips" style="margin-left:auto">${[['all','All']].concat(NW_CATS.map((c)=>[c,c])).map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nwcat="${k}">${l}</button>`).join('')}</span></h2>
     ${any ? columns({ labels:MON, series }) : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
