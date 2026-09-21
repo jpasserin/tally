@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=60"></script>
+<script src="backend.js?v=61"></script>
 <script>
-const APP_VERSION="60";
+const APP_VERSION="61";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -328,8 +328,11 @@ function fundAt(a, f, end){
   const paid = ops.reduce((t,o)=> o.kind==='Buy' ? t+(o.amount||0) : o.kind==='Sell' ? t-Math.abs(o.amount||0) : t, 0);
   const prices = ops.filter((o)=>o.kind==='Price' && o.price>0).sort((x,y)=>x.date<y.date?-1:1);
   const last = prices[prices.length-1];
-  let shares = last ? last.shares : null;
-  if (shares==null) shares = ops.filter((o)=>o.kind!=='Price').reduce((t,o)=>t+(o.shares||0), 0);
+  /* shares held: the latest mark, moved by every buy, sale, dividend or fee
+     since it (a sale sold out leaves no mark behind) */
+  const move = (o) => (o.kind==='Sell' || o.kind==='Fee') ? -Math.abs(o.shares||0) : Math.abs(o.shares||0);
+  let shares = ops.filter((o)=>o.kind!=='Price' && (!last || o.date > last.date)).reduce((t,o)=>t+move(o), last ? last.shares : 0);
+  if (shares < 1e-9) shares = 0;
   const price = last ? last.price : null;
   const raw = price!=null ? shares*price : paid, value = r2(raw);
   return { paid:r2(paid), interest:r2(value-paid), value, raw, shares:r3(shares), price };
@@ -580,16 +583,33 @@ function previewImport(j){
 }
 function importFile(j){
   if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
-  let accounts=0, ops=0; const touched=new Set(['Config']);
+  let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
+  const year = +j.year || null;
   for (const a of j.accounts) {
     if (!a.key) continue;
-    if (!store.accounts.some((x)=>same(x.key, a.key))) {
+    const known = store.accounts.find((x)=>same(x.key, a.key));
+    /* A later book opens the account at what its own pages say. Where that
+       differs from what the app holds at the previous year's end, one
+       adjustment on 1 January makes the balances follow the books - it can
+       be deleted like any operation. */
+    if (known && !isFund(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length && opsOf(known.key).some((o)=>o.date < year+'-01-01')) {
+      const diff = r2(+a.opening - valueAt(known, (year-1)+'-12-31'));
+      if (Math.abs(diff) >= 0.01) {
+        const id = year+'-'+known.key+'-opening', list = opsOf(known.key);
+        const adj = { id, date:year+'-01-01', name:'Opening adjustment', amount:diff, note:'the '+year+' book opens at '+money(+a.opening, known.currency), tag:'x', splits:[], budget:'', oneoff:true };
+        const i = list.findIndex((x)=>x.id===id); if (i>=0) Object.assign(list[i], adj); else list.push(adj);
+        adjusted++; touched.add(known.key);
+      }
+    }
+    if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[] });
       accounts++;
     }
     const acc = store.accounts.find((x)=>same(x.key, a.key)); const key = acc.key;
+    /* a later year can close an account; nothing reopens one */
+    if (a.closed && !acc.closed) { acc.closed = true; }
     /* a fund account brings its funds; ones already there are left as they are */
     if (isFund(acc)) for (const f of (a.funds||[])) if (f && f.name && !fundsOf(acc).some((x)=>same(x.name, f.name)))
       fundsOf(acc).push({ name:String(f.name), kind: f.kind==='invested'?'invested':'cash', index:String(f.index||'') });
@@ -606,7 +626,7 @@ function importFile(j){
     }
     touched.add(key);
   }
-  return { accounts, ops, touched:[...touched] };
+  return { accounts, ops, adjusted, touched:[...touched] };
 }
 
 const connected = () => !!(store.backend.url && store.backend.token);
@@ -2347,7 +2367,7 @@ function wire(){
     try {
       const got = importFile(pend.file);
       state.pending=null;
-      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s') };
+      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
 
