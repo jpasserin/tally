@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=66"></script>
+<script src="backend.js?v=67"></script>
 <script>
-const APP_VERSION="66";
+const APP_VERSION="67";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1516,18 +1516,17 @@ function tabKidsAccounts(){
   state.account = null;
   const groups = kids().map((k)=>({ k, list: kidAccounts(k.name).filter((a)=>listedIn(a, Y)) }));
   const theirs = store.accounts.filter((a)=>isChilds(a));
-  /* the child's line, then her accounts by category - cash first - each framed by currency */
-  const kidBlock = (g) => { const total = g.list.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, yearMonth(Y)); return v==null ? t : t + v; }, 0);
-    return `
-      <div class="sub" style="display:flex;align-items:center;gap:7px;margin:12px 0 0;font-size:12px;font-weight:700;color:var(--txt)">
-        <span class="dot" style="background:${KID_COLOR}"></span>${esc(g.k.name)}<span style="margin-left:auto;font-weight:600;color:var(--muted);font-variant-numeric:tabular-nums">${g.list.length?'('+money0(total, store.cur)+')':'no account'}</span></div>
-      ${ACCOUNT_CATEGORIES.map(([c,col])=>({ c, col, list:g.list.filter((a)=>a.category===c) })).filter((x)=>x.list.length).map((x)=>accountGroup(x.c, x.col, x.list, Y)).join('')}`; };
-  return (p && p.kind==='account' ? accountSheet(p) : '') + `
+  /* a card per child: her accounts by category - cash first - each framed
+     by currency; + opens a new account already hers */
+  const kidCard = (g) => `
   <div class="card">
-    <h2>Accounts <button class="gbtn" data-accnew="1"${LK()}>+</button></h2>
-    ${groups.length ? groups.map(kidBlock).join('') : `<div class="hint" style="margin-top:0">No child in People yet.</div>`}
-    ${hiddenLine(theirs, Y)}
+    <h2>${esc(g.k.name)} <button class="gbtn" data-accnewkid="${esc(g.k.name)}"${LK()}>+</button></h2>
+    ${g.list.length ? ACCOUNT_CATEGORIES.map(([c,col])=>({ c, col, list:g.list.filter((a)=>a.category===c) })).filter((x)=>x.list.length).map((x)=>accountGroup(x.c, x.col, x.list, Y)).join('')
+      : `<div class="hint" style="margin-top:0">No account yet.</div>`}
+    ${hiddenLine(theirs.filter((a)=>a.owners.some((o)=>same(o, g.k.name))), Y)}
   </div>`;
+  return (p && p.kind==='account' ? accountSheet(p) : '') + (groups.length ? groups.map(kidCard).join('')
+    : `<div class="card"><h2>Accounts</h2><div class="hint" style="margin-top:0">No child in People yet.</div></div>`);
 }
 /* Each child: her net worth, split by currency and by category, like the
    family's; ? lists the accounts behind it. */
@@ -2523,14 +2522,17 @@ function wire(){
     (state.page.funds||[]).forEach((f,i)=>{ const n=document.getElementById('afName'+i), x=document.getElementById('afIndex'+i);
       if (n) f.name=n.value; if (x) f.index=x.value; });
     state.page.closeArm=false; state.page.delArm=false; };
-  const openAcc=(index)=>{ const a=index==null?null:store.accounts[index];
+  const openAcc=(index, preset)=>{ const a=index==null?null:store.accounts[index];
     const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash',
       opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false, opened:a?(a.opened||''):'', rate:a&&a.rate!=null?String(a.rate):'',
       /* a fund with operations cannot be taken out */
       funds:a?fundsOf(a).map((f)=>({ name:f.name, kind:f.kind, index:f.index||'', locked: fundOps(a, f.name).length>0 })):[] };
+    if (preset) Object.assign(cur, preset);
     state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null); });
+  /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
+  document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
   document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
   document.querySelectorAll('[data-showclosed]').forEach((el)=>el.onclick=()=>{ state.showClosed=el.dataset.showclosed==='1'; render(); });
