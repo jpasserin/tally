@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=73"></script>
+<script src="backend.js?v=74"></script>
 <script>
-const APP_VERSION="73";
+const APP_VERSION="74";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -759,13 +759,17 @@ const isChilds = (a) => a.owners.length > 0 && a.owners.every((n)=>(store.people
 const counted = () => store.accounts.filter((a)=>a.category!=='Excluded' && !isChilds(a));
 const kids = () => store.people.filter((p)=>p.type==='Child');
 const kidAccounts = (name) => store.accounts.filter((a)=>isChilds(a) && a.owners.some((o)=>same(o, name)));
-/* A closed account stays listed only in the years it still moved - unless
-   the hidden ones are asked for, from the line at the foot of the list. */
-const listedIn = (a, Y) => state.showClosed || !a.closed || opsOf(a.key).some((o)=>o.date.slice(0,4)===String(Y));
-const hiddenLine = (all, Y) => { const n = all.filter((a)=>a.closed && !opsOf(a.key).some((o)=>o.date.slice(0,4)===String(Y))).length;
+/* An account with nothing in the year is left off the list when it is
+   closed, or when it was not open yet - nothing in it at the year's end and
+   its records all later. The line at the foot of the list shows them. */
+const hiddenIn = (a, Y) => { if (opsOf(a.key).some((o)=>o.date.slice(0,4)===String(Y))) return false;
+  if (a.closed) return true;
+  return valueAt(a, Y+'-12-31')===0 && opsOf(a.key).some((o)=>o.date > Y+'-12-31'); };
+const listedIn = (a, Y) => state.showClosed || !hiddenIn(a, Y);
+const hiddenLine = (all, Y) => { const n = all.filter((a)=>hiddenIn(a, Y)).length;
   if (!n) return '';
   return state.showClosed ? `<div class="hint tap" style="margin:8px 0 0;text-align:center" data-showclosed="0">Hide the closed accounts</div>`
-    : n ? `<div class="hint tap" style="margin:8px 0 0;text-align:center" data-showclosed="1">${n} closed account${n===1?'':'s'} hidden</div>` : ''; };
+    : n ? `<div class="hint tap" style="margin:8px 0 0;text-align:center" data-showclosed="1">${n} account${n===1?'':'s'} hidden</div>` : ''; };
 /* The family's own cash accounts: the children's are kept apart. */
 const familyCash = () => cashAccounts().filter((a)=>!isChilds(a));
 /* "31 Dec 2013" */
