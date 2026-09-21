@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=75"></script>
+<script src="backend.js?v=76"></script>
 <script>
-const APP_VERSION="75";
+const APP_VERSION="76";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1310,20 +1310,23 @@ function warnAboutSheet(){
     </div>
   </div>`;
 }
-/* After "This is correct" on a credit in a spending category or a debit in
-   an income one: the same payee elsewhere, any year, standing in the same
-   finding - offered to be put aside together. */
+/* After "This is correct" on a credit in a spending category, a debit in an
+   income one or a payee tagged unlike its habit: the same payee with the
+   same tag elsewhere, any year, standing in the same finding - offered to
+   be put aside together. */
 function moreLikeThese(kind, items){
   if (kind!=='creditspend' && kind!=='debitincome' && kind!=='inconsistent') return [];
-  const names = new Set(items.map(({o})=>o && o.name.trim().toLowerCase()).filter(Boolean));
+  const pair = (o) => o.name.trim().toLowerCase() + '|' + String(o.tag||'').trim().toLowerCase();
+  const names = new Set(items.filter(({o})=>o && o.name.trim()).map(({o})=>o.name.trim().toLowerCase()));
+  const pairs = new Set(items.filter(({o})=>o && o.name.trim()).map(({o})=>pair(o)));
   const done = new Set(items.map(({o})=>o && o.id));
-  if (!names.size) return [];
+  if (!pairs.size) return [];
   /* the payee's habit, over every year */
   const byName = {};
   if (kind==='inconsistent') for (const a of familyCash()) for (const o of opsOf(a.key)) if (o.name && o.tag) { const n = o.name.trim().toLowerCase(); if (names.has(n)) (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
   const out = [];
   for (const a of familyCash()) for (const o of opsOf(a.key)) {
-    if (done.has(o.id) || !names.has(o.name.trim().toLowerCase()) || isDismissed(kind, o, a)) continue;
+    if (done.has(o.id) || !pairs.has(pair(o)) || isDismissed(kind, o, a)) continue;
     let hit = false;
     if (kind==='inconsistent') { const t = byName[o.name.trim().toLowerCase()] || {}; const tags = Object.keys(t).sort((x,y)=>t[y]-t[x]);
       hit = !!o.tag && tags.length > 1 && o.tag !== tags[0] && t[tags[0]] > t[o.tag]; }
@@ -1335,13 +1338,13 @@ function moreLikeThese(kind, items){
 }
 function okMoreSheet(p){
   /* one line per payee, however it was spelled */
-  const byName = {}, label = {}; for (const {o} of p.more) { const n = o.name.trim().toLowerCase(); byName[n] = (byName[n]||0) + 1; label[n] = label[n] || o.name.trim(); }
+  const byName = {}, label = {}, tagOf = {}; for (const {o} of p.more) { const n = o.name.trim().toLowerCase() + '|' + String(o.tag||'').trim().toLowerCase(); byName[n] = (byName[n]||0) + 1; label[n] = label[n] || o.name.trim(); tagOf[n] = tagOf[n] || o.tag; }
   return `
   <div class="sheetwrap">
     <div class="scrim" data-okmoreclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
       <h3>Also correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length} more, any year</span></h3>
-      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])}</span><span class="v">${byName[n]}</span></div>`).join('')}</div>
+      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span></span><span class="v">${byName[n]}</span></div>`).join('')}</div>
       <div class="foot"><button class="btn close" data-okmoreclose="1">Close</button><button class="btn primary" data-okmoreall="1">Mark all correct</button></div>
     </div>
   </div>`;
