@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=70"></script>
+<script src="backend.js?v=71"></script>
 <script>
-const APP_VERSION="70";
+const APP_VERSION="71";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -282,7 +282,7 @@ const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
 const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], rates:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
-const save = () => { try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
+const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
 const state = { tab:'summary', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
 /* The operations filter, per visit of an account page. */
@@ -425,11 +425,15 @@ const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : r2((+a.opening||0)
 /* The rate for a month: that month's end from the sheet; failing that the
    latest month before it; for the current month, or when the sheet has
    nothing yet, today's live rate. Null when there is nothing at all. */
+let rateMemo = new Map();   // month -> row, for one redraw (a list converts hundreds of amounts)
 function rateRow(month){
+  if (rateMemo.has(month)) return rateMemo.get(month);
   const now = new Date().toISOString().slice(0,7);
-  if (month >= now && store.live) return store.live;
-  const rows = store.rates.filter((r)=>r.month <= month).sort((a,b)=>a.month<b.month?1:-1);
-  return rows[0] || store.live || null;
+  let r;
+  if (month >= now && store.live) r = store.live;
+  else { let best = null; for (const x of store.rates) if (x.month <= month && (!best || x.month > best.month)) best = x; r = best || store.live || null; }
+  rateMemo.set(month, r);
+  return r;
 }
 /* An amount in another currency, at a month's rate. Null when it cannot be. */
 function conv(amount, from, to, month){
@@ -1205,7 +1209,14 @@ function usualTag(name){
 /* Only the selected year's operations are judged - old oddities the balance
    has long absorbed are not worth chasing. Payee habits and the other side
    of a transfer are still looked for across every year. */
+/* One scan per redraw: the badge and the Warnings screen share it; any
+   save starts afresh. */
+let warnMemo = null;
 function warnings(){
+  if (warnMemo) return warnMemo;
+  return (warnMemo = computeWarnings());
+}
+function computeWarnings(){
   const out = [], aside = [];
   let hidden = 0;
   const Y = String(theYear());
@@ -1215,39 +1226,51 @@ function warnings(){
     let g = out.find((x)=>x.kind===kind); if (!g) out.push(g = { kind, title, items:[] }); g.items.push({ o, a, text, group }); };
   const all = cashAccounts().flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
   const today = TODAY();
-  const keys = store.accounts.map((a)=>a.key.toLowerCase());
-  for (const {o,a} of all) {
+  /* This runs on every redraw (the badge on the Account icon), so it is
+     kept cheap: the tags and categories are looked up in maps built once,
+     only the year's operations are walked, and the other side of a
+     transfer is found through an index by amount. */
+  const catByTag = new Map(); for (const c of store.categories) for (const t of c.tags) catByTag.set(String(t).trim().toLowerCase(), c);
+  const catOf = (t) => catByTag.get(String(t||'').trim().toLowerCase()) || null;
+  const accByName = new Map(); for (const b of store.accounts) accByName.set(b.key.trim().toLowerCase(), b);
+  const byAmt = new Map(); for (const x of all) { const k = Math.abs(x.o.amount).toFixed(2); (byAmt.get(k) || byAmt.set(k, []).get(k)).push(x); }
+  const judged = all.filter(({o})=>o.date.slice(0,4)===Y || (+Y===THIS_YEAR && o.date > today));
+  for (const {o,a} of judged) {
     const tags = opTags(o);
     if (!o.tag) add('notag', 'No tag', o, a, 'no tag at all');
-    for (const t of tags) if (t && !tagKnown(t)) add('unknown', 'Tag in no category', o, a, '"'+t+'" belongs to no category');
+    for (const t of tags) if (t && !catOf(t)) add('unknown', 'Tag in no category', o, a, '"'+t+'" belongs to no category');
     if (o.date > today) add('future', 'Dated in the future', o, a, o.date);
     /* x marks a transfer between your own accounts: money in on one side is
        the point, not a credit to be questioned - the transfer check below
        covers it instead, wherever x is filed. */
-    const c = same(o.tag, 'x') ? null : catOfTag(o.tag);
+    const c = same(o.tag, 'x') ? null : catOf(o.tag);
     if (c && ['Necessity','Optional','Misc'].includes(c.type) && o.amount > 0) add('creditspend', 'Credit in a spending category', o, a, c.name);
     if (c && c.type==='Income' && o.amount < 0) add('debitincome', 'Debit in an income category', o, a, c.name);
     /* a transfer: named after another account, or tagged x - the other side
        should exist, close in date, opposite in sign. Money filed under a
        Savings category is going into a fund or a plan the cash side of the
        records does not keep: it needs no other side. */
-    const other = store.accounts.find((b)=>b.key!==a.key && (same(b.key, o.name) || same(b.key, o.note||'')));
-    const savings = tags.some((t)=>(catOfTag(t)||{}).type==='Savings');
+    const named = accByName.get(String(o.name||'').trim().toLowerCase()) || accByName.get(String(o.note||'').trim().toLowerCase());
+    const other = named && named.key!==a.key ? named : null;
+    const savings = tags.some((t)=>(catOf(t)||{}).type==='Savings');
     if ((other || same(o.tag, 'x')) && !savings) {
-      const pool = other ? opsOf(other.key) : all.filter((x)=>x.a.key!==a.key).map((x)=>x.o);
-      const match = pool.some((p)=>daysApart(p.date, o.date) <= 5 && Math.sign(p.amount) === -Math.sign(o.amount)
-        && (Math.abs(Math.abs(p.amount) - Math.abs(o.amount)) < 0.005 || (other && other.currency!==a.currency)));
+      /* within five days: compared as date strings, no Date built per candidate */
+      const t0 = new Date(o.date).getTime(), lo = new Date(t0 - 5*DAY).toISOString().slice(0,10), hi = new Date(t0 + 5*DAY).toISOString().slice(0,10);
+      const opposite = (p) => p.date >= lo && p.date <= hi && Math.sign(p.amount) === -Math.sign(o.amount);
+      const match = other
+        ? opsOf(other.key).some((p)=>opposite(p) && (Math.abs(Math.abs(p.amount) - Math.abs(o.amount)) < 0.005 || other.currency!==a.currency))
+        : (byAmt.get(Math.abs(o.amount).toFixed(2)) || []).some((x)=>x.a.key!==a.key && opposite(x.o));
       if (!match) add('transfer', 'Transfer with one side', o, a, other ? 'nothing matching in '+other.key : 'no opposite anywhere within 5 days');
     }
   }
   /* the same thing twice: same account, date, amount and name */
   const seen = {};
-  for (const {o,a} of all) { const k = [a.key, o.date, o.amount, o.name.toLowerCase()].join('|'); (seen[k] = seen[k] || []).push({ o, a }); }
+  for (const {o,a} of judged) { const k = [a.key, o.date, o.amount, o.name.toLowerCase()].join('|'); (seen[k] = seen[k] || []).push({ o, a }); }
   for (const k of Object.keys(seen)) if (seen[k].length > 1) add('dup', 'Possible double entry', seen[k][0].o, seen[k][0].a, seen[k].length+' identical', seen[k].map((x)=>x.o));
   /* one payee, several tags */
   const byName = {};
   for (const {o,a} of all) if (o.name && o.tag) { const n = o.name.toLowerCase(); (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
-  for (const {o,a} of all) if (o.name && o.tag) { const t = byName[o.name.toLowerCase()]; const tags = Object.keys(t);
+  for (const {o,a} of judged) if (o.name && o.tag) { const t = byName[o.name.toLowerCase()]; const tags = Object.keys(t);
     if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag]) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
   /* accounts */
   for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
@@ -2386,6 +2409,7 @@ function renderNav(){
    frame and drag the scroll position with it. */
 let lastTab = null, lastWhere = null;
 function render(){
+  warnMemo = null; rateMemo = new Map();
   const moved = state.tab !== lastTab;
   lastTab = state.tab;
   /* A selection belongs to the list it was made in. */
