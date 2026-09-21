@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=63"></script>
+<script src="backend.js?v=64"></script>
 <script>
-const APP_VERSION="63";
+const APP_VERSION="64";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -305,7 +305,12 @@ const CURRENCIES = ['USD','EUR','AUD'];
    will bring their own settings later. */
 const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
-const ACCOUNT_TYPES = ['Cash','Fund'];
+const ACCOUNT_TYPES = ['Cash','Fund','PEL'];
+/* A PEL (Plan Epargne Logement) is fed for ten years from its opening, then
+   kept up to five more without a deposit, at a rate fixed for life. */
+const isPel = (a) => a && a.type==='PEL';
+const addYears = (d, n) => d && /^\d{4}-\d{2}-\d{2}$/.test(d) ? (+d.slice(0,4)+n) + d.slice(4) : '';
+const pelLine = (a) => !isPel(a) || !a.opened ? '' : `opened ${dLabel(a.opened)} · ${a.rate!=null?a.rate+'% gross':'no rate'} · paid in until ${dLabel(addYears(a.opened, 10))} · ends ${dLabel(addYears(a.opened, 15))}`;
 /* A Fund account holds funds: Cash (uninvested, earns a little interest) or
    Invested (an index like FFFGX, valued by shares x unit price). */
 const FUND_KINDS = [['cash','Cash'],['invested','Invested']];
@@ -485,13 +490,14 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
-      .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'' })))
+      .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
+        Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -562,7 +568,8 @@ function readConfig(tab){
       owners: splitTags(col(r,'Owners')),
       category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash',
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
-      closed: col(r,'Closed')==='yes', funds: [] });
+      closed: col(r,'Closed')==='yes', funds: [],
+      ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
     if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
@@ -607,8 +614,13 @@ function importFile(j){
     if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
-        opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[] });
+        opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
+        ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}) });
       accounts++;
+    } else if (isPel(known)) {
+      /* a plan's terms, when the book names them and the app does not know them yet */
+      if (!known.opened && /^\d{4}-\d{2}-\d{2}/.test(a.opened||'')) known.opened = a.opened.slice(0,10);
+      if (known.rate==null && isFinite(+a.rate)) known.rate = +a.rate;
     }
     const acc = store.accounts.find((x)=>same(x.key, a.key)); const key = acc.key;
     /* a later year can close an account; nothing reopens one */
@@ -1717,6 +1729,7 @@ function accountPage(a){
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
     <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
+    ${isPel(a)?`<div class="herosub">${esc(pelLine(a) || 'PEL · no opening date yet')}</div>`:''}
   </div>
   ${balanceCard(a, Y)}
   <div class="card">
@@ -1864,6 +1877,10 @@ function accountSheet(p){
         <div class="chips">${ACCOUNT_TYPES.map((k)=>`<button class="chip ${p.type===k?'on':''}" data-acctype="${k}">${k}</button>`).join('')}</div></div>`
       : `<div class="field"><label>Status</label>
         <div class="chips"><button class="chip ${!p.closed?'on':''}" data-accclosed="0">Open</button><button class="chip ${p.closed?'on':''}" data-accclosed="1">Closed</button></div></div>`}
+      ${p.type==='PEL' ? `<div class="btnrow">
+        <div class="field" style="flex:1"><label>Opened</label><input id="aOpened" type="date" value="${esc(p.opened||'')}"></div>
+        <div class="field" style="flex:1"><label>Rate % gross</label><input id="aRate" inputmode="decimal" value="${esc(p.rate==null?'':p.rate)}" style="text-align:right"></div>
+      </div>` : ''}
       ${p.type==='Fund' ? `<div class="field"><label>Funds</label>
         ${(p.funds||[]).map((f,i)=>`<div class="btnrow" style="margin-bottom:5px;align-items:center">
           <input id="afName${i}" value="${esc(f.name)}" placeholder="Name" style="flex:1;min-width:0">
@@ -2430,14 +2447,14 @@ function wire(){
     } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
 
   /* accounts - the widget */
-  const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening');
-    if (k) state.page.key=k.value; if (o) state.page.opening=o.value;
+  const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening'), od=document.getElementById('aOpened'), rt=document.getElementById('aRate');
+    if (k) state.page.key=k.value; if (o) state.page.opening=o.value; if (od) state.page.opened=od.value; if (rt) state.page.rate=rt.value;
     (state.page.funds||[]).forEach((f,i)=>{ const n=document.getElementById('afName'+i), x=document.getElementById('afIndex'+i);
       if (n) f.name=n.value; if (x) f.index=x.value; });
     state.page.closeArm=false; state.page.delArm=false; };
   const openAcc=(index)=>{ const a=index==null?null:store.accounts[index];
     const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash',
-      opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false,
+      opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false, opened:a?(a.opened||''):'', rate:a&&a.rate!=null?String(a.rate):'',
       /* a fund with operations cannot be taken out */
       funds:a?fundsOf(a).map((f)=>({ name:f.name, kind:f.kind, index:f.index||'', locked: fundOps(a, f.name).length>0 })):[] };
     state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
@@ -2513,6 +2530,7 @@ function wire(){
   const ak=document.getElementById('aKey'), ao=document.getElementById('aOpening');
   if (ak && state.page && state.page.kind==='account') ak.oninput=()=>{ state.page.key=ak.value; state.page.closeArm=false; state.page.delArm=false; };
   if (ao && state.page && state.page.kind==='account') ao.oninput=()=>{ state.page.opening=ao.value; state.page.closeArm=false; state.page.delArm=false; };
+  for (const [id,k] of [['aOpened','opened'],['aRate','rate']]) { const e=document.getElementById(id); if (e && state.page && state.page.kind==='account') e.oninput=e.onchange=()=>{ state.page[k]=e.value; state.page.closeArm=false; state.page.delArm=false; }; }
   document.querySelectorAll('[data-accsave]').forEach((el)=>el.onclick=()=>{
     readAcc(); const p=state.page;
     const cur = p.index==null ? null : store.accounts[p.index];
@@ -2520,7 +2538,9 @@ function wire(){
     const funds = p.type==='Fund' ? (p.funds||[]).map((f)=>({ name:f.name.trim(), kind:f.kind, index:(f.index||'').trim() })) : [];
     const a = cur ? { ...cur, owners:p.owners.slice(), opening:num(p.opening||'0'), closed:!!p.closed, funds }
       : { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type, opening:num(p.opening||'0'), closed:false, funds };
+    if (a.type==='PEL') { a.opened = String(p.opened||'').trim(); a.rate = String(p.rate||'').trim()==='' ? null : num4(p.rate); }
     try { checkAccount(a, cur);
+      if (a.type==='PEL') { if (!/^\d{4}-\d{2}-\d{2}$/.test(a.opened)) throw new Error('The day the plan was opened.'); if (a.rate!=null && !(a.rate>=0)) throw new Error('A rate.'); }
       if (a.type==='Fund') { for (const f of funds) { if (!f.name) throw new Error('Every fund needs a name.'); if (funds.filter((x)=>same(x.name, f.name)).length>1) throw new Error('"'+f.name+'" twice.'); } }
     } catch (e) { alert(e.message); render(); return; }
     if (cur) Object.assign(cur, a); else { store.accounts.push(a); store.ops[a.key] = []; }
