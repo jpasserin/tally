@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=72"></script>
+<script src="backend.js?v=73"></script>
 <script>
-const APP_VERSION="72";
+const APP_VERSION="73";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1572,7 +1572,7 @@ function accountGroup(title, col, list, Y){
       ${CURRENCIES.map((c)=>({ c, list:list.filter((a)=>a.currency===c) })).filter((f)=>f.list.length).map((f)=>`
       <div class="cframe" style="border-color:${CUR_COLORS[f.c]}"><div class="rows">${f.list.map((a)=>`
         <div class="row tap" data-accopen="${esc(a.key)}">
-          <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${isFund(a)?' · '+fundsOf(a).length+' fund'+(fundsOf(a).length===1?'':'s'):''}${a.closed?' · closed':''}</span></div>
+          <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.closed?' · closed':''}</span></div>
           <span class="v ${balanceAt(a, Y)<0?'neg':''}">${paren(balanceAt(a, Y), a.currency, yearMonth(Y))}${money(balanceAt(a, Y), a.currency)}</span>
         </div>`).join('')}</div></div>`).join('')}`;
 }
@@ -1792,7 +1792,7 @@ function fundAccountPage(a){
 }
 /* One fund over the year on the zoomable chart: the figure chosen by the
    chips, at the year's start and at each month's end so far. */
-const FUND_METRICS = [['price','Unit price',true], ['paid','Paid in'], ['interest','Growth'], ['value','Balance'], ['shares','Shares',true]];
+const FUND_METRICS = [['price','Price',true], ['paid','Paid in'], ['interest','Growth'], ['value','Balance'], ['shares','Shares',true]];
 const fmt3 = (v) => v.toLocaleString('en-US', { maximumFractionDigits:3 });
 const fmtPrice = (v) => v.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
 function fundPoints(a, f, Y, key){
@@ -1816,8 +1816,7 @@ function fundChartCard(a, f, Y){
   const inv = f.kind==='invested';
   return `
   <div class="card">
-    <h2>${esc(f.name)} <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
-    <div class="chips" style="margin-bottom:6px">${FUND_METRICS.filter(([,,i])=>!i || inv).map(([k,l])=>`<button class="chip ${key===k?'on':''}" data-fmet="${k}">${k==='interest'&&!inv?'Interest':l}</button>`).join('')}</div>
+    <h2>${esc(f.name)} <span class="chips" style="margin-left:auto">${FUND_METRICS.filter(([,,i])=>!i || inv).map(([k,l])=>`<button class="chip ${key===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-fmet="${k}">${k==='interest'&&!inv?'Interest':l}</button>`).join('')}</span></h2>
     ${rangeChart('fb', pts, fundSeries(f, key), state.fbLo, state.fbHi)}
   </div>`;
 }
@@ -1875,7 +1874,7 @@ function accountPage(a){
     <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
     ${isPel(a)?`<div class="herosub">${esc(pelLine(a) || 'PEL · no opening date yet')}</div>`:''}
   </div>
-  ${balanceCard(a, Y)}
+  ${state.abView==='history' ? balanceHistoryCard(a) : `${balanceCard(a, Y)}
   <div class="card">
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
@@ -1883,7 +1882,7 @@ function accountPage(a){
         <button class="gbtn" data-opnew="1"${LK()}>+</button></span></h2>
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
-  </div>
+  </div>`}
   <div style="height:56px"></div>
   ${selBar(true)}
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
@@ -1911,14 +1910,49 @@ function abOps(a, Y){
   const from = Math.max(1, lo), to = hi;
   return opsOf(a.key).filter((o)=>{ if (o.date.slice(0,4)!==String(Y)) return false; const m = +o.date.slice(5,7); return pts.length < 2 || (m >= from && m <= to); });
 }
+const abViews = () => `<span class="chips" style="margin-left:auto"><button class="chip ${state.abView==='history'?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-abview="year">This year</button><button class="chip ${state.abView==='history'?'on':''}" style="padding:2px 9px;font-size:11.5px" data-abview="history">History</button></span>`;
 function balanceCard(a, Y){
   const { pts } = abBounds(a, Y);
   const n = pts.length;
   if (n < 2) return '';
   return `
   <div class="card">
-    <h2>Balance <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)} · ${Y}</span></h2>
+    <h2>Balance${abViews()}</h2>
     ${rangeChart('ab', pts, AB_SERIES, state.abLo, state.abHi)}
+  </div>`;
+}
+/* The whole life of the account: its balance at every month's end from the
+   first record to now, on the zoomable chart, then each year's end. */
+function balanceHistory(a){
+  let first = null;
+  for (const o of opsOf(a.key)) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
+  if (!first) return [];
+  const now = new Date().toISOString().slice(0,7);
+  const out = [];
+  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
+    const m = y+'-'+String(mo).padStart(2,'0');
+    out.push({ label: mLabel(m), values: { bal: valueAt(a, m+'-31') } });
+    mo++; if (mo > 12) { mo = 1; y++; }
+  }
+  return out;
+}
+function balanceHistoryCard(a){
+  const pts = balanceHistory(a);
+  const n = pts.length;
+  if (state.ahHi==null || state.ahHi > n-1 || state.ahHi < 1) state.ahHi = n-1;
+  if (state.ahLo==null || state.ahLo >= state.ahHi) state.ahLo = 0;
+  const rows = years().filter((y)=>y<=THIS_YEAR).reverse().map((y)=>({ y, v: balanceAt(a, y) }));
+  return `
+  <div class="card">
+    <h2>Balance${abViews()}</h2>
+    ${n > 1 ? rangeChart('ah', pts, AB_SERIES, state.ahLo, state.ahHi) : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>
+  <div class="card">
+    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    <table class="fx">
+      <thead><tr><th>Year</th><th>Balance</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${r.y}</td><td class="${r.v<0?'neg':''}"><b>${money(r.v, a.currency)}</b></td></tr>`).join('')}</tbody>
+    </table>
   </div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
@@ -2609,7 +2643,10 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; render(); });
+  document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
+  if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
+    if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
   document.querySelectorAll('[data-showclosed]').forEach((el)=>el.onclick=()=>{ state.showClosed=el.dataset.showclosed==='1'; render(); });
   document.querySelectorAll('[data-kidexplain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'kidexplain', kid:el.dataset.kidexplain, fresh:true }; render(); state.page.fresh=false; });
   if ((state.tab==='account' || state.tab==='kids') && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
