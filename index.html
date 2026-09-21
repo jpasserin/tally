@@ -67,6 +67,11 @@
   .sheet .foot{display:flex;gap:8px;padding-top:4px}
   .sheet .foot .btn.close{flex:0 0 auto;min-width:92px;background:var(--bg2)}
   .sheet .foot .btn.close.arm{background:var(--bad);border-color:var(--bad);color:#fff}
+  /* An information sheet's Close stays in view however long the list. */
+  .sheet .foot.stick{position:sticky;bottom:calc(-12px - env(safe-area-inset-bottom));background:var(--card);
+    padding-bottom:calc(12px + env(safe-area-inset-bottom));margin-bottom:calc(-12px - env(safe-area-inset-bottom))}
+  table.fx tr.sum td{border-top:1px solid var(--line);font-weight:700}
+  table.fx tr.sum + tr.sum td{border-top:0;font-weight:400;color:var(--muted)}
   .tagbox{display:flex;flex-wrap:wrap;gap:5px;align-items:center;background:var(--bg2);border:1px solid var(--line);
     border-radius:10px;padding:3px 8px;cursor:text;min-height:30px}
   .tagbox:focus-within{border-color:var(--accent)}
@@ -83,6 +88,7 @@
   /* Six figures for the year, three a row. */
   .kpis{display:grid;grid-template-columns:repeat(3,1fr);gap:6px}
   .kpi{background:var(--card2);border-radius:12px;padding:8px 9px;min-width:0;position:relative}
+  table.fx td.neg{color:var(--bad)}
   .qbtn{position:absolute;top:5px;right:5px;width:17px;height:17px;border-radius:50%;border:1px solid var(--muted);background:none;color:var(--muted);
     font-size:10px;font-weight:700;line-height:1;cursor:pointer;padding:0;display:inline-flex;align-items:center;justify-content:center;font-family:inherit}
   .kpi .l{padding-right:18px}
@@ -262,9 +268,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=57"></script>
+<script src="backend.js?v=58"></script>
 <script>
-const APP_VERSION="57";
+const APP_VERSION="58";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -294,7 +300,7 @@ const CURRENCIES = ['USD','EUR','AUD'];
 /* Accounts: a unique key, a currency, owners from People, a category (is the
    money reachable) and a type (how it is recorded). Cash first; other types
    will bring their own settings later. */
-const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
+const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Children','#c084fc'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
 const ACCOUNT_TYPES = ['Cash','Fund'];
 /* A Fund account holds funds: Cash (uninvested, earns a little interest) or
@@ -526,7 +532,7 @@ function readOps(tab){
     const fund = str(col(r,'Fund')), kind = str(col(r,'Kind'));
     if (!date || (!isFinite(amount) && kind!=='Price')) continue;
     out.push({ id: str(col(r,'Id')) || uid(), date, name: str(col(r,'Name')), amount: isFinite(amount) ? amount : null, note: str(col(r,'Description')),
-      fund: fund || undefined, kind: kind || undefined, shares: isFinite(num(col(r,'Shares'))) ? num(col(r,'Shares')) : undefined, price: isFinite(num(col(r,'Unit price'))) ? num(col(r,'Unit price')) : undefined,
+      fund: fund || undefined, kind: kind || undefined, shares: isFinite(num4(col(r,'Shares'))) ? num4(col(r,'Shares')) : undefined, price: isFinite(num4(col(r,'Unit price'))) ? num4(col(r,'Unit price')) : undefined,
       tag: str(col(r,'Tag')),
       splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const i=x.lastIndexOf(':');
         return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
@@ -617,6 +623,15 @@ function pushSoon(){
 }
 /* everything=true (the Sync button) sends every tab; otherwise only the
    changed ones. A tab the app does not send, the script leaves alone. */
+/* Locked, Sync reads the sheet instead: every tab comes down, except the
+   ones with edits still waiting to go up. */
+async function syncLocked(){
+  if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
+  state.sync={ msg:'Reading…' }; render();
+  try { await pullNow(dirty()); state.sync={ msg:'Read '+new Date().toTimeString().slice(0,5)+' · nothing written' }; }
+  catch (e) { state.sync={ msg:e.message, bad:true }; }
+  render();
+}
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
@@ -634,15 +649,19 @@ async function pushNow(everything){
   } catch (e) { state.sync={ msg:e.message, bad:true }; }
   render();
 }
-async function pullNow(){
+async function pullNow(keep){
+  keep = keep || [];
   const j = await BK.pull(store.backend);
-  const cfg = (j.tabs||[]).find((t)=>t.name==='Config');
-  const got = readConfig(cfg);
-  store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets;
-  store.dismissed = readDismissed((j.tabs||[]).find((t)=>t.name==='Dismissed'));
-  store.ops = {};
-  for (const a of store.accounts) store.ops[a.key] = readOps((j.tabs||[]).find((t)=>t.name===a.key));
-  store.rates = rateRows((j.tabs||[]).find((t)=>t.name==='Rates'));
+  if (!j.tabs) throw new Error('The sheet answered with no tabs.');
+  const tab = (n) => j.tabs.find((t)=>t.name===n);
+  let got = null;
+  if (!keep.includes('Config')) { got = readConfig(tab('Config'));
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; }
+  if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
+  const ops = {};
+  for (const a of store.accounts) ops[a.key] = keep.includes(a.key) && store.ops[a.key] ? store.ops[a.key] : readOps(tab(a.key));
+  store.ops = ops;
+  store.rates = rateRows(tab('Rates'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   return got;
 }
@@ -662,7 +681,7 @@ const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint
 const SCREENS = {
   summary: () => subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
   report:  () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '')
-    + subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? tabBudgets() : tabReport()),
+    + subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? tabBudgets() : sub('report')==='monthly' ? tabMonthly() : tabReport()),
   account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   settings: tabSettings,
 };
@@ -675,6 +694,7 @@ const SUBS = {
   summary: [['current','Current','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
             ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>']],
   report:  [['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
+            ['monthly','Monthly','<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M9 10v11"/><path d="M15 10v11"/><path d="M3 15.5h18"/>'],
             ['prevision','Prevision','<rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/><path d="M12 14v4"/><path d="M10 16h4"/>'],
             ['budgets','Budgets','<path d="M4 8h16v11a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2z"/><path d="M4 8V6a2 2 0 0 1 2-2h10"/><circle cx="15" cy="14" r="1.5"/>']],
 };
@@ -683,10 +703,19 @@ const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
   `<button class="${sub(tab)===id?'active':''}" data-sub="${id}"><svg viewBox="0 0 24 24">${icon}</svg>${label}</button>`).join('')}</div>`;
 
 /* ---------------------------------------------------------------- summary --
-   Net worth: every account except the Excluded ones, at the end of the year,
+   Net worth: every account except the Children's and the Excluded ones, at the end of the year,
    in the shown currency at the year-end rate; then how it splits by the
    currency the money actually sits in. */
-const counted = () => store.accounts.filter((a)=>a.category!=='Excluded');
+const counted = () => store.accounts.filter((a)=>a.category!=='Excluded' && a.category!=='Children');
+/* "31 Dec 2013" */
+const dLabel = (d) => d && /^\d{4}-\d{2}-\d{2}/.test(d) ? +d.slice(8,10) + ' ' + MON[+d.slice(5,7)-1] + ' ' + d.slice(0,4) : '';
+/* "31 Dec 2013 · 0.85€ · A$1.02": the day the rate is from and what one unit
+   of the shown currency was worth in each of the others. */
+function rateLine(month){
+  const r = rateRow(month); if (!r) return '';
+  const f = (c, v) => c==='EUR' ? v.toFixed(2)+'€' : (SYM[c]||c)+v.toFixed(2);
+  return [dLabel(r.date)].concat(CURRENCIES.filter((c)=>c!==store.cur).map((c)=>f(c, rateOf(r, store.cur, c)))).filter(Boolean).join(' · ');
+}
 const CUR_COLORS = { USD:'#f87171', EUR:'#3b82f6', AUD:'#fbbf24' };
 /* 13.1k, 2.4M, 870 - one decimal once in thousands. */
 const kfmt1 = (v) => { const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; };
@@ -727,7 +756,7 @@ function nwExplainSheet(Y, nw){
     <div class="scrim" data-nwclose="1"></div>
     <div class="sheet${state.page.fresh?' enter':''}">
       <h3>Net worth <span class="muted" style="font-size:12px;font-weight:600">${Y}</span></h3>
-      <div class="hint" style="margin:0 0 6px">Every account but the Excluded ones, at the end of ${Y}, converted at ${Y>=THIS_YEAR?"today's":'the year-end'} rate.</div>
+      <div class="hint" style="margin:0 0 6px">Every account but the Children and Excluded ones.${rateLine(m)?'<br>'+esc(rateLine(m)):''}</div>
       ${groups.map((g)=>`
       <div class="rows">
         <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${CUR_COLORS[g.c]}"></span><b>${g.c}</b></span>
@@ -737,7 +766,7 @@ function nwExplainSheet(Y, nw){
           <span style="text-align:right"><span class="v ${b<0?'neg':''}">${money(b, a.currency)}</span>${a.currency!==store.cur&&v!=null?`<div class="muted" style="font-size:11px">${money(v, store.cur)}</div>`:''}</span></div>`; }).join('')}
       </div>`).join('')}
       <div class="row" style="border:0"><span class="k"><b>Total</b></span><span class="v"><b>${money(nw.total, store.cur)}</b></span></div>
-      <div class="foot"><button class="btn close" style="flex:1" data-nwclose="1">Close</button></div>
+      <div class="foot stick"><button class="btn primary" style="flex:1" data-nwclose="1">Close</button></div>
     </div>
   </div>`;
 }
@@ -765,10 +794,13 @@ function nwByMonthCard(Y){
    the rest. Tags no category claims are shown as Unfiled, not dropped. */
 const catOfTag = (t) => store.categories.find((c)=>c.tags.some((x)=>same(x, t))) || null;
 const cashAccounts = () => store.accounts.filter((a)=>!isFund(a));
-function sumsByCategory(year){
+/* Every category's total over a year ("2013") or a month ("2013-04"), in
+   the shown currency at each operation's month's rate. */
+const sumsByCategory = (year) => sumsFor(String(year));
+function sumsFor(prefix){
   const out = {}; let unfiled = 0;
   for (const a of cashAccounts()) for (const o of opsOf(a.key)) {
-    if (o.date.slice(0,4)!==String(year)) continue;
+    if (!o.date.startsWith(prefix)) continue;
     const m = o.date.slice(0,7);
     const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount }));
     parts.push({ tag:o.tag, amount: o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0) });
@@ -860,6 +892,31 @@ function summaryCard(Y){
       ${box('Savings', f.sav, 'var(--accent)', 'sav')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)', 'cash')}${box('Net worth change', f.nw, 'var(--txt)', 'nw')}
     </div>
   </div>`;
+}
+/* The Summary's six figures, month by month, with the year's total and the
+   average per month under each column. */
+function tabMonthly(){
+  const Y = theYear();
+  const now = new Date().toISOString().slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
+  const rows = months.map((m)=>({ m, f: yearFigures(sumsFor(m)) }));
+  const tot = (k) => r2(rows.reduce((t,r)=>t+r.f[k], 0));
+  const div = monthsIn(Y);
+  const colour = (k, v) => k==='in' ? 'var(--good)' : k==='out' ? 'var(--bad)' : k==='sav' ? 'var(--accent)' : (k==='cash'||k==='nw') ? (v<0?'var(--bad)':'var(--good)') : 'var(--txt)';
+  const cell = (k, v, bold) => `<td style="color:${colour(k, v)}">${bold?'<b>':''}${money(v, store.cur)}${bold?'</b>':''}</td>`;
+  const table = (title, cols) => `
+  <div class="card">
+    <h2>${title} <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
+    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Month</th>${cols.map(([,l])=>`<th>${l}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${MON[+r.m.slice(5,7)-1]}</td>${cols.map(([k])=>cell(k, r.f[k])).join('')}</tr>`).join('')}
+        <tr class="sum"><td>Total</td>${cols.map(([k])=>cell(k, tot(k), true)).join('')}</tr>
+        <tr class="sum"><td>Average</td>${cols.map(([k])=>cell(k, r2(tot(k)/div))).join('')}</tr>
+      </tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+  return table('In, out and taxes', [['in','In'],['out','Out'],['tax','Taxes']])
+    + table('Savings, cash and net worth', [['sav','Savings'],['cash','Cash'],['nw','Net worth']]);
 }
 /* The year's operations that touch a category - through the main tag or a
    secondary one - and how much of each belongs to it (a secondary tag's
@@ -1226,16 +1283,41 @@ function netWorthMonths(){
   }
   return out;
 }
+const NW_SERIES = [{ key:'nw', label:'Net worth', color:'#3b82f6', money:true }];
+/* Start, end and change over the range the slider shows. */
+function nwKpis(pts, lo, hi){
+  const a = pts[lo] ? pts[lo].values.nw : 0, b = pts[hi] ? pts[hi].values.nw : 0, d = b - a;
+  const box = (label, v, color) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div></div>`;
+  return box('Start', a, 'var(--txt)') + box('End', b, 'var(--txt)') + box('Change', d, d<0?'var(--bad)':'var(--good)');
+}
+/* Each year at its end (today for this one): cash, savings and property
+   accounts, converted at that year's rate, and the net worth they make. */
+function netWorthByYear(){
+  return years().filter((y)=>y<=THIS_YEAR).reverse().map((Y)=>{
+    const m = yearMonth(Y); const by = { Cash:0, Savings:0, Property:0 }; let total = 0;
+    for (const a of counted()) { const v = conv(balanceAt(a, Y), a.currency, store.cur, m); if (v==null) continue; by[a.category] = (by[a.category]||0) + v; total += v; }
+    return { Y, cash:r2(by.Cash), sav:r2(by.Savings), prop:r2(by.Property), total:r2(total) };
+  });
+}
 function tabHistory(){
   const pts = netWorthMonths();
   const n = pts.length;
   if (n < 2) return `<div class="card"><h2>Net worth</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
   if (state.nwHi==null || state.nwHi > n-1 || state.nwHi < 1) state.nwHi = n-1;
   if (state.nwLo==null || state.nwLo >= state.nwHi) state.nwLo = 0;
+  const cell = (v) => `<td class="${v<0?'neg':''}">${money0(v, store.cur)}</td>`;
   return `
   <div class="card">
     <h2>Net worth <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])} by month</span></h2>
-    ${rangeChart('nw', pts, [{ key:'nw', label:'Net worth', color:'#3b82f6' }], state.nwLo, state.nwHi)}
+    ${rangeChart('nw', pts, NW_SERIES, state.nwLo, state.nwHi)}
+    <div class="kpis" id="nwKpis" style="margin-top:8px">${nwKpis(pts, state.nwLo, state.nwHi)}</div>
+  </div>
+  <div class="card">
+    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Year</th><th>Cash</th><th>Savings</th><th>Property</th><th>Net worth</th></tr></thead>
+      <tbody>${netWorthByYear().map((r)=>`<tr><td>${r.Y}</td>${cell(r.cash)}${cell(r.sav)}${cell(r.prop)}<td class="${r.total<0?'neg':''}"><b>${money0(r.total, store.cur)}</b></td></tr>`).join('')}</tbody>
+    </table></div>
   </div>`;
 }
 
@@ -1334,7 +1416,13 @@ function filterChips(f){
 const opCountText = (a, ops, f) => ops.length + (filterActive(f) ? ' · ' + money(Math.round(ops.reduce((t,o)=>t+o.amount, 0)*100)/100, a.currency) : '');
 /* One operation row: the select box, the name with its budget capsule, the
    line under, the amount. `withAccount` names the account too. */
-function opRow(o, a, withAccount){
+/* The balance the account stood at after each of its operations, by id. */
+function runningBalances(a){
+  let b = +a.opening || 0; const out = {};
+  for (const o of opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0)) { b = r2(b + (o.amount||0)); out[o.id] = b; }
+  return out;
+}
+function opRow(o, a, withAccount, bal){
   const b = o.budget ? budgetOf(o.budget) : null;
   const on = state.sel.includes(o.id);
   return `
@@ -1344,11 +1432,15 @@ function opRow(o, a, withAccount){
           <div class="k" style="font-weight:600">${esc(o.name||'—')}${b?`<span class="cap bcap" style="color:${b.color}">${esc(b.name)}</span>`:''}</div>
           <div class="sub">${esc(o.date)}${withAccount?' · '+esc(a.key):''} · ${esc(o.tag)}${o.splits.length?' + '+o.splits.map((sp)=>esc(sp.tag)).join(' + '):''}${o.note?' · '+esc(o.note):''}</div>
         </div>
-        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${under(o.amount, a.currency, o.date.slice(0,7))}</span>
+        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${
+          bal ? `<div class="muted" style="font-size:11px;text-align:right">${money(bal[o.id], a.currency)}</div>` : under(o.amount, a.currency, o.date.slice(0,7))}</span>
       </div>`;
 }
+/* Under each amount: what it is in the shown currency - or, when the account
+   is already in that currency, the balance it left behind. */
 function opRows(a, ops){
-  return ops.length ? `<div class="rows">${ops.map((o)=>opRow(o, a, false)).join('')}</div>`
+  const bal = a.currency===store.cur ? runningBalances(a) : null;
+  return ops.length ? `<div class="rows">${ops.map((o)=>opRow(o, a, false, bal)).join('')}</div>`
     : `<div class="hint" style="margin-top:0">${filterActive(opFilter())?'Nothing matches.':'Nothing in '+theYear()+'.'}</div>`;
 }
 /* The bar above the nav once operations are ticked: give them all a tag, or
@@ -1485,6 +1577,7 @@ function accountPage(a){
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
     <div class="herosub"><b>${esc(a.key)}</b> · ${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
   </div>
+  ${balanceCard(a, Y)}
   <div class="card">
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
@@ -1496,6 +1589,26 @@ function accountPage(a){
   <div style="height:56px"></div>
   ${selBar(true)}
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+/* The year on the zoomable chart: the balance the year opened with, then at
+   each month's end so far. */
+const AB_SERIES = [{ key:'bal', label:'Balance', color:'#3b82f6', money:true }];
+function balancePoints(a, Y){
+  const now = new Date().toISOString().slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
+  return [{ label:'1 Jan', values:{ bal: valueAt(a, (Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ bal: valueAt(a, m+'-31') } })));
+}
+function balanceCard(a, Y){
+  const pts = balancePoints(a, Y);
+  const n = pts.length;
+  if (n < 2) return '';
+  if (state.abHi==null || state.abHi > n-1 || state.abHi < 1) state.abHi = n-1;
+  if (state.abLo==null || state.abLo >= state.abHi) state.abLo = 0;
+  return `
+  <div class="card">
+    <h2>Balance <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)} · ${Y}</span></h2>
+    ${rangeChart('ab', pts, AB_SERIES, state.abLo, state.abHi)}
+  </div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
 const tagOptions = (sel) => `<option value="">—</option>` + store.categories.map((c)=>
@@ -1675,24 +1788,28 @@ function rangePlot(pts, series, lo, hi){
   const shown = pts.slice(lo, hi+1);
   const n = shown.length;
   if (n < 2) return `<div class="hint" style="margin-top:0">Widen the range.</div>`;
-  const vals = shown.flatMap((p)=>series.map((sr)=>p.values[sr.key])).filter((v)=>v>0);
+  const vals = shown.flatMap((p)=>series.map((sr)=>p.values[sr.key])).filter((v)=>isFinite(v));
   let min = Math.min(...vals), max = Math.max(...vals);
   const pad = (max-min || max*0.05 || 1) * 0.08; min -= pad; max += pad;
   const x = (i) => L + (W-L-R) * i / (n-1);
   const y = (v) => T + (H-T-B) * (1 - (v-min)/(max-min));
+  const money = series.some((sr)=>sr.money);
+  /* whole numbers for money, four decimals for rates */
+  const lab = (v) => money || Math.abs(v)>=100 ? Math.round(v).toLocaleString('en-US') : v.toFixed(4);
   let g = '';
   for (let k=0;k<3;k++){ const v = min + (max-min)*k/2; const yy = y(v);
     g += `<line class="gl" x1="${L}" y1="${yy.toFixed(1)}" x2="${W-R}" y2="${yy.toFixed(1)}"/>
-      <text class="yl" x="${L-4}" y="${(yy+3).toFixed(1)}" text-anchor="end">${v.toFixed(2)}</text>`; }
+      <text class="yl" x="${L-4}" y="${(yy+3).toFixed(1)}" text-anchor="end">${money ? kfmt1(v) : v.toFixed(2)}</text>`; }
   const ticks = n > 4 ? [0, Math.round((n-1)/2), n-1] : [0, n-1];
   for (const i of ticks) g += `<text class="tick" x="${x(i).toFixed(1)}" y="${H-4}" text-anchor="${i===0?'start':i===n-1?'end':'middle'}">${esc(shown[i].label)}</text>`;
   for (const sr of series) {
     const d = shown.map((p,i)=>`${x(i).toFixed(1)},${y(p.values[sr.key]).toFixed(1)}`).join(' ');
-    const last = shown[n-1].values[sr.key];
+    const first = shown[0].values[sr.key], last = shown[n-1].values[sr.key];
     g += `<polyline points="${d}" fill="none" stroke="${sr.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
-    /* The value at the end of the line, white on a dark halo so it reads
-       against the line itself; whole numbers for money, four decimals for rates. */
-    g += `<text class="endlab" x="${(W-R).toFixed(1)}" y="${(y(last)-6).toFixed(1)}" text-anchor="end">${Math.abs(last)>=100 ? Math.round(last).toLocaleString('en-US') : last.toFixed(4)}</text>`;
+    /* The values at both ends of the line, white on a dark halo so they read
+       against the line itself. */
+    g += `<text class="endlab" x="${L.toFixed(1)}" y="${(y(first)-6).toFixed(1)}" text-anchor="start">${lab(first)}</text>`;
+    g += `<text class="endlab" x="${(W-R).toFixed(1)}" y="${(y(last)-6).toFixed(1)}" text-anchor="end">${lab(last)}</text>`;
   }
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
 }
@@ -1720,13 +1837,14 @@ function columns({ labels, values, color, keys, dataAttr, selected }){
 
 /* Wires the two thumbs: left never passes right; the plot and the two date
    labels are redrawn in place. */
-function wireRangeChart(id, pts, series, get, set){
+function wireRangeChart(id, pts, series, get, set, after){
   const lo=document.getElementById(id+'Lo'), hi=document.getElementById(id+'Hi');
   if (!lo || !hi) return;
   const redraw=()=>{ const r=get();
     const plot=document.getElementById(id+'Plot'); if (plot) plot.innerHTML = rangePlot(pts, series, r.lo, r.hi);
     const a=document.getElementById(id+'LoLab'), b=document.getElementById(id+'HiLab');
-    if (a) a.textContent = pts[r.lo] ? pts[r.lo].label : ''; if (b) b.textContent = pts[r.hi] ? pts[r.hi].label : ''; };
+    if (a) a.textContent = pts[r.lo] ? pts[r.lo].label : ''; if (b) b.textContent = pts[r.hi] ? pts[r.hi].label : '';
+    if (after) after(r); };
   lo.oninput=()=>{ const r=get(); let v=+lo.value; if (v > r.hi-1) { v=r.hi-1; lo.value=v; } set(v, r.hi); redraw(); };
   hi.oninput=()=>{ const r=get(); let v=+hi.value; if (v < r.lo+1) { v=r.lo+1; hi.value=v; } set(r.lo, v); redraw(); };
 }
@@ -1907,11 +2025,11 @@ function settingsData(){
       <input id="bkTok" value="${esc(b.token)}" type="password" autocapitalize="off"></div>
     <div class="btnrow">
       <button class="btn" data-bktest="1">Test</button>
-      <button class="btn primary" data-bksync="1" ${connected()&&!store.locked?'':'disabled'}>Sync</button>
+      <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>Sync</button>
       <button class="btn lockbtn ${store.locked?'on':''}" data-lock="1" aria-pressed="${store.locked?'true':'false'}"><svg viewBox="0 0 24 24">${store.locked?ICON_LOCK:ICON_UNLOCK}</svg></button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
-    ${store.locked?`<div class="status bad" style="margin-top:6px">Read only${dirty().length?' · '+dirty().length+' tab'+(dirty().length===1?'':'s')+' waiting':''}</div>`:''}
+    ${store.locked&&dirty().length?`<div class="status bad" style="margin-top:6px">${dirty().length} tab${dirty().length===1?'':'s'} waiting</div>`:''}
   </div>
   <div class="card">
     <h2>Import${state.pending?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(state.pending.name)}</span>`:''}</h2>
@@ -2112,7 +2230,7 @@ function wire(){
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
-  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>pushNow(true));
+  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>store.locked ? syncLocked() : pushNow(true));
   /* Locked: the app reads the sheet and never writes it. Edits stay here and
      go out when the lock comes off. */
   document.querySelectorAll('[data-lock]').forEach((el)=>el.onclick=()=>{ store.locked=!store.locked; if (store.locked) { state.page=null; state.sel=[]; state.bulk=null; } save(); state.sync=null; render(); if (!store.locked && dirty().length) pushSoon(); });
@@ -2160,7 +2278,9 @@ function wire(){
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; render(); });
+  if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
+    if (a && !isFund(a)) wireRangeChart('ab', balancePoints(a, theYear()), AB_SERIES, ()=>({ lo:state.abLo, hi:state.abHi }), (lo,hi)=>{ state.abLo=lo; state.abHi=hi; }); }
   document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
 
   /* the operations filter */
@@ -2456,7 +2576,8 @@ function wire(){
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
     const pts = netWorthMonths();
-    if (pts.length > 1) wireRangeChart('nw', pts, [{ key:'nw', label:'Net worth', color:'#3b82f6' }], ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; });
+    if (pts.length > 1) wireRangeChart('nw', pts, NW_SERIES, ()=>({ lo:state.nwLo, hi:state.nwHi }), (lo,hi)=>{ state.nwLo=lo; state.nwHi=hi; },
+      (r)=>{ const k=document.getElementById('nwKpis'); if (k) k.innerHTML = nwKpis(pts, r.lo, r.hi); });
   }
   const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
   if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
