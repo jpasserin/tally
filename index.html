@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=74"></script>
+<script src="backend.js?v=75"></script>
 <script>
-const APP_VERSION="74";
+const APP_VERSION="75";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1310,11 +1310,47 @@ function warnAboutSheet(){
     </div>
   </div>`;
 }
+/* After "This is correct" on a credit in a spending category or a debit in
+   an income one: the same payee elsewhere, any year, standing in the same
+   finding - offered to be put aside together. */
+function moreLikeThese(kind, items){
+  if (kind!=='creditspend' && kind!=='debitincome' && kind!=='inconsistent') return [];
+  const names = new Set(items.map(({o})=>o && o.name.trim().toLowerCase()).filter(Boolean));
+  const done = new Set(items.map(({o})=>o && o.id));
+  if (!names.size) return [];
+  /* the payee's habit, over every year */
+  const byName = {};
+  if (kind==='inconsistent') for (const a of familyCash()) for (const o of opsOf(a.key)) if (o.name && o.tag) { const n = o.name.trim().toLowerCase(); if (names.has(n)) (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
+  const out = [];
+  for (const a of familyCash()) for (const o of opsOf(a.key)) {
+    if (done.has(o.id) || !names.has(o.name.trim().toLowerCase()) || isDismissed(kind, o, a)) continue;
+    let hit = false;
+    if (kind==='inconsistent') { const t = byName[o.name.trim().toLowerCase()] || {}; const tags = Object.keys(t).sort((x,y)=>t[y]-t[x]);
+      hit = !!o.tag && tags.length > 1 && o.tag !== tags[0] && t[tags[0]] > t[o.tag]; }
+    else { const c = same(o.tag, 'x') ? null : catOfTag(o.tag); if (!c) continue;
+      hit = kind==='creditspend' ? (['Necessity','Optional','Misc'].includes(c.type) && o.amount > 0) : (c.type==='Income' && o.amount < 0); }
+    if (hit) out.push({ o, a });
+  }
+  return out;
+}
+function okMoreSheet(p){
+  /* one line per payee, however it was spelled */
+  const byName = {}, label = {}; for (const {o} of p.more) { const n = o.name.trim().toLowerCase(); byName[n] = (byName[n]||0) + 1; label[n] = label[n] || o.name.trim(); }
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-okmoreclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>Also correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length} more, any year</span></h3>
+      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])}</span><span class="v">${byName[n]}</span></div>`).join('')}</div>
+      <div class="foot"><button class="btn close" data-okmoreclose="1">Close</button><button class="btn primary" data-okmoreall="1">Mark all correct</button></div>
+    </div>
+  </div>`;
+}
 function tabWarnings(){
   const p = state.page;
   const groups = warnings();
   const n = groups.reduce((t,g)=>t+g.items.length, 0);
-  const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : p && p.kind==='warnabout' ? warnAboutSheet() : '';
+  const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : p && p.kind==='warnabout' ? warnAboutSheet() : p && p.kind==='okmore' ? okMoreSheet(p) : '';
   if (state.warnKind==='__aside') { if (groups.aside.length) return widget + asidePage(groups.aside); state.warnKind = null; }
   const g = state.warnKind ? groups.find((x)=>x.kind===state.warnKind) : null;
   if (state.warnKind && !g) state.warnKind = null;
@@ -1351,17 +1387,28 @@ function asidePage(items){
 /* One kind, every finding, a box on each; the bar below offers the fixes
    that fit, applied to all the ticked ones. */
 const selectAllBtn = (n) => store.locked ? '' : `<button class="gbtn ghost" data-warnall="1">${state.sel.length===n&&n?'None':'All'}</button>`;
+/* The findings of a kind that carry the name typed in the filter. */
+const warnShown = (g) => { const q = (state.warnQ||'').trim().toLowerCase(); return q ? g.items.filter(({o,a})=>(o ? o.name : a.key).toLowerCase().includes(q)) : g.items; };
 function warnPage(g){
+  const shown = warnShown(g);
+  return `
+  <div class="card">
+    <h2>${esc(g.title)} <span class="fbar"><span class="muted" id="warnCount">${shown.length}</span>${selectAllBtn(shown.length)}</span></h2>
+    <div class="fsearch"><input id="warnQ" placeholder="Name" value="${esc(state.warnQ||'')}" autocapitalize="off"></div>
+    <div class="rows" id="warnList">${warnRows(g, shown)}</div>
+  </div>
+  <div style="height:56px"></div>
+  ${warnBar(g)}
+  <div class="closebar"><button class="btn" data-warnclose="1">Close</button></div>`;
+}
+function warnRows(g, items){
   const on = (k) => state.sel.includes(k);
   const line = (o, a, text, first) => `
         <div style="display:flex;align-items:center;gap:10px;${first?'':'margin-top:4px'}">
           <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.name||'—')}</div>
             <div class="sub">${esc(o.date)} · ${esc(a.key)} · ${esc(o.tag||'—')}${text?' · '+esc(text):''}</div></div>
           <span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span></div>`;
-  return `
-  <div class="card">
-    <h2>${esc(g.title)} <span class="fbar"><span class="muted">${g.items.length}</span>${selectAllBtn(g.items.length)}</span></h2>
-    <div class="rows">${g.items.map(({o,a,text,group})=>{ const k = o ? o.id : a.key; return o ? `
+  return items.map(({o,a,text,group})=>{ const k = o ? o.id : a.key; return o ? `
       <div class="row tap" data-opedit="${esc(o.id)}" style="align-items:flex-start">
         ${store.locked?'':`<span class="ck ${on(k)?'on':''}" data-selwarn="${esc(k)}" style="margin-top:2px">${on(k)?'✓':''}</span>`}
         <div style="flex:1;min-width:0">${(group||[o]).map((x,i)=>line(x, a, i===0?text:'', i===0)).join('')}</div>
@@ -1369,11 +1416,7 @@ function warnPage(g){
       <div class="row tap" data-accedit="${store.accounts.indexOf(a)}">
         ${store.locked?'':`<span class="ck ${on(k)?'on':''}" data-selwarn="${esc(k)}">${on(k)?'✓':''}</span>`}
         <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(text)}</span></div><span class="chev">›</span>
-      </div>`; }).join('')}</div>
-  </div>
-  <div style="height:56px"></div>
-  ${warnBar(g)}
-  <div class="closebar"><button class="btn" data-warnclose="1">Close</button></div>`;
+      </div>`; }).join('');
 }
 function warnBar(g){
   const n = state.sel.length; if (!n) return '';
@@ -2882,7 +2925,7 @@ function wire(){
     state.budget=null; state.page=null; commit(); });
 
   /* warnings: a kind opens its page; fixes act on the ticked findings */
-  document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; render(); });
+  document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; state.warnQ=''; render(); });
   document.querySelectorAll('[data-warnabout]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'warnabout', fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-warnaboutclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-warnclose]').forEach((el)=>el.onclick=()=>{ state.warnKind=null; state.sel=[]; state.bulk=null; render(); });
@@ -2896,10 +2939,20 @@ function wire(){
     const items = warnItems(), touched = new Set();
     for (const {o,a} of items) if (!o) { for (const n of state.pick||[]) if (!a.owners.includes(n)) a.owners.push(n); touched.add('Config'); }
     state.sel=[]; state.bulk=null; state.pick=[]; if (touched.size) commit(...touched); else render(); });
-  document.querySelectorAll('[data-selwarn]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
-    const k=el.dataset.selwarn; state.sel = state.sel.includes(k) ? state.sel.filter((x)=>x!==k) : [...state.sel, k]; if (!state.sel.length) state.bulk=null; render(); });
-  document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const w = warnings();
-    const all = state.warnKind==='__aside' ? w.aside.map((x)=>dismissKey(x.kind, x.o, x.a)) : ((w.find((x)=>x.kind===state.warnKind)||{}).items||[]).map(({o,a})=> o ? o.id : a.key);
+  const wireWarnRows = () => {
+    document.querySelectorAll('[data-selwarn]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
+      const k=el.dataset.selwarn; state.sel = state.sel.includes(k) ? state.sel.filter((x)=>x!==k) : [...state.sel, k]; if (!state.sel.length) state.bulk=null; render(); });
+  };
+  wireWarnRows();
+  /* typing a name redraws the list alone, so the field keeps the finger */
+  const wq = document.getElementById('warnQ');
+  if (wq) wq.oninput = () => { state.warnQ = wq.value; const g = warnings().find((x)=>x.kind===state.warnKind); const l = document.getElementById('warnList'); if (!g || !l) return;
+    const shown = warnShown(g); l.innerHTML = warnRows(g, shown); const c = document.getElementById('warnCount'); if (c) c.textContent = String(shown.length);
+    wireWarnRows();
+    document.querySelectorAll('#warnList [data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOpById(el.dataset.opedit); });
+    document.querySelectorAll('#warnList [data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); }); };
+  document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const w = warnings(); const g = w.find((x)=>x.kind===state.warnKind);
+    const all = state.warnKind==='__aside' ? w.aside.map((x)=>dismissKey(x.kind, x.o, x.a)) : (g ? warnShown(g) : []).map(({o,a})=> o ? o.id : a.key);
     state.sel = state.sel.length===all.length ? [] : all; state.bulk=null; render(); });
   const warnItems = () => { const g = warnings().find((x)=>x.kind===state.warnKind); return g ? g.items.filter(({o,a})=>state.sel.includes(o ? o.id : a.key)) : []; };
   document.querySelectorAll('[data-warnfix]').forEach((el)=>el.onclick=()=>{
@@ -2911,7 +2964,16 @@ function wire(){
         store.ops[a.key] = opsOf(a.key).filter((x)=>!gone.includes(x.id)); touched.add(a.key); }
       else if (fix==='usual' && o) { const u = usualTag(o.name); if (u && u!==o.tag) { o.tag=u; o.splits=o.splits.filter((sp)=>sp.tag!==u); touched.add(a.key); } }
     }
-    state.sel=[]; state.bulk=null; if (touched.size) commit(...touched); else render(); });
+    /* the same payee elsewhere in the same kind of finding: offer to put those aside too */
+    const more = fix==='ok' ? moreLikeThese(state.warnKind, items) : [];
+    state.sel=[]; state.bulk=null;
+    if (more.length) state.page={ kind:'okmore', warnKind:state.warnKind, more, fresh:true };
+    if (touched.size) commit(...touched); else render();
+    if (state.page && state.page.kind==='okmore') state.page.fresh=false; });
+  document.querySelectorAll('[data-okmoreclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-okmoreall]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p || p.kind!=='okmore') return;
+    for (const {o,a} of p.more) { const k = dismissKey(p.warnKind, o, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
+    state.page=null; commit('Dismissed'); });
   document.querySelectorAll('[data-warnpick]').forEach((el)=>el.onclick=()=>{
     const i = el.dataset.warnpick.indexOf('|'); const what = el.dataset.warnpick.slice(0,i), val = el.dataset.warnpick.slice(i+1);
     const items = warnItems(), touched = new Set();
