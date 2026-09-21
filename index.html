@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=62"></script>
+<script src="backend.js?v=63"></script>
 <script>
-const APP_VERSION="62";
+const APP_VERSION="63";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -585,6 +585,9 @@ function importFile(j){
   if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
   const year = +j.year || null;
+  /* a child's book names the child */
+  for (const p of (Array.isArray(j.people) ? j.people : [])) if (p && p.name && !store.people.some((x)=>same(x.name, p.name)))
+    store.people.push({ name:String(p.name), type: PEOPLE_TYPES.includes(p.type) ? p.type : 'Parent' });
   for (const a of j.accounts) {
     if (!a.key) continue;
     const known = store.accounts.find((x)=>same(x.key, a.key));
@@ -698,6 +701,7 @@ const TABS = [
   ['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
   ['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
   ['account','Account','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
+  ['kids','Kids','<circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/>'],
   ['settings','Settings','<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'],
 ];
 
@@ -707,6 +711,7 @@ const SCREENS = {
   report:  () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '')
     + subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? tabBudgets() : sub('report')==='monthly' ? tabMonthly() : tabReport()),
   account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
+  kids: () => subnav('kids') + (sub('kids')==='accounts' ? tabKidsAccounts() : tabKidsSummary()),
   settings: tabSettings,
 };
 
@@ -715,6 +720,8 @@ const SUBS = {
   account: [['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
             ['operations','Operations','<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>'],
             ['warnings','Warnings','<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>']],
+  kids:    [['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
+            ['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>']],
   summary: [['current','Current','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
             ['history','History','<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>']],
   report:  [['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
@@ -733,6 +740,10 @@ const subnav = (tab) => `<div class="subnav">${SUBS[tab].map(([id,label,icon])=>
 /* A child's account: it has owners, and each of them is a Child in People. */
 const isChilds = (a) => a.owners.length > 0 && a.owners.every((n)=>(store.people.find((p)=>same(p.name, n))||{}).type==='Child');
 const counted = () => store.accounts.filter((a)=>a.category!=='Excluded' && !isChilds(a));
+const kids = () => store.people.filter((p)=>p.type==='Child');
+const kidAccounts = (name) => store.accounts.filter((a)=>isChilds(a) && a.owners.some((o)=>same(o, name)));
+/* The family's own cash accounts: the children's are kept apart. */
+const familyCash = () => cashAccounts().filter((a)=>!isChilds(a));
 /* "31 Dec 2013" */
 const dLabel = (d) => d && /^\d{4}-\d{2}-\d{2}/.test(d) ? +d.slice(8,10) + ' ' + MON[+d.slice(5,7)-1] + ' ' + d.slice(0,4) : '';
 /* "31 Dec 2013 · 0.85€ · A$1.02": the day the rate is from and what one unit
@@ -849,7 +860,7 @@ const cashAccounts = () => store.accounts.filter((a)=>!isFund(a));
 const sumsByCategory = (year) => sumsFor(String(year));
 function sumsFor(prefix){
   const out = {}; let unfiled = 0;
-  for (const a of cashAccounts()) for (const o of opsOf(a.key)) {
+  for (const a of familyCash()) for (const o of opsOf(a.key)) {
     if (!o.date.startsWith(prefix)) continue;
     const m = o.date.slice(0,7);
     const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount }));
@@ -973,7 +984,7 @@ function tabMonthly(){
    part, or the whole less the parts), in the shown currency. */
 function categoryOps(name, year){
   const out = [];
-  for (const a of cashAccounts()) for (const o of opsOf(a.key)) {
+  for (const a of familyCash()) for (const o of opsOf(a.key)) {
     if (o.date.slice(0,4)!==String(year)) continue;
     let part = 0, hit = false;
     for (const sp of o.splits) if ((catOfTag(sp.tag)||{}).name===name) { part += sp.amount; hit = true; }
@@ -1033,7 +1044,7 @@ function tabReport(){
 function tabOperations(){
   const f = opFilter();
   const p = state.page;
-  const all = cashAccounts().flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
+  const all = familyCash().flatMap((a)=>opsOf(a.key).map((o)=>({ o, a })));
   const byId = Object.fromEntries(all.map(({o,a})=>[o.id, a]));
   const shown = filterActive(f) ? filterOps(all.map(({o})=>o), f).map((o)=>({ o, a:byId[o.id] })) : [];
   const sum = Math.round(shown.reduce((t,{o,a})=>t+(conv(o.amount, a.currency, store.cur, o.date.slice(0,7))||0), 0)*100)/100;
@@ -1383,24 +1394,68 @@ function tabAccount(){
   const Y = theYear();
   if (state.account && store.accounts.some((a)=>a.key===state.account)) return accountPage(store.accounts.find((a)=>a.key===state.account));
   state.account = null;
-  const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: store.accounts.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
+  const mine = store.accounts.filter((a)=>!isChilds(a));
+  const groups = ACCOUNT_CATEGORIES.map(([k,col])=>({ k, col, list: mine.filter((a)=>a.category===k) })).filter((g)=>g.list.length);
   return (p && p.kind==='account' ? accountSheet(p) : '') + `
   <div class="card">
     <h2>Accounts <button class="gbtn" data-accnew="1"${LK()}>+</button></h2>
-    ${store.accounts.length ? groups.map((g)=>{
-      /* The group's balances, each converted at the year's rate, added up. */
-      const total = g.list.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, yearMonth(Y)); return v==null ? t : t + v; }, 0);
-      return `
+    ${mine.length ? groups.map((g)=>accountGroup(g.k, g.col, g.list, Y)).join('') : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+/* A group of accounts under a small heading with its total, the accounts
+   framed by the currency they sit in - dollars first, then euros, then
+   Australian dollars. */
+function accountGroup(title, col, list, Y){
+  /* The group's balances, each converted at the year's rate, added up. */
+  const total = list.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, yearMonth(Y)); return v==null ? t : t + v; }, 0);
+  return `
       <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
-        <span class="dot" style="background:${g.col}"></span>${g.k}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">(${money0(total, store.cur)})</span></div>
-      ${CURRENCIES.map((c)=>({ c, list:g.list.filter((a)=>a.currency===c) })).filter((f)=>f.list.length).map((f)=>`
+        <span class="dot" style="background:${col}"></span>${esc(title)}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">(${money0(total, store.cur)})</span></div>
+      ${CURRENCIES.map((c)=>({ c, list:list.filter((a)=>a.currency===c) })).filter((f)=>f.list.length).map((f)=>`
       <div class="cframe" style="border-color:${CUR_COLORS[f.c]}"><div class="rows">${f.list.map((a)=>`
         <div class="row tap" data-accopen="${esc(a.key)}">
           <div class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)} · ${esc(a.owners.join(', '))}${isFund(a)?' · '+fundsOf(a).length+' fund'+(fundsOf(a).length===1?'':'s'):''}${a.closed?' · closed':''}</span></div>
           <span class="v ${balanceAt(a, Y)<0?'neg':''}">${paren(balanceAt(a, Y), a.currency, yearMonth(Y))}${money(balanceAt(a, Y), a.currency)}</span>
-        </div>`).join('')}</div></div>`).join('')}`; }).join('')
-    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+        </div>`).join('')}</div></div>`).join('')}`;
+}
+
+/* ------------------------------------------------------------------- kids --
+   The children's accounts: an account is a child's when every owner is a
+   Child in People. Kids ▸ Accounts lists them by child, the same way as the
+   family's; a row opens the same account page. */
+const KID_COLOR = '#c084fc';
+function tabKidsAccounts(){
+  const p = state.page;
+  const Y = theYear();
+  if (state.account && store.accounts.some((a)=>a.key===state.account)) return accountPage(store.accounts.find((a)=>a.key===state.account));
+  state.account = null;
+  const groups = kids().map((k)=>({ k, list: kidAccounts(k.name) }));
+  return (p && p.kind==='account' ? accountSheet(p) : '') + `
+  <div class="card">
+    <h2>Accounts <button class="gbtn" data-accnew="1"${LK()}>+</button></h2>
+    ${groups.length ? groups.map((g)=>g.list.length ? accountGroup(g.k.name, KID_COLOR, g.list, Y) : `
+      <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">
+        <span class="dot" style="background:${KID_COLOR}"></span>${esc(g.k.name)}<span style="margin-left:auto;text-transform:none;letter-spacing:0">no account</span></div>`).join('')
+    : `<div class="hint" style="margin-top:0">No child in People yet.</div>`}
   </div>`;
+}
+/* Each child: what is theirs today, in the shown currency, account by account. */
+function tabKidsSummary(){
+  const Y = theYear(), m = yearMonth(Y);
+  const list = kids();
+  if (!list.length) return `<div class="card"><h2>Kids</h2><div class="hint" style="margin-top:0">No child in People yet.</div></div>`;
+  return list.map((k)=>{
+    const accs = kidAccounts(k.name);
+    const total = accs.reduce((t,a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, m); return v==null ? t : t + v; }, 0);
+    return `
+  <div class="card">
+    <h2>${esc(k.name)} <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
+    <div class="hero ${total<0?'neg':''}">${money(r2(total), store.cur)}</div>
+    ${accs.length ? `<div class="rows" style="margin-top:8px">${accs.map((a)=>{ const b = balanceAt(a, Y), v = conv(b, a.currency, store.cur, m); return `
+      <div class="row tap" data-kidacc="${esc(a.key)}"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.closed?' · closed':''}</span></span>
+        <span style="text-align:right"><span class="v ${b<0?'neg':''}">${money(b, a.currency)}</span>${a.currency!==store.cur&&v!=null?`<div class="muted" style="font-size:11px">${money(v, store.cur)}</div>`:''}</span></div>`; }).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">No account yet.</div>`}
+  </div>`; }).join('');
 }
 
 /* One account: its balance and its operations, newest first. Edit (top
@@ -2390,7 +2445,8 @@ function wire(){
   document.querySelectorAll('[data-accnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
   document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
-  if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
+  document.querySelectorAll('[data-kidacc]').forEach((el)=>el.onclick=()=>{ state.sub.kids='accounts'; state.account=el.dataset.kidacc; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
+  if ((state.tab==='account' || state.tab==='kids') && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
     /* the months shown on the chart are the months listed under it */
     if (a && !isFund(a)) wireRangeChart('ab', balancePoints(a, theYear()), AB_SERIES, ()=>({ lo:state.abLo, hi:state.abHi }), (lo,hi)=>{ state.abLo=lo; state.abHi=hi; }, ()=>refreshOps()); }
   document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
@@ -2402,13 +2458,13 @@ function wire(){
   const refreshOps = () => {
     const l=document.getElementById('opsList'), c=document.getElementById('opCount');
     const a=acctNow();
-    if (a && state.tab==='account' && sub('account')==='accounts') {
+    if (a && ((state.tab==='account' && sub('account')==='accounts') || (state.tab==='kids' && sub('kids')==='accounts'))) {
       const ops = filterOps(abOps(a, theYear()), F);
       if (l) l.innerHTML = opRows(a, ops);
       if (c) c.textContent = opCountText(a, ops, F);
     } else {
       /* a mixed list: the search page or a budget */
-      const pool = state.tab==='account' ? cashAccounts().flatMap((x)=>opsOf(x.key).map((o)=>({ o, a:x })))
+      const pool = state.tab==='account' ? familyCash().flatMap((x)=>opsOf(x.key).map((o)=>({ o, a:x })))
         : state.cat ? categoryOps(state.cat, theYear()).filter((x)=>!state.catMonths.length || state.catMonths.includes(x.o.date.slice(0,7)))
         : state.budget ? budgetOps(state.budget) : [];
       const byId = Object.fromEntries(pool.map(({o,a})=>[o.id, a]));
@@ -2446,7 +2502,7 @@ function wire(){
   document.querySelectorAll('[data-accfundkind]').forEach((el)=>el.onclick=()=>{ readAcc(); const [i,k]=el.dataset.accfundkind.split('|'); const f=state.page.funds[+i]; if (f && !f.locked) f.kind=k; render(); });
   document.querySelectorAll('[data-fundsel]').forEach((el)=>el.onclick=()=>{ state.fund=el.dataset.fundsel; state.page=null; state.fbLo=state.fbHi=null; render(); });
   document.querySelectorAll('[data-fmet]').forEach((el)=>el.onclick=()=>{ state.fmet=el.dataset.fmet; render(); });
-  if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
+  if ((state.tab==='account' || state.tab==='kids') && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
     const f = a && isFund(a) ? (fundsOf(a).find((x)=>x.name===state.fund) || fundsOf(a)[0]) : null;
     if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
