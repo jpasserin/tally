@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=67"></script>
+<script src="backend.js?v=68"></script>
 <script>
-const APP_VERSION="67";
+const APP_VERSION="68";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -820,20 +820,25 @@ function savingsCard(Y){
   const accs = counted().filter((a)=>a.category==='Savings' && (pick==='all' || a.currency===pick));
   const cur = pick==='all' ? store.cur : pick;
   const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
-  const rows = months.map((m)=>{ let paid = 0, value = 0;
+  const at = (m) => { let paid = 0, value = 0;
     for (const a of accs) { const end = m+'-31'; const p = paidAt(a, end), v = valueAt(a, end);
       const cp = pick==='all' ? conv(p, a.currency, cur, m) : p, cv = pick==='all' ? conv(v, a.currency, cur, m) : v;
       if (cp!=null) paid += cp; if (cv!=null) value += cv; }
-    return { m, paid:r2(paid), value:r2(value), growth:r2(value-paid) }; });
+    return { m, paid:r2(paid), value:r2(value), growth:r2(value-paid) }; };
+  const rows = months.map(at);
   const any = rows.some((r)=>r.value || r.paid);
   const pc = (r) => r.paid ? (r.growth/r.paid*100).toFixed(1)+'%' : '—';
+  /* the year so far against where the year before ended */
+  const last = rows[rows.length-1], prev = at((Y-1)+'-12');
+  const box = (label, v) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${v<0?'var(--bad)':'var(--good)'}">${money(v, cur)}</div></div>`;
+  const boxes = last ? `<div class="kpis" style="margin-top:8px">${box('Paid in this year', r2(last.paid-prev.paid))}${box('Growth this year', r2(last.growth-prev.growth))}${box('Balance change', r2(last.value-prev.value))}</div>` : '';
   return `
   <div class="card">
     <h2>Savings <span class="chips" style="margin-left:auto">${[['all','All'],['USD','USD'],['EUR','EUR']].map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-savcur="${k}">${l}</button>`).join('')}</span></h2>
     ${any ? `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>Month</th><th>Paid in</th><th>Growth</th><th>%</th><th>Balance</th></tr></thead>
       <tbody>${rows.map((r)=>`<tr${r.value||r.paid?'':' class="muted"'}><td>${MON[+r.m.slice(5,7)-1]}</td><td>${money(r.paid, cur)}</td><td style="color:${r.growth<0?'var(--bad)':'var(--good)'}">${money(r.growth, cur)}</td><td style="color:${r.growth<0?'var(--bad)':'var(--good)'}">${pc(r)}</td><td><b>${money(r.value, cur)}</b></td></tr>`).join('')}</tbody>
-    </table></div>` : `<div class="hint" style="margin-top:0">No savings${pick==='all'?'':' in '+pick} in ${Y}.</div>`}
+    </table></div>${boxes}` : `<div class="hint" style="margin-top:0">No savings${pick==='all'?'':' in '+pick} in ${Y}.</div>`}
   </div>`;
 }
 /* A net worth card: the figure, the split by currency (native amounts in the
