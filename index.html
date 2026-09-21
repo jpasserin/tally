@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=80"></script>
+<script src="backend.js?v=81"></script>
 <script>
-const APP_VERSION="80";
+const APP_VERSION="81";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -519,7 +519,7 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
@@ -527,7 +527,7 @@ function configTab(){
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
-        Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'' })))
+        Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -601,7 +601,7 @@ function readConfig(tab){
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes', funds: [],
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
-      ...(type==='Property' ? { share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
+      ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
     if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
@@ -797,8 +797,9 @@ const kidAccounts = (name) => store.accounts.filter((a)=>isChilds(a) && a.owners
 const hiddenIn = (a, Y) => { if (opsOf(a.key).some((o)=>o.date.slice(0,4)===String(Y))) return false;
   if (a.closed) return true;
   return valueAt(a, Y+'-12-31')===0 && opsOf(a.key).some((o)=>o.date > Y+'-12-31'); };
-const listedIn = (a, Y) => state.showClosed || !hiddenIn(a, Y);
-const hiddenLine = (all, Y) => { const n = all.filter((a)=>hiddenIn(a, Y)).length;
+/* a property is not there at all before the year it was bought */
+const listedIn = (a, Y) => !(isProp(a) && a.bought && String(Y) < a.bought.slice(0,4)) && (state.showClosed || !hiddenIn(a, Y));
+const hiddenLine = (all, Y) => { const n = all.filter((a)=>hiddenIn(a, Y) && !(isProp(a) && a.bought && String(Y) < a.bought.slice(0,4))).length;
   if (!n) return '';
   return state.showClosed ? `<div class="hint tap" style="margin:8px 0 0;text-align:center" data-showclosed="0">Hide the closed accounts</div>`
     : n ? `<div class="hint tap" style="margin:8px 0 0;text-align:center" data-showclosed="1">${n} account${n===1?'':'s'} hidden</div>` : ''; };
@@ -1962,7 +1963,7 @@ function propertyPage(a){
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero ${equity<0?'neg':''}">${money(equity, a.currency)}</div>
     ${equityConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(equityConv, store.cur)}</div>`:''}
-    <div class="herosub">worth ${money(value, a.currency)}${owed?' · owed '+money(owed, a.currency):''} · ${propShare(a)===1?'all yours':(+a.share)+'% yours'} · ${Y}</div>
+    <div class="herosub">worth ${money(value, a.currency)}${owed?' · owed '+money(owed, a.currency):''} · ${propShare(a)===1?'all yours':(+a.share)+'% yours'}${a.bought?' · bought '+dLabel(a.bought):''} · ${Y}</div>
     <div class="chips" style="margin-top:10px">${PROP_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-pview="${k}">${l}</button>`).join('')}</div>
   </div>
   ${view==='summary' ? propSummary(a, Y) : view==='mortgage' ? propMortgage(a, Y) : propExpenses(a, Y)}
@@ -2307,7 +2308,10 @@ function accountSheet(p){
         <div class="field" style="flex:1"><label>Opened</label><input id="aOpened" type="date" value="${esc(p.opened||'')}"></div>
         <div class="field" style="flex:1"><label>Rate % gross</label><input id="aRate" inputmode="decimal" value="${esc(p.rate==null?'':p.rate)}" style="text-align:right"></div>
       </div>` : ''}
-      ${p.type==='Property' ? `<div class="field"><label>Your share %</label><input id="aShare" inputmode="decimal" value="${esc(p.share==null||p.share===''?'100':p.share)}" style="text-align:right;width:120px"></div>` : ''}
+      ${p.type==='Property' ? `<div class="btnrow">
+        <div class="field" style="flex:1"><label>Bought on</label><input id="aBought" type="date" value="${esc(p.bought||'')}"></div>
+        <div class="field" style="flex:1"><label>Your share %</label><input id="aShare" inputmode="decimal" value="${esc(p.share==null||p.share===''?'100':p.share)}" style="text-align:right"></div>
+      </div>` : ''}
       ${p.type==='Fund' ? `<div class="field"><label>Funds</label>
         ${(p.funds||[]).map((f,i)=>`<div class="btnrow" style="margin-bottom:5px;align-items:center">
           <input id="afName${i}" value="${esc(f.name)}" placeholder="Name" style="flex:1;min-width:0">
@@ -2877,13 +2881,13 @@ function wire(){
   /* accounts - the widget */
   const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening'), od=document.getElementById('aOpened'), rt=document.getElementById('aRate');
     if (k) state.page.key=k.value; if (o) state.page.opening=o.value; if (od) state.page.opened=od.value; if (rt) state.page.rate=rt.value;
-    const sh=document.getElementById('aShare'); if (sh) state.page.share=sh.value;
+    const sh=document.getElementById('aShare'); if (sh) state.page.share=sh.value; const bt=document.getElementById('aBought'); if (bt) state.page.bought=bt.value;
     (state.page.funds||[]).forEach((f,i)=>{ const n=document.getElementById('afName'+i), x=document.getElementById('afIndex'+i);
       if (n) f.name=n.value; if (x) f.index=x.value; });
     state.page.closeArm=false; state.page.delArm=false; };
   const openAcc=(index, preset)=>{ const a=index==null?null:store.accounts[index];
     const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash',
-      opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false, opened:a?(a.opened||''):'', rate:a&&a.rate!=null?String(a.rate):'', share:a&&a.share!=null?String(a.share):'100',
+      opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false, opened:a?(a.opened||''):'', rate:a&&a.rate!=null?String(a.rate):'', share:a&&a.share!=null?String(a.share):'100', bought:a?(a.bought||''):'',
       /* a fund with operations cannot be taken out */
       funds:a?fundsOf(a).map((f)=>({ name:f.name, kind:f.kind, index:f.index||'', locked: fundOps(a, f.name).length>0 })):[] };
     if (preset) Object.assign(cur, preset);
@@ -2966,7 +2970,7 @@ function wire(){
   const ak=document.getElementById('aKey'), ao=document.getElementById('aOpening');
   if (ak && state.page && state.page.kind==='account') ak.oninput=()=>{ state.page.key=ak.value; state.page.closeArm=false; state.page.delArm=false; };
   if (ao && state.page && state.page.kind==='account') ao.oninput=()=>{ state.page.opening=ao.value; state.page.closeArm=false; state.page.delArm=false; };
-  for (const [id,k] of [['aOpened','opened'],['aRate','rate'],['aShare','share']]) { const e=document.getElementById(id); if (e && state.page && state.page.kind==='account') e.oninput=e.onchange=()=>{ state.page[k]=e.value; state.page.closeArm=false; state.page.delArm=false; }; }
+  for (const [id,k] of [['aOpened','opened'],['aRate','rate'],['aShare','share'],['aBought','bought']]) { const e=document.getElementById(id); if (e && state.page && state.page.kind==='account') e.oninput=e.onchange=()=>{ state.page[k]=e.value; state.page.closeArm=false; state.page.delArm=false; }; }
   document.querySelectorAll('[data-accsave]').forEach((el)=>el.onclick=()=>{
     readAcc(); const p=state.page;
     const cur = p.index==null ? null : store.accounts[p.index];
@@ -2975,9 +2979,10 @@ function wire(){
     const a = cur ? { ...cur, owners:p.owners.slice(), category:p.category, opening:num(p.opening||'0'), closed:!!p.closed, funds }
       : { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type, opening:num(p.opening||'0'), closed:false, funds };
     if (a.type==='PEL') { a.opened = String(p.opened||'').trim(); a.rate = String(p.rate||'').trim()==='' ? null : num4(p.rate); }
-    if (a.type==='Property') { a.share = String(p.share||'').trim()==='' ? 100 : num(p.share); if (a.mortgage===undefined) a.mortgage = null; }
+    if (a.type==='Property') { a.share = String(p.share||'').trim()==='' ? 100 : num(p.share); a.bought = String(p.bought||'').trim(); if (a.mortgage===undefined) a.mortgage = null; }
     try { checkAccount(a, cur);
       if (a.type==='Property' && !(a.share > 0 && a.share <= 100)) throw new Error('A share between 0 and 100.');
+      if (a.type==='Property' && !/^\d{4}-\d{2}-\d{2}$/.test(a.bought)) throw new Error('The day it was bought.');
       if (a.type==='PEL') { if (!/^\d{4}-\d{2}-\d{2}$/.test(a.opened)) throw new Error('The day the plan was opened.'); if (a.rate!=null && !(a.rate>=0)) throw new Error('A rate.'); }
       if (a.type==='Fund') { for (const f of funds) { if (!f.name) throw new Error('Every fund needs a name.'); if (funds.filter((x)=>same(x.name, f.name)).length>1) throw new Error('"'+f.name+'" twice.'); } }
     } catch (e) { alert(e.message); render(); return; }
