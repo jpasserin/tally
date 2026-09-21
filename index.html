@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=61"></script>
+<script src="backend.js?v=62"></script>
 <script>
-const APP_VERSION="61";
+const APP_VERSION="62";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1089,9 +1089,12 @@ function warnings(){
     if (c && ['Necessity','Optional','Misc'].includes(c.type) && o.amount > 0) add('creditspend', 'Credit in a spending category', o, a, c.name);
     if (c && c.type==='Income' && o.amount < 0) add('debitincome', 'Debit in an income category', o, a, c.name);
     /* a transfer: named after another account, or tagged x - the other side
-       should exist, close in date, opposite in sign */
+       should exist, close in date, opposite in sign. Money filed under a
+       Savings category is going into a fund or a plan the cash side of the
+       records does not keep: it needs no other side. */
     const other = store.accounts.find((b)=>b.key!==a.key && (same(b.key, o.name) || same(b.key, o.note||'')));
-    if (other || same(o.tag, 'x')) {
+    const savings = tags.some((t)=>(catOfTag(t)||{}).type==='Savings');
+    if ((other || same(o.tag, 'x')) && !savings) {
       const pool = other ? opsOf(other.key) : all.filter((x)=>x.a.key!==a.key).map((x)=>x.o);
       const match = pool.some((p)=>daysApart(p.date, o.date) <= 5 && Math.sign(p.amount) === -Math.sign(o.amount)
         && (Math.abs(Math.abs(p.amount) - Math.abs(o.amount)) < 0.005 || (other && other.currency!==a.currency)));
@@ -1123,7 +1126,7 @@ const WARN_ABOUT = [
   ['Tag in no category', 'The operation carries a tag no category claims, so it counts nowhere.'],
   ['No tag', 'The operation has no tag at all.'],
   ['Possible double entry', 'Two or more operations in one account with the same date, amount and name.'],
-  ['Transfer with one side', 'Named after another account, or tagged x, with no opposite amount in that account within five days.'],
+  ['Transfer with one side', 'Named after another account, or tagged x, with no opposite amount in that account within five days. Money tagged in a Savings category is left alone.'],
   ['Tagged unlike the same payee elsewhere', 'This payee is usually tagged another way.'],
   ['Credit in a spending category', 'Money in, under a Necessity, Optional or Misc tag - a refund, or a slip. Transfers (x) are not counted.'],
   ['Debit in an income category', 'Money out, under an Income tag.'],
