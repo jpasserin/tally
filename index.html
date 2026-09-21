@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=76"></script>
+<script src="backend.js?v=77"></script>
 <script>
-const APP_VERSION="76";
+const APP_VERSION="77";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -510,6 +510,7 @@ function configTab(){
 const DISMISSED_HEADERS = ['Key','Kind','Account','Name','Date','Amount'];
 function dismissedTab(){
   const rows = (store.dismissed||[]).map((k)=>{ const i = k.indexOf('|'); const kind = k.slice(0,i), id = k.slice(i+1);
+    if (kind==='noask') { const [w, name, tag] = id.split('|'); return [k, 'noask', '', name, tag||'', w]; }   /* a payee and tag not to ask about again */
     const a = accountOfOp(id) || store.accounts.find((x)=>x.key===id) || null; const o = a ? opsOf(a.key).find((x)=>x.id===id) : null;
     return [k, kind, a ? a.key : '', o ? o.name : '', o ? o.date : '', o ? o.amount : '']; });
   return { name:'Dismissed', index:4, headers:DISMISSED_HEADERS, rows };
@@ -1318,7 +1319,8 @@ function moreLikeThese(kind, items){
   if (kind!=='creditspend' && kind!=='debitincome' && kind!=='inconsistent') return [];
   const pair = (o) => o.name.trim().toLowerCase() + '|' + String(o.tag||'').trim().toLowerCase();
   const names = new Set(items.filter(({o})=>o && o.name.trim()).map(({o})=>o.name.trim().toLowerCase()));
-  const pairs = new Set(items.filter(({o})=>o && o.name.trim()).map(({o})=>pair(o)));
+  /* a payee and tag once answered "no" to is not asked about again */
+  const pairs = new Set(items.filter(({o})=>o && o.name.trim()).map(({o})=>pair(o)).filter((k)=>!(store.dismissed||[]).includes('noask|'+kind+'|'+k)));
   const done = new Set(items.map(({o})=>o && o.id));
   if (!pairs.size) return [];
   /* the payee's habit, over every year */
@@ -1337,14 +1339,20 @@ function moreLikeThese(kind, items){
   return out;
 }
 function okMoreSheet(p){
-  /* one line per payee, however it was spelled */
-  const byName = {}, label = {}, tagOf = {}; for (const {o} of p.more) { const n = o.name.trim().toLowerCase() + '|' + String(o.tag||'').trim().toLowerCase(); byName[n] = (byName[n]||0) + 1; label[n] = label[n] || o.name.trim(); tagOf[n] = tagOf[n] || o.tag; }
+  /* one line per payee and tag, however the payee was spelled, with the years it reaches */
+  const byName = {}, label = {}, tagOf = {}, yrs = {};
+  for (const {o} of p.more) { const n = o.name.trim().toLowerCase() + '|' + String(o.tag||'').trim().toLowerCase(); byName[n] = (byName[n]||0) + 1; label[n] = label[n] || o.name.trim(); tagOf[n] = tagOf[n] || o.tag;
+    (yrs[n] = yrs[n] || new Set()).add(o.date.slice(0,4)); }
+  const all = [...new Set(p.more.map(({o})=>o.date.slice(0,4)))].sort();
+  const Y = String(theYear());
   return `
   <div class="sheetwrap">
     <div class="scrim" data-okmoreclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
-      <h3>Also correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length} more, any year</span></h3>
-      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span></span><span class="v">${byName[n]}</span></div>`).join('')}</div>
+      <h3>Also correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length} more · ${all.join(', ')}</span></h3>
+      ${all.some((y)=>y!==Y)?`<div class="hint" style="margin:0 0 6px">Some are in other years than ${Y}.</div>`:''}
+      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span></span>
+        <span style="text-align:right"><span class="v">${byName[n]}</span><div class="muted" style="font-size:11px">${[...yrs[n]].sort().map((y)=>y===Y?y:'<b>'+y+'</b>').join(', ')}</div></span></div>`).join('')}</div>
       <div class="foot"><button class="btn close" data-okmoreclose="1">Close</button><button class="btn primary" data-okmoreall="1">Mark all correct</button></div>
     </div>
   </div>`;
@@ -2973,7 +2981,10 @@ function wire(){
     if (more.length) state.page={ kind:'okmore', warnKind:state.warnKind, more, fresh:true };
     if (touched.size) commit(...touched); else render();
     if (state.page && state.page.kind==='okmore') state.page.fresh=false; });
-  document.querySelectorAll('[data-okmoreclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-okmoreclose]').forEach((el)=>el.onclick=()=>{ const p=state.page;
+    /* "no": remembered for these payees and tags, so the question is not asked again */
+    if (p && p.kind==='okmore') { for (const {o} of p.more) { const k = 'noask|'+p.warnKind+'|'+o.name.trim().toLowerCase()+'|'+String(o.tag||'').trim().toLowerCase(); if (!store.dismissed.includes(k)) store.dismissed.push(k); } state.page=null; commit('Dismissed'); return; }
+    state.page=null; render(); });
   document.querySelectorAll('[data-okmoreall]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p || p.kind!=='okmore') return;
     for (const {o,a} of p.more) { const k = dismissKey(p.warnKind, o, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
     state.page=null; commit('Dismissed'); });
