@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=59"></script>
+<script src="backend.js?v=60"></script>
 <script>
-const APP_VERSION="59";
+const APP_VERSION="60";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -728,26 +728,38 @@ const kfmt1 = (v) => { const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(
 const kfmt = (v) => { const a = Math.abs(v); const t = a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e4 ? Math.round(v/1e3)+'k' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; return t; };
 /* by: each currency's share in the SHOWN currency (for the bar); native: the
    same money as it actually sits, in its own currency (for the legend). */
+const NW_CATS = ['Cash','Savings','Property'];
+const CAT_COLORS = Object.fromEntries(ACCOUNT_CATEGORIES);
 function netWorthAt(year){
   const m = yearMonth(year);
-  let total = 0; const by = { USD:0, EUR:0, AUD:0 }, native = { USD:0, EUR:0, AUD:0 };
+  let total = 0; const by = { USD:0, EUR:0, AUD:0 }, native = { USD:0, EUR:0, AUD:0 }, cat = { Cash:0, Savings:0, Property:0 };
   for (const a of counted()) { const b = balanceAt(a, year); native[a.currency] += b;
-    const v = conv(b, a.currency, store.cur, m); if (v==null) continue; total += v; by[a.currency] += v; }
-  return { total: Math.round(total*100)/100, by, native };
+    const v = conv(b, a.currency, store.cur, m); if (v==null) continue; total += v; by[a.currency] += v; cat[a.category] = (cat[a.category]||0) + v; }
+  return { total: Math.round(total*100)/100, by, native, cat };
+}
+/* A bar split by share, each part in its colour, the share written when it fits. */
+function shareBar(parts){
+  const pos = parts.filter(([,v])=>v>0);
+  const sum = pos.reduce((t,[,v])=>t+v, 0);
+  if (!(sum>0)) return '';
+  return `<div class="pbar">${pos.map(([,v,col])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${col}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>`;
 }
 function tabSummary(){
   const Y = theYear();
   const nw = netWorthAt(Y);
-  const pos = CURRENCIES.map((c)=>[c, Math.max(0, nw.by[c])]).filter(([,v])=>v>0);
-  const sum = pos.reduce((t,[,v])=>t+v, 0);
+  const curBar = shareBar(CURRENCIES.map((c)=>[c, nw.by[c], CUR_COLORS[c]]));
+  const catBar = shareBar(NW_CATS.map((c)=>[c, nw.cat[c], CAT_COLORS[c]]));
+  const dot = (col) => `<i style="background:${col};width:9px;height:9px;border-radius:50%"></i>`;
   const p = state.page;
   return (p && p.kind==='nwexplain' ? nwExplainSheet(Y, nw) : '') + `
   <div class="card">
     <h2>Net worth <button class="qbtn" style="position:static" data-nwexplain="1">?</button></h2>
     <div class="hero ${nw.total<0?'neg':''}">${money(nw.total, store.cur)}</div>
-    ${sum>0 ? `
-    <div class="pbar">${pos.map(([c,v])=>{ const pc = v/sum*100; return `<span style="width:${pc.toFixed(2)}%;background:${CUR_COLORS[c]}">${pc>=8?Math.round(pc)+'%':''}</span>`; }).join('')}</div>
-    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c} (${money(nw.native[c], c)})</span>`).join('')}</div>`
+    ${curBar ? `
+    ${curBar}
+    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span>${dot(CUR_COLORS[c])}${c} (${money(nw.native[c], c)})</span>`).join('')}</div>
+    ${catBar}
+    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${NW_CATS.map((c)=>`<span>${dot(CAT_COLORS[c])}${c} (${money(nw.cat[c], store.cur)})</span>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>
   ${nwByMonthCard(Y)}`;
@@ -772,25 +784,37 @@ function nwExplainSheet(Y, nw){
           <span style="text-align:right"><span class="v ${b<0?'neg':''}">${money(b, a.currency)}</span>${a.currency!==store.cur&&v!=null?`<div class="muted" style="font-size:11px">${money(v, store.cur)}</div>`:''}</span></div>`; }).join('')}
       </div>`).join('')}
       <div class="row" style="border:0"><span class="k"><b>Total</b></span><span class="v"><b>${money(nw.total, store.cur)}</b></span></div>
+      ${NW_CATS.map((c)=>({ c, list: counted().filter((a)=>a.category===c) })).filter((g)=>g.list.length).map((g)=>`
+      <div class="rows">
+        <div class="row"><span class="k" style="display:flex;align-items:center;gap:8px"><span class="dot" style="background:${CAT_COLORS[g.c]}"></span><b>${g.c}</b></span>
+          <span class="v">${money(nw.cat[g.c], store.cur)}</span></div>
+        ${g.list.map((a)=>{ const v = conv(balanceAt(a, Y), a.currency, store.cur, m); return `
+        <div class="row" style="padding-left:17px"><span class="k">${esc(a.key)}${a.closed?' <span class="muted" style="font-size:11px">closed</span>':''}</span>
+          <span class="v ${v<0?'neg':''}">${v==null?'—':money(v, store.cur)}</span></div>`; }).join('')}
+      </div>`).join('')}
       <div class="foot stick"><button class="btn primary" style="flex:1" data-nwclose="1">Close</button></div>
     </div>
   </div>`;
 }
 /* Net worth at the end of each month of the year, each at its own rate;
    months still to come are left empty. */
+/* Cash, savings and property stacked in each month's column - or one of
+   them alone, from the buttons top right. */
 function nwByMonthCard(Y){
   const now = new Date().toISOString().slice(0,7);
   const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0'));
-  const vals = months.map((m)=>{
+  const pick = NW_CATS.includes(state.nwCat) ? state.nwCat : 'all';
+  const cats = pick==='all' ? NW_CATS : [pick];
+  const series = cats.map((c)=>({ color:CAT_COLORS[c], values: months.map((m)=>{
     if (m > now) return 0;
     let total = 0;
-    for (const a of counted()) { const v = conv(valueAt(a, m+'-31'), a.currency, store.cur, m); if (v!=null) total += v; }
-    return Math.round(total);
-  });
+    for (const a of counted()) { if (a.category!==c) continue; const v = conv(valueAt(a, m+'-31'), a.currency, store.cur, m); if (v!=null) total += v; }
+    return Math.round(total); }) }));
+  const any = series.some((sr)=>sr.values.some((v)=>v));
   return `
   <div class="card">
-    <h2>Net worth by month <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}</span></h2>
-    ${vals.some((v)=>v) ? columns({ labels:MON, values:vals, color:'#3b82f6' }) : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+    <h2>Net worth by month <span class="chips" style="margin-left:auto">${[['all','All']].concat(NW_CATS.map((c)=>[c,c])).map(([k,l])=>`<button class="chip ${pick===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nwcat="${k}">${l}</button>`).join('')}</span></h2>
+    ${any ? columns({ labels:MON, series }) : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
 
@@ -1604,7 +1628,7 @@ function accountPage(a){
   const p = state.page;
   const Y = theYear();
   const f = opFilter();
-  const yearOps = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y));
+  const yearOps = abOps(a, Y);
   const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
@@ -1637,12 +1661,25 @@ function balancePoints(a, Y){
   const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
   return [{ label:'1 Jan', values:{ bal: valueAt(a, (Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ bal: valueAt(a, m+'-31') } })));
 }
-function balanceCard(a, Y){
+/* The slider's two thumbs, kept within the points; point 0 is the year's
+   start, point i the end of month i. */
+function abBounds(a, Y){
   const pts = balancePoints(a, Y);
   const n = pts.length;
-  if (n < 2) return '';
   if (state.abHi==null || state.abHi > n-1 || state.abHi < 1) state.abHi = n-1;
   if (state.abLo==null || state.abLo >= state.abHi) state.abLo = 0;
+  return { pts, lo:state.abLo, hi:state.abHi };
+}
+/* The year's operations inside the months the slider shows. */
+function abOps(a, Y){
+  const { pts, lo, hi } = abBounds(a, Y);
+  const from = Math.max(1, lo), to = hi;
+  return opsOf(a.key).filter((o)=>{ if (o.date.slice(0,4)!==String(Y)) return false; const m = +o.date.slice(5,7); return pts.length < 2 || (m >= from && m <= to); });
+}
+function balanceCard(a, Y){
+  const { pts } = abBounds(a, Y);
+  const n = pts.length;
+  if (n < 2) return '';
   return `
   <div class="card">
     <h2>Balance <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)} · ${Y}</span></h2>
@@ -1855,20 +1892,32 @@ function rangePlot(pts, series, lo, hi){
 /* REUSABLE. Columns, one per label, in one colour; the selected ones white,
    their labels too. The hit area is the whole column height, label included,
    so a month with almost nothing in it is still a target. */
-function columns({ labels, values, color, keys, dataAttr, selected }){
+function columns({ labels, values, color, keys, dataAttr, selected, series }){
   const W=352, H=150, T=14, B=16;
   const ih=H-T-B, n=labels.length||1;
-  const max=Math.max(1,...values.map((v)=>Math.abs(v)));
+  /* one colour with `values`, or `series` [{values,color}] stacked; a part
+     below zero is not drawn but still counts in the figure on top */
+  const stack = series || [{ values, color }];
+  const totals = labels.map((_,i)=>stack.reduce((t,sr)=>t+(sr.values[i]||0), 0));
+  const max=Math.max(1,...labels.map((_,i)=>Math.max(Math.abs(totals[i]), stack.reduce((t,sr)=>t+Math.max(0, sr.values[i]||0), 0))));
   /* wide columns, thin gaps; the value above each in a small figure with one decimal */
   const step=W/n, bw=Math.min(30, step*0.84);
   const sel = new Set(selected||[]);
   let g=`<line class="gl" x1="0" y1="${T+ih}" x2="${W}" y2="${T+ih}"/>`;
   labels.forEach((lab,i)=>{
-    const v=Math.abs(values[i]||0), cx=step*i+step/2, h=v/max*ih, y=T+ih-h;
+    const cx=step*i+step/2;
     const on = keys && sel.has(keys[i]);
     if (keys && dataAttr) g+=`<rect x="${(cx-step/2).toFixed(1)}" y="0" width="${step.toFixed(1)}" height="${H}" fill="transparent" class="bar" ${dataAttr}="${esc(keys[i])}"/>`;
-    if (h>0.4) g+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,h).toFixed(1)}" rx="3" fill="${on?'#fff':color}" pointer-events="none"/>`;
-    if (v > max*0.06) g+=`<text class="vlab" x="${cx.toFixed(1)}" y="${(y-3.5).toFixed(1)}" text-anchor="middle" pointer-events="none">${kfmt1(v)}</text>`;
+    let top = T+ih;
+    if (series) {
+      for (const sr of stack) { const v = Math.max(0, sr.values[i]||0), h = v/max*ih; if (h>0.4) { top -= h;
+        g+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${top.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(1,h-1).toFixed(1)}" rx="2" fill="${sr.color}" pointer-events="none"/>`; } }
+    } else {
+      const v=Math.abs(values[i]||0), h=v/max*ih, y=T+ih-h;
+      if (h>0.4) { top = y; g+=`<rect x="${(cx-bw/2).toFixed(1)}" y="${y.toFixed(1)}" width="${bw.toFixed(1)}" height="${Math.max(2,h).toFixed(1)}" rx="3" fill="${on?'#fff':color}" pointer-events="none"/>`; }
+    }
+    const v = Math.abs(totals[i]);
+    if (v > max*0.06) g+=`<text class="vlab" x="${cx.toFixed(1)}" y="${(top-3.5).toFixed(1)}" text-anchor="middle" pointer-events="none">${kfmt1(v)}</text>`;
     g+=`<text class="tick${on?' sel':''}" x="${cx.toFixed(1)}" y="${H-4}" text-anchor="middle" pointer-events="none">${esc(lab)}</text>`;
   });
   return `<svg class="chart" viewBox="0 0 ${W} ${H}" role="img">${g}</svg>`;
@@ -2319,7 +2368,8 @@ function wire(){
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
   document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; render(); });
   if (state.tab==='account' && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
-    if (a && !isFund(a)) wireRangeChart('ab', balancePoints(a, theYear()), AB_SERIES, ()=>({ lo:state.abLo, hi:state.abHi }), (lo,hi)=>{ state.abLo=lo; state.abHi=hi; }); }
+    /* the months shown on the chart are the months listed under it */
+    if (a && !isFund(a)) wireRangeChart('ab', balancePoints(a, theYear()), AB_SERIES, ()=>({ lo:state.abLo, hi:state.abHi }), (lo,hi)=>{ state.abLo=lo; state.abHi=hi; }, ()=>refreshOps()); }
   document.querySelectorAll('[data-accback]').forEach((el)=>el.onclick=()=>{ state.account=null; state.page=null; state.opf=null; render(); });
 
   /* the operations filter */
@@ -2330,7 +2380,7 @@ function wire(){
     const l=document.getElementById('opsList'), c=document.getElementById('opCount');
     const a=acctNow();
     if (a && state.tab==='account' && sub('account')==='accounts') {
-      const ops = filterOps(opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(theYear())), F);
+      const ops = filterOps(abOps(a, theYear()), F);
       if (l) l.innerHTML = opRows(a, ops);
       if (c) c.textContent = opCountText(a, ops, F);
     } else {
@@ -2615,6 +2665,7 @@ function wire(){
     state.catMonths = state.catMonths.includes(m) ? state.catMonths.filter((x)=>x!==m) : [...state.catMonths, m]; render(); });
   document.querySelectorAll('[data-nwexplain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'nwexplain', fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-nwclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-nwcat]').forEach((el)=>el.onclick=()=>{ state.nwCat=el.dataset.nwcat; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
