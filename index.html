@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=81"></script>
+<script src="backend.js?v=82"></script>
 <script>
-const APP_VERSION="81";
+const APP_VERSION="82";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2656,9 +2656,20 @@ function settingsData(){
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
     </div>`
-    : `<button class="btn" data-import="1"${LK()}>Import a file</button>`}
+    : `<div class="btnrow"><button class="btn" data-import="1"${LK()}>Import a file</button><button class="btn" data-export="1">Export</button></div>`}
     ${state.imp?`<div class="status ${state.imp.bad?'bad':'ok'}">${esc(state.imp.msg)}</div>`:''}
   </div>`;
+}
+/* Everything the app holds, as one JSON file, for a look from outside - the
+   backend url and token stay here. */
+function exportText(){
+  const { backend, ...rest } = store;
+  return JSON.stringify({ kind:'tally-export', app:APP_VERSION, exported:new Date().toISOString(), ...rest }, null, 1);
+}
+function exportFile(){
+  const blob = new Blob([exportText()], { type:'application/json' });
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tally-export-'+TODAY()+'.json';
+  document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
 /* Whether the page runs as an installed app rather than a browser tab. */
@@ -2849,6 +2860,7 @@ function wire(){
   /* Locked: the app reads the sheet and never writes it. Edits stay here and
      go out when the lock comes off. */
   document.querySelectorAll('[data-lock]').forEach((el)=>el.onclick=()=>{ store.locked=!store.locked; if (store.locked) { state.page=null; state.sel=[]; state.bulk=null; } save(); state.sync=null; render(); if (!store.locked && dirty().length) pushSoon(); });
+  document.querySelectorAll('[data-export]').forEach((el)=>el.onclick=()=>{ try { exportFile(); state.imp={ msg:'Exported.' }; } catch (e) { state.imp={ msg:e.message, bad:true }; } render(); });
   document.querySelectorAll('[data-import]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return;
     const inp=document.getElementById('fImport'); if (!inp) return;
