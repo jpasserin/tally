@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=77"></script>
+<script src="backend.js?v=78"></script>
 <script>
-const APP_VERSION="77";
+const APP_VERSION="78";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -608,7 +608,11 @@ function importFile(j){
        adjustment on 1 January makes the balances follow the books - it can
        be deleted like any operation. */
     if (known && !isFund(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length && opsOf(known.key).some((o)=>o.date < year+'-01-01')) {
-      const diff = r2(+a.opening - valueAt(known, (year-1)+'-12-31'));
+      /* what the app holds from the earlier books: everything but what this file brings (a re-import
+         brings the same ids) and its own earlier adjustment - whatever the dates say */
+      const mine = new Set(((j.ops && j.ops[a.key]) || []).map((o)=>String(o.id))); mine.add(year+'-'+known.key+'-opening');
+      const before = r2((+known.opening||0) + opsOf(known.key).filter((o)=>!mine.has(o.id)).reduce((t,o)=>t+(o.amount||0), 0));
+      const diff = r2(+a.opening - before);
       if (Math.abs(diff) >= 0.01) {
         const id = year+'-'+known.key+'-opening', list = opsOf(known.key);
         const adj = { id, date:year+'-01-01', name:'Opening adjustment', amount:diff, note:'the '+year+' book opens at '+money(+a.opening, known.currency), tag:'x', splits:[], budget:'', oneoff:true };
