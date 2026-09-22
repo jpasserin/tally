@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=104"></script>
+<script src="backend.js?v=105"></script>
 <script>
-const APP_VERSION="104";
+const APP_VERSION="105";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2093,10 +2093,35 @@ function propYears(a){
   if (a.mortgage && a.mortgage.start) { const m = mortgageAt(a.mortgage, '9999-12-31', true); for (let y = +a.mortgage.start.slice(0,4); y <= Math.min(THIS_YEAR, +m.end.slice(0,4)); y++) ys.add(y); }
   return [...ys].filter((y)=>y <= THIS_YEAR).sort((x,y)=>y-x);
 }
+/* One month's costs, the same shape as a year's. */
+function propCostsMonth(a, m){
+  const ops = opsOf(a.key).filter((o)=>o.kind && o.kind!=='Value' && o.date.slice(0,7)===m);
+  const by = {}; for (const [k] of PROP_KINDS) by[k] = 0;
+  for (const o of ops) by[o.kind in by ? o.kind : 'Other'] += -(o.amount||0);
+  const y = +m.slice(0,4), mo = +m.slice(5,7);
+  const before = mo===1 ? (y-1)+'-12-31' : y+'-'+String(mo-1).padStart(2,'0')+'-31';
+  const m0 = mortgageAt(a.mortgage, before, true), m1 = mortgageAt(a.mortgage, m+'-31', true);
+  const interest = m1 ? r2(m1.interest - (m0 ? m0.interest : 0)) : 0;
+  const total = r2(interest + Object.values(by).reduce((t,v)=>t+v, 0));
+  return { y:m, interest, by, total, mine:r2(total*propShare(a)) };
+}
+const viewChips = (attr, cur) => `<span class="chips" style="margin-left:auto"><button class="chip ${cur!=='all'?'on':''}" style="padding:2px 9px;font-size:11.5px" ${attr}="year">This year</button><button class="chip ${cur==='all'?'on':''}" style="padding:2px 9px;font-size:11.5px" ${attr}="all">All</button></span>`;
+/* The costs table, by year or by month; a column with nothing in it is left out. */
+function costsTable(a, rows, labelOf){
+  const kinds = PROP_KINDS.filter(([k])=>rows.some((r)=>r.by[k]));
+  const hasInt = rows.some((r)=>r.interest), yours = propShare(a)!==1;
+  const cell = (v) => `<td>${v ? money(v, a.currency) : '—'}</td>`;
+  return `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>${labelOf.head}</th>${hasInt?'<th>Interest</th>':''}${kinds.map(([k,l])=>`<th>${k==='Tax'?'Tax':l}</th>`).join('')}<th>Total</th>${yours?'<th>Yours</th>':''}</tr></thead>
+      <tbody>${rows.map((r)=>`<tr${r.total?'':' class="muted"'}><td>${labelOf.row(r)}</td>${hasInt?cell(r.interest):''}${kinds.map(([k])=>cell(r.by[k])).join('')}<td><b>${money(r.total, a.currency)}</b></td>${yours?`<td><b>${money(r.mine, a.currency)}</b></td>`:''}</tr>`).join('')}</tbody>
+    </table></div>`;
+}
 function propSummary(a, Y){
   const vals = opsOf(a.key).filter((o)=>o.kind==='Value').sort((x,y)=>x.date<y.date?1:-1);
-  const rows = propYears(a).map((y)=>propCosts(a, y)).filter((r)=>r.total);
-  const cell = (v) => `<td>${v ? money(v, a.currency) : '—'}</td>`;
+  const all = state.pcView==='all';
+  const now = TODAY().slice(0,7);
+  const rows = all ? propYears(a).map((y)=>propCosts(a, y)).filter((r)=>r.total)
+    : MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now && m >= (a.bought||'').slice(0,7)).map((m)=>propCostsMonth(a, m));
   return `
   <div class="card">
     <h2>Value <span class="fbar"><span class="muted">${vals.length}</span><button class="gbtn" data-pvalnew="1"${LK()}>+</button></span></h2>
@@ -2106,11 +2131,8 @@ function propSummary(a, Y){
     : `<div class="hint" style="margin-top:0">No valuation yet.</div>`}
   </div>
   <div class="card">
-    <h2>Costs by year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
-    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Year</th><th>Interest</th>${PROP_KINDS.map(([k,l])=>`<th>${k==='Tax'?'Tax':l}</th>`).join('')}<th>Total</th>${propShare(a)!==1?'<th>Yours</th>':''}</tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${r.y}</td>${cell(r.interest)}${PROP_KINDS.map(([k])=>cell(r.by[k])).join('')}<td><b>${money(r.total, a.currency)}</b></td>${propShare(a)!==1?`<td><b>${money(r.mine, a.currency)}</b></td>`:''}</tr>`).join('')}</tbody>
-    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+    <h2>Costs ${all?'by year':'in '+Y}${viewChips('data-pcview', all?'all':'year')}</h2>
+    ${rows.length ? costsTable(a, rows, all ? { head:'Year', row:(r)=>r.y } : { head:'Month', row:(r)=>MON[+r.y.slice(5,7)-1] }) : `<div class="hint" style="margin-top:0">Nothing ${all?'yet':'in '+Y}.</div>`}
   </div>`;
 }
 function propMortgage(a, Y){
@@ -2131,13 +2153,20 @@ function propMortgage(a, Y){
     <div class="kpis" style="margin-top:8px">${box('Payment', money(now.payment, a.currency)+'/mo')}${box('Paid so far', money(now.paid, a.currency))}${box('Of it interest', money(now.interest, a.currency))}</div>
     <div class="kpis" style="margin-top:6px">${box('Repaid', money(now.repaid, a.currency))}${box('Payments', now.months+' / '+now.of)}${box('Your part owed', money(r2(now.owed*propShare(a)), a.currency))}</div>
   </div>
+  ${(function(){ const all = state.pmView==='all';
+    const line = (label, b, p, muted) => `<tr${muted?' class="muted"':''}><td>${label}</td><td>${money(r2(b.paid-p.paid), a.currency)}</td><td>${money(r2(b.interest-p.interest), a.currency)}</td><td>${money(r2(b.repaid-p.repaid), a.currency)}</td><td><b>${money(b.owed, a.currency)}</b></td></tr>`;
+    const none = { paid:0, interest:0, repaid:0 };
+    const body = all ? yrs.map((y)=>line(y, at(y), at(y-1) || none, y > THIS_YEAR))
+      : MON.map((mo,i)=>{ const mm = Y+'-'+String(i+1).padStart(2,'0'); const before = i===0 ? (Y-1)+'-12-31' : Y+'-'+String(i).padStart(2,'0')+'-31';
+          return line(mo, mortgageAt(m, mm+'-31', true), mortgageAt(m, before, true) || none, mm > TODAY().slice(0,7)); });
+    return `
   <div class="card">
-    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    <h2>${all?'By year':'In '+Y}${viewChips('data-pmview', all?'all':'year')}</h2>
     <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Year</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Owed</th></tr></thead>
-      <tbody>${yrs.map((y)=>{ const b = at(y), p = at(y-1) || { paid:0, interest:0, repaid:0 }; return `<tr${y>THIS_YEAR?' class="muted"':''}><td>${y}</td><td>${money(r2(b.paid-p.paid), a.currency)}</td><td>${money(r2(b.interest-p.interest), a.currency)}</td><td>${money(r2(b.repaid-p.repaid), a.currency)}</td><td><b>${money(b.owed, a.currency)}</b></td></tr>`; }).join('')}</tbody>
+      <thead><tr><th>${all?'Year':'Month'}</th><th>Paid</th><th>Interest</th><th>Principal</th><th>Owed</th></tr></thead>
+      <tbody>${body.join('')}</tbody>
     </table></div>
-  </div>`;
+  </div>`; })()}`;
 }
 function propExpenses(a, Y){
   const ops = opsOf(a.key).filter((o)=>o.kind && o.kind!=='Value' && o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
@@ -3356,6 +3385,8 @@ function wire(){
   /* a property: its views, valuations, expenses and mortgage */
   const prop = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isProp(a) ? a : null; };
   document.querySelectorAll('[data-pview]').forEach((el)=>el.onclick=()=>{ state.pview=el.dataset.pview; state.page=null; render(); });
+  document.querySelectorAll('[data-pcview]').forEach((el)=>el.onclick=()=>{ state.pcView=el.dataset.pcview; render(); });
+  document.querySelectorAll('[data-pmview]').forEach((el)=>el.onclick=()=>{ state.pmView=el.dataset.pmview; render(); });
   const readP = (ids) => { const p=state.page; for (const [id,k] of ids) { const e=document.getElementById(id); if (e) p[k]=e.value; } p.closeArm=false; p.delArm=false; };
   const PV = [['pvDate','date'],['pvAmount','amount'],['pvNote','note']], PE = [['peDate','date'],['peAmount','amount'],['peName','name'],['peNote','note']], PM = [['pmPrincipal','principal'],['pmRate','rate'],['pmYears','years'],['pmStart','start']];
   const openP = (kind, cur, id) => { state.page={ kind, id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
