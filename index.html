@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=102"></script>
+<script src="backend.js?v=103"></script>
 <script>
-const APP_VERSION="102";
+const APP_VERSION="103";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -676,12 +676,18 @@ function importFile(j){
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
         ...(year && a.type!=='Fund' && a.type!=='Property' && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
-        ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}) });
+        ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}),
+        ...(a.type==='Property' ? { share: isFinite(+a.share) && +a.share > 0 ? +a.share : 100, bought: /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '',
+          mortgage: a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null } : {}) });
       accounts++;
     } else if (isPel(known)) {
       /* a plan's terms, when the book names them and the app does not know them yet */
       if (!known.opened && /^\d{4}-\d{2}-\d{2}/.test(a.opened||'')) known.opened = a.opened.slice(0,10);
       if (known.rate==null && isFinite(+a.rate)) known.rate = +a.rate;
+    } else if (isProp(known)) {
+      /* a house's terms, the same way */
+      if (!known.bought && /^\d{4}-\d{2}-\d{2}/.test(a.bought||'')) known.bought = a.bought.slice(0,10);
+      if (!known.mortgage && a.mortgage && +a.mortgage.principal > 0) known.mortgage = { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') };
     }
     const acc = store.accounts.find((x)=>same(x.key, a.key)); const key = acc.key;
     /* a later year can close an account; nothing reopens one */
@@ -697,6 +703,7 @@ function importFile(j){
         tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount })),
         budget:String(o.budget||''), oneoff:!!o.oneoff };
       if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
+      else if (o.kind) clean.kind=String(o.kind);      /* a property's valuation or cost */
       const i = list.findIndex((x)=>x.id===clean.id);
       /* An operation already here was maybe worked on since: its tag, splits,
          budget, one-off mark, name and description are yours and stay. The
@@ -2196,7 +2203,7 @@ function pmortSheet(p, a){
       </div>
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Years</label><input id="pmYears" inputmode="decimal" value="${esc(p.years)}" style="text-align:right"></div>
-        <div class="field" style="flex:1"><label>First payment</label><input id="pmStart" type="date" value="${esc(p.start)}"></div>
+        <div class="field" style="flex:1"><label>Started · paid monthly from the month after</label><input id="pmStart" type="date" value="${esc(p.start)}"></div>
       </div>
       ${a.mortgage?`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-pmortdelete="1">${p.delArm?'Remove?':'Remove'}</button>`:''}
       <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-pmortclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-pmortsave="1">Save</button></div>
