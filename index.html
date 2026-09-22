@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=94"></script>
+<script src="backend.js?v=95"></script>
 <script>
-const APP_VERSION="94";
+const APP_VERSION="95";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1298,7 +1298,7 @@ function computeWarnings(){
   const judged = all.filter(({o})=>o.date.slice(0,4)===Y || (+Y===THIS_YEAR && o.date > today));
   for (const {o,a} of judged) {
     const tags = opTags(o);
-    if (!o.tag) add('notag', 'No tag', o, a, 'no tag at all');
+    if (!o.tag) { const kn = nameTags(o.name); add('notag', 'No tag', o, a, kn.length ? 'suggested '+kn.join(', ') : 'no tag at all'); }
     for (const t of tags) if (t && !catOf(t)) add('unknown', 'Tag in no category', o, a, '"'+t+'" belongs to no category');
     if (o.date > today) add('future', 'Dated in the future', o, a, o.date);
     /* x marks a transfer between your own accounts: money in on one side is
@@ -1343,10 +1343,10 @@ function computeWarnings(){
 }
 /* Which fixes fit which kind. */
 const WARN_FIXES = {
-  unknown:['tag','file','ok'], notag:['tag','ok'], inconsistent:['usual','tag','ok'], dup:['delete','ok'],
+  unknown:['tag','file','ok'], notag:['suggest','tag','ok'], inconsistent:['usual','tag','ok'], dup:['delete','ok'],
   transfer:['ok','tag','delete'], creditspend:['ok','tag','delete'], debitincome:['ok','tag','delete'], future:['ok','delete'], noowner:['owner'],
 };
-const FIX_LABEL = { tag:'Tag', file:'File', ok:'Mark correct', usual:'Use usual', delete:'Delete', owner:'Owner' };
+const FIX_LABEL = { tag:'Tag', file:'File', ok:'Mark correct', usual:'Use usual', delete:'Delete', owner:'Owner' , suggest:'Use suggestion' };
 const WARN_ABOUT = [
   ['Tag in no category', 'The operation carries a tag no category claims, so it counts nowhere.'],
   ['No tag', 'The operation has no tag at all.'],
@@ -3458,6 +3458,8 @@ function wire(){
       else if (fix==='delete' && o) { const gone = group ? group.slice(1).map((x)=>x.id) : [o.id];   /* a double: the copies go, the first stays */
         store.ops[a.key] = opsOf(a.key).filter((x)=>!gone.includes(x.id)); touched.add(a.key); }
       else if (fix==='usual' && o) { const u = usualTag(o.name); if (u && u!==o.tag) { o.tag=u; o.splits=o.splits.filter((sp)=>sp.tag!==u); touched.add(a.key); } }
+      /* No tag: the payee's first known tag, where it has one */
+      else if (fix==='suggest' && o) { const kn = nameTags(o.name); if (kn.length && !o.tag) { o.tag=kn[0]; o.splits=o.splits.filter((sp)=>sp.tag!==kn[0]); touched.add(a.key); } }
     }
     /* the same payee elsewhere in the same kind of finding: offer to put those aside too */
     const asks = ['creditspend','debitincome','inconsistent'].includes(state.warnKind);
