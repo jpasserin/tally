@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=103"></script>
+<script src="backend.js?v=104"></script>
 <script>
-const APP_VERSION="103";
+const APP_VERSION="104";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2108,7 +2108,7 @@ function propSummary(a, Y){
   <div class="card">
     <h2>Costs by year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
     ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Year</th><th>Interest</th>${PROP_KINDS.map(([k,l])=>`<th>${l}</th>`).join('')}<th>Total</th>${propShare(a)!==1?'<th>Yours</th>':''}</tr></thead>
+      <thead><tr><th>Year</th><th>Interest</th>${PROP_KINDS.map(([k,l])=>`<th>${k==='Tax'?'Tax':l}</th>`).join('')}<th>Total</th>${propShare(a)!==1?'<th>Yours</th>':''}</tr></thead>
       <tbody>${rows.map((r)=>`<tr><td>${r.y}</td>${cell(r.interest)}${PROP_KINDS.map(([k])=>cell(r.by[k])).join('')}<td><b>${money(r.total, a.currency)}</b></td>${propShare(a)!==1?`<td><b>${money(r.mine, a.currency)}</b></td>`:''}</tr>`).join('')}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
