@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=101"></script>
+<script src="backend.js?v=102"></script>
 <script>
-const APP_VERSION="101";
+const APP_VERSION="102";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -389,6 +389,9 @@ function fundSources(a, f, end){
     return { src:b.src, shares, value, paid:r2(b.paid), growth:r2(value - b.paid) }; })
     .filter((b)=>b.shares || b.value || b.paid).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src));
 }
+/* The fund a fund account opens on: the one worth most at the year's end. */
+const mainFund = (a, end) => fundsOf(a).slice().sort((x,y)=>fundAt(a, y, end).value - fundAt(a, x, end).value)[0] || null;
+const fundNowOf = (a) => fundsOf(a).find((x)=>x.name===state.fund) || mainFund(a, theYear() >= THIS_YEAR ? '9999-12-31' : theYear()+'-12-31');
 const fundValueAt = (a, end) => r2(fundsOf(a).reduce((t,f)=>t+fundAt(a, f, end).raw, 0));
 const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
@@ -1905,7 +1908,7 @@ function fundAccountPage(a){
   const p = state.page;
   const Y = theYear();
   const funds = fundsOf(a);
-  const f = funds.find((x)=>x.name===state.fund) || funds[0] || null;
+  const f = fundNowOf(a);
   const end = Y >= THIS_YEAR ? '9999-12-31' : Y+'-12-31';
   const now = new Date().toISOString().slice(0,7);
   const bal = fundValueAt(a, end);
@@ -1968,7 +1971,7 @@ function fundAccountPage(a){
     <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-fopnew="1"${LK()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap ${o.kind==='Price'?'muted':''}" data-fopedit="${esc(o.id)}">
-        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.kind||'—')}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}</div>
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.kind||'—')}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}${o.src && !(o.note||'').toLowerCase().includes(o.src.toLowerCase())?' <span class="muted" style="font-weight:400">· '+esc(o.src)+'</span>':''}</div>
           <div class="sub">${esc(o.date)}${o.shares!=null?' · '+o.shares.toLocaleString('en-US',{maximumFractionDigits:3})+' sh':''}${o.price!=null?' · '+o.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):''}</div></div>
         ${o.amount!=null?`<span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>`:`<span class="muted" style="font-size:11.5px">${o.shares!=null&&o.price!=null?money(r2(o.shares*o.price), a.currency):''}</span>`}
       </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
@@ -3263,7 +3266,7 @@ function wire(){
   document.querySelectorAll('[data-fundsel]').forEach((el)=>el.onclick=()=>{ state.fund=el.dataset.fundsel; state.page=null; state.fbLo=state.fbHi=null; render(); });
   document.querySelectorAll('[data-fmet]').forEach((el)=>el.onclick=()=>{ state.fmet=el.dataset.fmet; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
-    const f = a && isFund(a) ? (fundsOf(a).find((x)=>x.name===state.fund) || fundsOf(a)[0]) : null;
+    const f = a && isFund(a) ? fundNowOf(a) : null;
     if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
@@ -3303,7 +3306,7 @@ function wire(){
     state.account=null; state.page=null; commit(); });
 
   /* a fund's operations - the widget */
-  const fundNow = () => { const a=acct(); if (!a || !isFund(a)) return null; return fundsOf(a).find((x)=>x.name===state.fund) || fundsOf(a)[0] || null; };
+  const fundNow = () => { const a=acct(); if (!a || !isFund(a)) return null; return fundNowOf(a); };
   const readFop=()=>{ const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
     for (const [id,k] of [['fDate','date'],['fAmount','amount'],['fShares','shares'],['fPrice','price'],['fNote','note']]) { const v=g(id); if (v!==undefined) p[k]=v; }
     p.closeArm=false; p.delArm=false; };
