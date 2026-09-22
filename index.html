@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=107"></script>
+<script src="backend.js?v=108"></script>
 <script>
-const APP_VERSION="107";
+const APP_VERSION="108";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -296,7 +296,7 @@ const filterActive = (f) => !!(f.q || f.min || f.max || f.from || f.to || f.dir 
    categories - one tag, one category. People: a unique name and a kind. */
 const TYPES = [
   ['Necessity','#f87171'], ['Optional','#fbbf24'], ['Income','#4ade80'],
-  ['Taxes','#eef1f7'], ['Savings','#3b82f6'], ['Misc','#5b6170'],
+  ['Taxes','#eef1f7'], ['Savings','#3b82f6'], ['Misc','#5b6170'], ['Transfer','#a78bfa'],
 ];
 const typeColor = (t) => (TYPES.find(([k])=>k===t) || ['','#5b6170'])[1];
 const PEOPLE_TYPES = ['Parent','Child'];
@@ -808,7 +808,8 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; }
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[];
+    if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
   for (const a of store.accounts) ops[a.key] = keep.includes(a.key) && store.ops[a.key] ? store.ops[a.key] : readOps(tab(a.key));
@@ -1039,18 +1040,36 @@ function nwByMonthCard(Y){
    operation's month. A secondary tag takes its own part; the main tag keeps
    the rest. Tags no category claims are shown as Unfiled, not dropped. */
 const catOfTag = (t) => store.categories.find((c)=>c.tags.some((x)=>same(x, t))) || null;
+/* Money moving between accounts: a tag of a Transfer category, or the bare
+   x. Never a figure of the Report. */
+const isTransferTag = (t) => { const c = catOfTag(t); return c ? c.type==='Transfer' : same(t, 'x'); };
+/* The Report reads the family's Cash-category accounts only: savings
+   accounts, funds, property, the policy and the children's stay out. */
+const reportAccounts = () => familyCash().filter((a)=>a.category==='Cash');
+/* Older stores filed x under Misc, so transfers counted as spending. Once,
+   at boot or after a pull: move x into a category of type Transfer. */
+function tidyCategories(){
+  if (!store.categories.length || store.categories.some((c)=>c.type==='Transfer')) return false;
+  for (const c of store.categories) c.tags = c.tags.filter((t)=>!same(t, 'x'));
+  store.categories = store.categories.filter((c)=>c.tags.length);
+  const named = store.categories.find((c)=>same(c.name, 'Transfer') || same(c.name, 'Transfers'));
+  if (named) { named.type = 'Transfer'; named.tags.push('x'); }
+  else store.categories.push({ name:'Transfer', type:'Transfer', tags:['Transfer','x'] });
+  return true;
+}
 const cashAccounts = () => store.accounts.filter((a)=>!isFund(a) && !isProp(a) && !isLife(a));
 /* Every category's total over a year ("2013") or a month ("2013-04"), in
    the shown currency at each operation's month's rate. */
 const sumsByCategory = (year) => sumsFor(String(year));
 function sumsFor(prefix){
   const out = {}; let unfiled = 0;
-  for (const a of familyCash()) for (const o of opsOf(a.key)) {
+  for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
     if (!o.date.startsWith(prefix)) continue;
     const m = o.date.slice(0,7);
     const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount }));
     parts.push({ tag:o.tag, amount: o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0) });
     for (const p of parts) {
+      if (isTransferTag(p.tag)) continue;
       const v = conv(p.amount, a.currency, store.cur, m); if (v==null) continue;
       const c = catOfTag(p.tag);
       if (c) out[c.name] = (out[c.name]||0) + v; else unfiled += v;
@@ -1191,7 +1210,7 @@ function tabMonthly(){
    part, or the whole less the parts), in the shown currency. */
 function categoryOps(name, year){
   const out = [];
-  for (const a of familyCash()) for (const o of opsOf(a.key)) {
+  for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
     if (o.date.slice(0,4)!==String(year)) continue;
     let part = 0, hit = false;
     for (const sp of o.splits) if ((catOfTag(sp.tag)||{}).name===name) { part += sp.amount; hit = true; }
@@ -3817,6 +3836,7 @@ function wire(){
     alert('Browser menu › Install app (or Add to Home Screen).'); });
 }
 
+if (!store.locked && tidyCategories()) { markDirty('Config'); save(); pushSoon(); }
 render();
 
 /* A fresh install with a connected sheet takes its config from the sheet, so
