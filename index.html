@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=92"></script>
+<script src="backend.js?v=93"></script>
 <script>
-const APP_VERSION="92";
+const APP_VERSION="93";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2594,6 +2594,7 @@ function settingsTags(){
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>
   ${knownNamesCard()}
+  ${alwaysCard()}
   ${(function(){ const un = unfiledTags(); if (!un.length) return '';
     /* A tag with no category: pick one from the row and it is filed. */
     return `<div class="card">
@@ -2666,6 +2667,24 @@ function namesSheet(p){
       </div>`).join('')}</div>`).join('') : `<div class="hint" style="margin:0 0 6px">No payee seen twice under a tag that is not known already.</div>`}
       <div class="foot stick"><button class="btn close" data-namesclose="1">Close</button>${p.found.length?`<button class="btn primary" data-namessave="1">Save ${picked.size}</button>`:''}</div>
     </div>
+  </div>`;
+}
+/* The "Always correct" rules, for the one-time clean-up: tick the ones to
+   turn into known names, or to drop. The group goes once none is left. */
+const TRUST_TITLES = { creditspend:'Credit in a spending category', debitincome:'Debit in an income category', inconsistent:'Tagged unlike the same payee elsewhere' };
+function alwaysCard(){
+  const rules = trustRules(); if (!rules.length) return '';
+  const sel = new Set(state.trustSel||[]);
+  return `
+  <div class="card">
+    <h2>Always correct <span class="fbar"><span class="muted">${rules.length}</span>${store.locked?'':`<button class="gbtn ghost" data-trustall="1">${sel.size===rules.length?'None':'All'}</button>`}</span></h2>
+    <div class="rows">${rules.map((r)=>`
+      <div class="row tap" data-trustsel="${esc(r.key)}">
+        ${store.locked?'':`<span class="ck ${sel.has(r.key)?'on':''}">${sel.has(r.key)?'✓':''}</span>`}
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(r.name)} <span class="muted" style="font-size:11.5px">${esc(r.tag)}</span>${nameTags(r.name).some((t)=>same(t, r.tag))?' <span class="rulemark">✓</span>':''}</div>
+          <div class="sub">${esc(TRUST_TITLES[r.kind]||r.kind)}</div></div>
+      </div>`).join('')}</div>
+    ${sel.size?`<div class="btnrow" style="margin-top:8px"><button class="btn danger ${state.trustArm==='bulk'?'arm':''}" style="flex:0 0 auto;min-width:92px" data-trustdrop="1">${state.trustArm==='bulk'?'Remove?':'Remove'}</button><button class="btn primary" data-trustknown="1">Make known · ${sel.size}</button></div>`:''}
   </div>`;
 }
 /* The Known names group: a name a row with its tags, searched by name and
@@ -2960,6 +2979,14 @@ function wire(){
   document.querySelectorAll('[data-namesclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-namessave]').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const i of p.picked) { const x=p.found[i]; if (x) learnName(x.name, x.tag); }
     state.page=null; commit('Config'); });
+  /* the Always rules: pick, make known, drop */
+  document.querySelectorAll('[data-trustsel]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const k=el.dataset.trustsel; const s=new Set(state.trustSel||[]); if (s.has(k)) s.delete(k); else s.add(k); state.trustSel=[...s]; state.trustArm=null; render(); });
+  document.querySelectorAll('[data-trustall]').forEach((el)=>el.onclick=()=>{ const all = trustRules().map((r)=>r.key); state.trustSel = (state.trustSel||[]).length===all.length ? [] : all; state.trustArm=null; render(); });
+  document.querySelectorAll('[data-trustknown]').forEach((el)=>el.onclick=()=>{ const s=new Set(state.trustSel||[]); const picked = trustRules().filter((r)=>s.has(r.key));
+    for (const r of picked) learnName(r.name, r.tag);
+    store.dismissed = (store.dismissed||[]).filter((k)=>!s.has(k)); state.trustSel=[]; state.trustArm=null; commit('Config', 'Dismissed'); });
+  document.querySelectorAll('[data-trustdrop]').forEach((el)=>el.onclick=()=>{ if (state.trustArm!=='bulk') { state.trustArm='bulk'; render(); return; }
+    const s=new Set(state.trustSel||[]); store.dismissed = (store.dismissed||[]).filter((k)=>!s.has(k)); state.trustSel=[]; state.trustArm=null; commit('Dismissed'); });
   document.querySelectorAll('[data-nmcat]').forEach((el)=>el.onclick=()=>{ state.nmCat=el.dataset.nmcat||null; render(); });
   document.querySelectorAll('[data-nmqclear]').forEach((el)=>el.onclick=()=>{ state.nmQ=''; render(); });
   const nq=document.getElementById('nmQ');
