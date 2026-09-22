@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=93"></script>
+<script src="backend.js?v=94"></script>
 <script>
-const APP_VERSION="93";
+const APP_VERSION="94";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1414,8 +1414,8 @@ function okMoreSheet(p){
     <div class="sheet${p.fresh?' enter':''}">
       <h3>Always correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length ? p.more.length+' more · '+all.join(', ') : 'no other today'}</span></h3>
       <div class="hint" style="margin:0 0 6px">${esc(title)}: never again for these payees with these tags${all.some((y)=>y!==Y)?'. Some of the others are in other years than '+Y:''}.</div>
-      <div class="rows">${Object.keys(byName).map((n)=>`<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span></span>
-        <span style="text-align:right"><span class="v">${byName[n]||''}</span><div class="muted" style="font-size:11px">${[...yrs[n]].sort().map((y)=>y===Y?y:'<b>'+y+'</b>').join(', ')}</div></span></div>`).join('')}</div>
+      <div class="rows">${Object.keys(byName).map((n)=>{ const kn = nameTags(label[n]).filter((t)=>!same(t, tagOf[n])); return `<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span>${kn.length?`<div class="sub" style="color:var(--warn)">already known under ${esc(kn.join(', '))}</div>`:''}</span>
+        <span style="text-align:right"><span class="v">${byName[n]||''}</span><div class="muted" style="font-size:11px">${[...yrs[n]].sort().map((y)=>y===Y?y:'<b>'+y+'</b>').join(', ')}</div></span></div>`; }).join('')}</div>
       <div class="foot"><button class="btn close" data-okmoreclose="1">Close</button>${p.more.length?`<button class="btn" data-okmoreall="1">Also these ${p.more.length}</button>`:''}<button class="btn primary" data-okalways="1">Always</button></div>
     </div>
   </div>`;
