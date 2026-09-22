@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=86"></script>
+<script src="backend.js?v=87"></script>
 <script>
-const APP_VERSION="86";
+const APP_VERSION="87";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -618,17 +618,21 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
-  return j.accounts.filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names))) throw new Error('Not a Tally import file.');
+  return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j){
-  if (!j || j.kind!=='tally-import' || !Array.isArray(j.accounts)) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names))) throw new Error('Not a Tally import file.');
+  j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
   const year = +j.year || null;
   /* a child's book names the child */
   for (const p of (Array.isArray(j.people) ? j.people : [])) if (p && p.name && !store.people.some((x)=>same(x.name, p.name)))
     store.people.push({ name:String(p.name), type: PEOPLE_TYPES.includes(p.type) ? p.type : 'Parent' });
+  /* known names, a list to merge */
+  let names = 0;
+  for (const n of (Array.isArray(j.names) ? j.names : [])) if (n && n.name && Array.isArray(n.tags)) for (const t of n.tags) if (t && !nameTags(n.name).some((x)=>same(x, t))) { learnName(String(n.name), String(t)); names++; }
   for (const a of j.accounts) {
     if (!a.key) continue;
     const known = store.accounts.find((x)=>same(x.key, a.key));
@@ -679,7 +683,7 @@ function importFile(j){
     }
     touched.add(key);
   }
-  return { accounts, ops, adjusted, touched:[...touched] };
+  return { accounts, ops, adjusted, names, touched:[...touched] };
 }
 
 const connected = () => !!(store.backend.url && store.backend.token);
@@ -1268,8 +1272,10 @@ function computeWarnings(){
   const trust = new Set((store.dismissed||[]).filter((k)=>k.startsWith('trust|')));
   /* a payee known under a tag: that pairing is accepted, whatever the sign; a
      payee known under tags and filed elsewhere is the odd one */
-  const known = new Map(); for (const n of knownNames()) known.set(String(n.name).trim().toLowerCase(), n.tags.map((t)=>String(t).trim().toLowerCase()));
-  const knownTags = (o) => known.get(String(o.name||'').trim().toLowerCase()) || null;
+  const knownList = knownNames().map((n)=>({ k:canonName(n.name), tags:n.tags.map((t)=>String(t).trim().toLowerCase()) })).filter((n)=>n.k).sort((x,y)=>y.k.length-x.k.length);
+  const knownCache = new Map();
+  const knownTags = (o) => { const c = canonName(o.name); if (!c) return null; if (knownCache.has(c)) return knownCache.get(c);
+    const hit = knownList.find((n)=>c.startsWith(n.k)); const r = hit ? hit.tags : null; knownCache.set(c, r); return r; };
   const knownPair = (o) => { const ts = knownTags(o); return !!ts && ts.includes(String(o.tag||'').trim().toLowerCase()); };
   const trusted = (kind, o) => trust.has(trustKey(kind, o)) || knownPair(o);
   let hidden = 0;
@@ -2602,14 +2608,25 @@ const catDirty = (p) => p.name.trim()!==p.was.name || p.type!==p.was.type || p.t
 /* Known names: a payee and the tags it is known under - TMobile under Phone.
    A name may be known under several tags. Kept in Config as `name` rows. */
 const knownNames = () => store.names || (store.names = []);
-const nameTags = (name) => { const n = knownNames().find((x)=>same(x.name, name)); return n ? n.tags : []; };
+/* Names are matched on their letters alone - lower case, accents, spaces,
+   punctuation, store numbers and phone numbers dropped - and a known name
+   matches an operation whose name starts with it: "Trader Joe's" covers
+   "TRADER JOE'S #036 QPS". The longest known name that fits wins. */
+const canonName = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]+/g, '');
+function knownFor(name){
+  const c = canonName(name); if (!c) return null;
+  let best = null;
+  for (const n of knownNames()) { const k = canonName(n.name); if (k && c.startsWith(k) && (!best || k.length > canonName(best.name).length)) best = n; }
+  return best;
+}
+const nameTags = (name) => { const n = knownFor(name); return n ? n.tags : []; };
 function learnName(name, tag){
-  let n = knownNames().find((x)=>same(x.name, name));
+  let n = knownNames().find((x)=>canonName(x.name)===canonName(name));
   if (!n) { n = { name:String(name).trim(), tags:[] }; knownNames().push(n); }
   if (!n.tags.some((t)=>same(t, tag))) n.tags.push(tag);
 }
 function forgetName(name, tag){
-  const n = knownNames().find((x)=>same(x.name, name)); if (!n) return;
+  const n = knownNames().find((x)=>canonName(x.name)===canonName(name)); if (!n) return;
   n.tags = n.tags.filter((t)=>!same(t, tag));
   if (!n.tags.length) store.names = knownNames().filter((x)=>x!==n);
 }
@@ -2978,7 +2995,7 @@ function wire(){
     try {
       const got = importFile(pend.file);
       state.pending=null;
-      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
 
