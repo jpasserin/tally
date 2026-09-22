@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=95"></script>
+<script src="backend.js?v=96"></script>
 <script>
-const APP_VERSION="95";
+const APP_VERSION="96";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1261,16 +1261,15 @@ function warnings(){
   if (warnMemo) return warnMemo;
   return (warnMemo = computeWarnings());
 }
-/* "Always correct": a payee with a tag, trusted for one kind of finding from
-   then on. Kept in the Dismissed tab as `trust|kind|name|tag` rows. */
-const trustKey = (kind, o) => 'trust|'+kind+'|'+String(o.name||'').trim().toLowerCase()+'|'+String(o.tag||'').trim().toLowerCase();
+/* The old "Always correct" rules (`trust|kind|name|tag` rows in Dismissed),
+   read only so the clean-up group in Settings ▸ Tags can turn them into
+   known names or drop them. Nothing writes them any more. */
 const trustRules = () => (store.dismissed||[]).filter((k)=>k.startsWith('trust|')).map((k)=>{ const [, kind, name, tag] = k.split('|');
   /* shown as the records spell them, matched without regard to case */
   let seen = null; for (const a of store.accounts) { seen = opsOf(a.key).find((o)=>same(o.name, name) && same(o.tag, tag)); if (seen) break; }
   return { key:k, kind, name: seen ? seen.name : name, tag: seen ? seen.tag : tag }; });
 function computeWarnings(){
   const out = [], aside = [];
-  const trust = new Set((store.dismissed||[]).filter((k)=>k.startsWith('trust|')));
   /* a payee known under a tag: that pairing is accepted, whatever the sign; a
      payee known under tags and filed elsewhere is the odd one */
   const knownList = knownNames().map((n)=>({ k:canonName(n.name), tags:n.tags.map((t)=>String(t).trim().toLowerCase()) })).filter((n)=>n.k).sort((x,y)=>y.k.length-x.k.length);
@@ -1278,7 +1277,7 @@ function computeWarnings(){
   const knownTags = (o) => { const c = canonName(o.name); if (!c) return null; if (knownCache.has(c)) return knownCache.get(c);
     const hit = knownList.find((n)=>fitsName(c, n.k)); const r = hit ? hit.tags : null; knownCache.set(c, r); return r; };
   const knownPair = (o) => { const ts = knownTags(o); return !!ts && ts.includes(String(o.tag||'').trim().toLowerCase()); };
-  const trusted = (kind, o) => trust.has(trustKey(kind, o)) || knownPair(o);
+  const trusted = (kind, o) => knownPair(o);
   let hidden = 0;
   const Y = String(theYear());
   /* a date in the future belongs to no year yet: it shows while looking at the current one */
@@ -1333,7 +1332,7 @@ function computeWarnings(){
   for (const {o,a} of all) if (o.name && o.tag) { const n = o.name.toLowerCase(); (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
   for (const {o,a} of judged) if (o.name && o.tag) { const t = byName[o.name.toLowerCase()]; const tags = Object.keys(t);
     const ks = knownTags(o);
-    if (ks && ks.length) { if (!knownPair(o) && !trust.has(trustKey('inconsistent', o))) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — known under '+nameTags(o.name).join(', ')); }
+    if (ks && ks.length) { if (!knownPair(o)) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — known under '+nameTags(o.name).join(', ')); }
     else if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag] && !trusted('inconsistent', o)) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
   /* accounts */
   for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
@@ -1413,7 +1412,7 @@ function okMoreSheet(p){
     <div class="scrim" data-okmoreclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
       <h3>Always correct? <span class="muted" style="font-size:12px;font-weight:600">${p.more.length ? p.more.length+' more · '+all.join(', ') : 'no other today'}</span></h3>
-      <div class="hint" style="margin:0 0 6px">${esc(title)}: never again for these payees with these tags${all.some((y)=>y!==Y)?'. Some of the others are in other years than '+Y:''}.</div>
+      <div class="hint" style="margin:0 0 6px">${esc(title)}: Always makes these payees known names under these tags${all.some((y)=>y!==Y)?'. Some of the others are in other years than '+Y:''}.</div>
       <div class="rows">${Object.keys(byName).map((n)=>{ const kn = nameTags(label[n]).filter((t)=>!same(t, tagOf[n])); return `<div class="row"><span class="k">${esc(label[n])} <span class="muted" style="font-size:11.5px">${esc(tagOf[n])}</span>${kn.length?`<div class="sub" style="color:var(--warn)">already known under ${esc(kn.join(', '))}</div>`:''}</span>
         <span style="text-align:right"><span class="v">${byName[n]||''}</span><div class="muted" style="font-size:11px">${[...yrs[n]].sort().map((y)=>y===Y?y:'<b>'+y+'</b>').join(', ')}</div></span></div>`; }).join('')}</div>
       <div class="foot"><button class="btn close" data-okmoreclose="1">Close</button>${p.more.length?`<button class="btn" data-okmoreall="1">Also these ${p.more.length}</button>`:''}<button class="btn primary" data-okalways="1">Always</button></div>
@@ -1425,7 +1424,7 @@ function tabWarnings(){
   const groups = warnings();
   const n = groups.reduce((t,g)=>t+g.items.length, 0);
   const widget = p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='account' ? accountSheet(p) : p && p.kind==='warnabout' ? warnAboutSheet() : p && p.kind==='okmore' ? okMoreSheet(p) : '';
-  if (state.warnKind==='__aside') { if (groups.aside.length || trustRules().length) return widget + asidePage(groups.aside); state.warnKind = null; }
+  if (state.warnKind==='__aside') { if (groups.aside.length) return widget + asidePage(groups.aside); state.warnKind = null; }
   const g = state.warnKind ? groups.find((x)=>x.kind===state.warnKind) : null;
   if (state.warnKind && !g) state.warnKind = null;
   if (g) return widget + warnPage(g);
@@ -1436,7 +1435,7 @@ function tabWarnings(){
       <div class="row tap" data-warnopen="${x.kind}"><span class="k">${esc(x.title)}</span>
         <span style="display:flex;align-items:center;gap:10px"><span class="v">${x.items.length}</span><span class="chev">›</span></span></div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing suspicious.</div>`}
-    ${groups.hidden || trustRules().length ? `<button class="btn" style="margin-top:10px" data-warnopen="__aside"${LK()}>Marked correct · ${groups.hidden}${trustRules().length?' · '+trustRules().length+' always':''}</button>` : ''}
+    ${groups.hidden ? `<button class="btn" style="margin-top:10px" data-warnopen="__aside"${LK()}>Marked correct · ${groups.hidden}</button>` : ''}
   </div>`;
 }
 /* What was marked correct, each with a box; Bring back returns the ticked. */
@@ -1454,14 +1453,6 @@ function asidePage(items){
         ${x.o?`<span class="v ${x.o.amount<0?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span>`:'<span class="chev">›</span>'}
       </div>`; }).join('')}</div>
   </div>
-  ${trustRules().length ? `
-  <div class="card">
-    <h2>Always correct <span class="muted">${trustRules().length}</span></h2>
-    <div class="rows">${trustRules().map((r)=>`
-      <div class="row"><div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(r.name)} <span class="muted" style="font-size:11.5px">${esc(r.tag)}</span></div>
-          <div class="sub">${esc(({ creditspend:'Credit in a spending category', debitincome:'Debit in an income category', inconsistent:'Tagged unlike the same payee elsewhere' })[r.kind]||r.kind)}</div></div>
-        ${store.locked?'':`<button class="btn danger ${state.trustArm===r.key?'arm':''}" style="flex:0 0 auto;padding:4px 10px" data-trustdel="${esc(r.key)}">${state.trustArm===r.key?'Remove?':'Remove'}</button>`}</div>`).join('')}</div>
-  </div>` : ''}
   <div style="height:56px"></div>
   ${state.sel.length?`<div class="selbar raised"><span>${state.sel.length} selected</span><button class="gbtn" data-warnrestore="1">Bring back</button><button class="gbtn ghost" data-selclear="1">✕</button></div>`:''}
   <div class="closebar"><button class="btn" data-warnclose="1">Close</button></div>`;
@@ -3466,7 +3457,7 @@ function wire(){
     const more = fix==='ok' && asks ? moreLikeThese(state.warnKind, items) : [];
     const seenPair = new Set();
     const pairs = fix==='ok' && asks ? items.filter(({o})=>o && o.name.trim()).filter(({o})=>{ const k = o.name.trim().toLowerCase()+'|'+String(o.tag||'').trim().toLowerCase();
-      if (seenPair.has(k) || (store.dismissed||[]).includes('noask|'+state.warnKind+'|'+k) || (store.dismissed||[]).includes(trustKey(state.warnKind, o))) return false; seenPair.add(k); return true; }) : [];
+      if (seenPair.has(k) || (store.dismissed||[]).includes('noask|'+state.warnKind+'|'+k) || nameTags(o.name).some((t)=>same(t, o.tag))) return false; seenPair.add(k); return true; }) : [];
     state.sel=[]; state.bulk=null;
     if (pairs.length) state.page={ kind:'okmore', warnKind:state.warnKind, more, pairs, fresh:true };
     if (touched.size) commit(...touched); else render();
@@ -3479,13 +3470,11 @@ function wire(){
     for (const {o,a} of p.more) { const k = dismissKey(p.warnKind, o, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
     state.page=null; commit('Dismissed'); });
   /* Always: the rule, and the others today go aside with it */
+  /* Always: the payee becomes a known name under that tag; the others today go aside with it */
   document.querySelectorAll('[data-okalways]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p || p.kind!=='okmore') return;
-    for (const {o} of p.pairs) { const k = trustKey(p.warnKind, o); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
+    for (const {o} of p.pairs) if (o.tag) learnName(o.name.trim(), o.tag);
     for (const {o,a} of p.more) { const k = dismissKey(p.warnKind, o, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
-    state.page=null; commit('Dismissed'); });
-  document.querySelectorAll('[data-trustdel]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const k = el.dataset.trustdel;
-    if (state.trustArm!==k) { state.trustArm=k; render(); return; }
-    store.dismissed = (store.dismissed||[]).filter((x)=>x!==k); state.trustArm=null; commit('Dismissed'); });
+    state.page=null; commit('Config', 'Dismissed'); });
   document.querySelectorAll('[data-warnpick]').forEach((el)=>el.onclick=()=>{
     const i = el.dataset.warnpick.indexOf('|'); const what = el.dataset.warnpick.slice(0,i), val = el.dataset.warnpick.slice(i+1);
     const items = warnItems(), touched = new Set();
