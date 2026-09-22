@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=85"></script>
+<script src="backend.js?v=86"></script>
 <script>
-const APP_VERSION="85";
+const APP_VERSION="86";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1241,6 +1241,7 @@ const dismissKey = (kind, o, a) => kind + '|' + (o ? o.id : a.key);
 const isDismissed = (kind, o, a) => (store.dismissed||[]).includes(dismissKey(kind, o, a));
 /* The usual tag of a payee - the one it carries most often. */
 function usualTag(name){
+  const kn = nameTags(name); if (kn.length) return kn[0];
   const t = {};
   for (const a of store.accounts) for (const o of opsOf(a.key)) if (o.tag && same(o.name, name)) t[o.tag] = (t[o.tag]||0) + 1;
   return Object.keys(t).sort((x,y)=>t[y]-t[x])[0] || '';
@@ -1265,7 +1266,12 @@ const trustRules = () => (store.dismissed||[]).filter((k)=>k.startsWith('trust|'
 function computeWarnings(){
   const out = [], aside = [];
   const trust = new Set((store.dismissed||[]).filter((k)=>k.startsWith('trust|')));
-  const trusted = (kind, o) => trust.has(trustKey(kind, o));
+  /* a payee known under a tag: that pairing is accepted, whatever the sign; a
+     payee known under tags and filed elsewhere is the odd one */
+  const known = new Map(); for (const n of knownNames()) known.set(String(n.name).trim().toLowerCase(), n.tags.map((t)=>String(t).trim().toLowerCase()));
+  const knownTags = (o) => known.get(String(o.name||'').trim().toLowerCase()) || null;
+  const knownPair = (o) => { const ts = knownTags(o); return !!ts && ts.includes(String(o.tag||'').trim().toLowerCase()); };
+  const trusted = (kind, o) => trust.has(trustKey(kind, o)) || knownPair(o);
   let hidden = 0;
   const Y = String(theYear());
   /* a date in the future belongs to no year yet: it shows while looking at the current one */
@@ -1319,7 +1325,9 @@ function computeWarnings(){
   const byName = {};
   for (const {o,a} of all) if (o.name && o.tag) { const n = o.name.toLowerCase(); (byName[n] = byName[n] || {})[o.tag] = (byName[n][o.tag]||0) + 1; }
   for (const {o,a} of judged) if (o.name && o.tag) { const t = byName[o.name.toLowerCase()]; const tags = Object.keys(t);
-    if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag] && !trusted('inconsistent', o)) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
+    const ks = knownTags(o);
+    if (ks && ks.length) { if (!knownPair(o) && !trust.has(trustKey('inconsistent', o))) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — known under '+nameTags(o.name).join(', ')); }
+    else if (tags.length > 1) { const usual = tags.sort((x,y)=>t[y]-t[x])[0]; if (o.tag !== usual && t[usual] > t[o.tag] && !trusted('inconsistent', o)) add('inconsistent', 'Tagged unlike the same payee elsewhere', o, a, o.tag+' — usually '+usual); } }
   /* accounts */
   for (const a of store.accounts) if (!a.owners.length) add('noowner', 'Account with no owner', null, a, a.key);
   out.sort((x,y)=>y.items.length-x.items.length);
@@ -2280,7 +2288,8 @@ function opSheet(p, a){
       </div>
       <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
       <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
-      <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select></div>
+      <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select>
+        <div id="oKnown">${knownChips(p.name, p.tag)}</div></div>
       ${budgetsFor(p.budget).length?`<div class="field"><label>Budget</label>
         <div class="chips">${budgetsFor(p.budget).map((b)=>`<button class="chip ${same(p.budget||'', b.name)?'on':''}" data-opbudget="${esc(b.name)}"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</button>`).join('')}</div></div>`:''}
       <div class="field"><label>Secondary tags</label>
@@ -2620,7 +2629,8 @@ function namesSheet(p){
   <div class="sheetwrap">
     <div class="scrim" data-namesclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
-      <h3>Names in ${esc(c.name)} <span class="muted" style="font-size:12px;font-weight:600">${p.found.length} found${p.found.length?' · '+picked.size+' picked':''}</span></h3>
+      <h3>Names in ${esc(c.name)} <span class="muted" style="font-size:12px;font-weight:600">${p.found.length} found${p.found.length?' · '+picked.size+' picked':''}</span>
+        ${p.found.length?`<button class="gbtn ghost" style="margin-left:auto" data-namesall="1">${picked.size===p.found.length?'None':'All'}</button>`:''}</h3>
       ${p.found.length ? `<div class="rows">${p.found.map((x,i)=>`
       <div class="row tap" data-namepick="${i}">
         <span class="ck ${picked.has(i)?'on':''}">${picked.has(i)?'✓':''}</span>
@@ -2631,6 +2641,8 @@ function namesSheet(p){
     </div>
   </div>`;
 }
+/* Under the Tag field of an operation: the tags its payee is known under. */
+const knownChips = (name, tag) => { const ts = nameTags(name); return ts.length ? `<div class="chips" style="margin-top:5px">${ts.map((t)=>`<button class="chip ${same(t, tag||'')?'on':''}" style="padding:2px 9px;font-size:11.5px" data-opknown="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''; };
 function catSheet(p){
   const isNew = p.index==null;
   const c = isNew ? null : store.categories[p.index];
@@ -2861,7 +2873,8 @@ function wire(){
   document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(+el.dataset.catedit); });
   /* known names: found in the records, kept or forgotten */
   document.querySelectorAll('[data-catnames]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const i=+el.dataset.catnames, c=store.categories[i]; if (!c) return;
-    const found = suggestNames(c); state.page={ kind:'names', index:i, found, picked:found.map((x,k)=>k), fresh:true }; render(); state.page.fresh=false; });
+    const found = suggestNames(c); state.page={ kind:'names', index:i, found, picked:[], fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-namesall]').forEach((el)=>el.onclick=()=>{ const p=state.page; p.picked = p.picked.length===p.found.length ? [] : p.found.map((x,k)=>k); render(); });
   document.querySelectorAll('[data-namepick]').forEach((el)=>el.onclick=()=>{ const p=state.page, i=+el.dataset.namepick; p.picked = p.picked.includes(i) ? p.picked.filter((x)=>x!==i) : [...p.picked, i]; render(); });
   document.querySelectorAll('[data-namesclose]').forEach((el)=>el.onclick=()=>{ const p=state.page; openCat(p.index); });
   document.querySelectorAll('[data-namessave]').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const i of p.picked) { const x=p.found[i]; if (x) learnName(x.name, x.tag); }
@@ -3202,6 +3215,11 @@ function wire(){
     for (const id of ['oDate','oName','oAmount','oNote','oTag'].concat(state.page.splits.flatMap((sp,i)=>['oSpTag'+i,'oSpAmt'+i]))) {
       const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; };
     }
+    /* the name typed: the known tags appear under Tag, the field keeps the finger */
+    const on=document.getElementById('oName'), ok=document.getElementById('oKnown');
+    if (on && ok) { const was = on.oninput; on.oninput=()=>{ if (was) was(); const t=document.getElementById('oTag'); ok.innerHTML = knownChips(on.value, t ? t.value : ''); wireKnown(); }; }
+    const wireKnown = () => document.querySelectorAll('[data-opknown]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.tag=el.dataset.opknown; render(); });
+    wireKnown();
   }
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
