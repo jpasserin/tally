@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=99"></script>
+<script src="backend.js?v=100"></script>
 <script>
-const APP_VERSION="99";
+const APP_VERSION="100";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2862,12 +2862,13 @@ function settingsData(){
     ${store.locked&&dirty().length?`<div class="status bad" style="margin-top:6px">${dirty().length} tab${dirty().length===1?'':'s'} waiting</div>`:''}
   </div>
   <div class="card">
-    <h2>Import${state.pending?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(state.pending.name)}</span>`:''}</h2>
-    <input type="file" id="fImport" accept=".json,application/json" style="display:none">
-    ${state.pending ? `
-    <div class="rows">${state.pending.list.map((a)=>`
+    <h2>Import${state.pending?` <span class="muted" style="text-transform:none;letter-spacing:0">${state.pending.files.length===1?esc(state.pending.files[0].name):state.pending.files.length+' files, oldest first'}</span>`:''}</h2>
+    <input type="file" id="fImport" accept=".json,application/json" multiple style="display:none">
+    ${state.pending ? state.pending.files.map((f)=>`
+    ${state.pending.files.length>1?`<div class="sub" style="margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(f.name)}</div>`:''}
+    <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
-        <span class="v">${a.n}</span></div>`).join('')}</div>
+        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${(f.file.names||[]).length} known names</div>`}</div>`).join('') + `
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
@@ -3123,19 +3124,24 @@ function wire(){
   document.querySelectorAll('[data-import]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return;
     const inp=document.getElementById('fImport'); if (!inp) return;
+    /* Several files at once: read them all, then put them in the order the
+       books must go - by year, the family's before the children's - whatever
+       order they were picked in. A file of names alone goes last. */
     inp.onchange=()=>{
-      const f=inp.files && inp.files[0]; if (!f) return;
-      const rd=new FileReader();
-      rd.onload=()=>{
+      const files=[...(inp.files||[])]; if (!files.length) return;
+      const got=[]; let left=files.length, failed=false;
+      const done=()=>{ if (failed) return;
         try {
-          const j = JSON.parse(String(rd.result));
-          state.pending = { name:f.name||'', file:j, list:previewImport(j) };
-          state.imp = null;
+          const parsed = got.map((g)=>{ const j = JSON.parse(g.text); return { name:g.name, file:j, list:previewImport(j) }; });
+          const rank = (p) => [ +p.file.year || 9999, (p.file.people||[]).length ? 1 : 0, p.name ];
+          parsed.sort((x,y)=>{ const a=rank(x), b=rank(y); return a[0]-b[0] || a[1]-b[1] || String(a[2]).localeCompare(String(b[2])); });
+          state.pending = { files:parsed }; state.imp = null;
         } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; }
-        render();
-      };
-      rd.onerror=()=>{ state.imp={ msg:'Could not read that file.', bad:true }; render(); };
-      rd.readAsText(f);
+        render(); };
+      files.forEach((f,i)=>{ const rd=new FileReader();
+        rd.onload=()=>{ got[i]={ name:f.name||'', text:String(rd.result) }; if (--left===0) done(); };
+        rd.onerror=()=>{ failed=true; state.pending=null; state.imp={ msg:'Could not read '+(f.name||'that file')+'.', bad:true }; render(); };
+        rd.readAsText(f); });
     };
     inp.click(); });
   document.querySelectorAll('[data-importcancel]').forEach((el)=>el.onclick=()=>{ state.pending=null; render(); });
@@ -3143,9 +3149,10 @@ function wire(){
     if (store.locked) return;
     const pend=state.pending; if (!pend) return;
     try {
-      const got = importFile(pend.file);
+      const got = { accounts:0, ops:0, adjusted:0, names:0, touched:new Set() };
+      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
 
