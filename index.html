@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=88"></script>
+<script src="backend.js?v=89"></script>
 <script>
-const APP_VERSION="88";
+const APP_VERSION="89";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2668,15 +2668,24 @@ function namesSheet(p){
 const nameShown = (n) => { const q = canonName(state.nmQ||''), c = state.nmCat;
   return (!q || canonName(n.name).includes(q)) && (!c || n.tags.some((t)=>(catOfTag(t)||{}).name===c)); };
 const nameCount = (n) => { const k = canonName(n.name); let z = 0; for (const a of familyCash()) for (const o of opsOf(a.key)) if (canonName(o.name).startsWith(k)) z++; return z; };
+/* The list, sorted by name or by count, up or down. */
+function sortedNames(){
+  const by = state.nmSort==='count' ? 'count' : 'name', desc = !!state.nmDesc;
+  const list = knownNames().map((n)=>({ n, c: by==='count' ? nameCount(n) : 0 }));
+  list.sort((x,y)=> by==='count' ? (x.c-y.c || x.n.name.localeCompare(y.n.name)) : x.n.name.localeCompare(y.n.name));
+  if (desc) list.reverse();
+  return list.map((x)=>x.n);
+}
+const nmSortBtns = () => `<button class="gbtn ghost" style="flex:0 0 auto" data-nmsort="1">${state.nmSort==='count'?'Count':'Name'}</button><button class="gbtn ghost" style="flex:0 0 auto;min-width:34px" data-nmdesc="1">${state.nmDesc?'↓':'↑'}</button>`;
 function knownNamesCard(){
-  const list = knownNames().slice().sort((x,y)=>x.name.localeCompare(y.name));
+  const list = sortedNames();
   const shown = list.filter(nameShown);
   const cats = store.categories.filter((c)=>list.some((n)=>n.tags.some((t)=>(catOfTag(t)||{}).name===c.name)));
   return `
   <div class="card">
     <h2>Known names <span class="fbar"><span class="muted" id="nmCount">${shown.length}${shown.length!==list.length?' / '+list.length:''}</span><button class="gbtn ghost" data-nmfind="1"${LK()}>Find</button><button class="gbtn" data-nmnew="1"${LK()}>+</button></span></h2>
     ${list.length ? `
-    <div class="fsearch"><input id="nmQ" placeholder="Name" value="${esc(state.nmQ||'')}" autocapitalize="off"><span class="fx" data-nmqclear="1">×</span></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><div class="fsearch" style="flex:1;margin:0"><input id="nmQ" placeholder="Name" value="${esc(state.nmQ||'')}" autocapitalize="off"><span class="fx" data-nmqclear="1">×</span></div>${nmSortBtns()}</div>
     ${cats.length > 1 ? `<div class="chips" style="margin-bottom:6px"><button class="chip ${!state.nmCat?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nmcat="">All</button>${cats.map((c)=>`<button class="chip ${state.nmCat===c.name?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nmcat="${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}</button>`).join('')}</div>` : ''}
     <div class="rows" id="nmList">${nameRows(shown)}</div>`
     : `<div class="hint" style="margin-top:0">None yet. Find reads the records.</div>`}
@@ -2947,7 +2956,9 @@ function wire(){
   document.querySelectorAll('[data-nmcat]').forEach((el)=>el.onclick=()=>{ state.nmCat=el.dataset.nmcat||null; render(); });
   document.querySelectorAll('[data-nmqclear]').forEach((el)=>el.onclick=()=>{ state.nmQ=''; render(); });
   const nq=document.getElementById('nmQ');
-  if (nq) nq.oninput=()=>{ state.nmQ=nq.value; const l=document.getElementById('nmList'), c=document.getElementById('nmCount'); const list = knownNames().slice().sort((x,y)=>x.name.localeCompare(y.name)), shown = list.filter(nameShown);
+  document.querySelectorAll('[data-nmsort]').forEach((el)=>el.onclick=()=>{ state.nmSort = state.nmSort==='count' ? 'name' : 'count'; render(); });
+  document.querySelectorAll('[data-nmdesc]').forEach((el)=>el.onclick=()=>{ state.nmDesc = !state.nmDesc; render(); });
+  if (nq) nq.oninput=()=>{ state.nmQ=nq.value; const l=document.getElementById('nmList'), c=document.getElementById('nmCount'); const list = sortedNames(), shown = list.filter(nameShown);
     if (l) l.innerHTML = nameRows(shown); if (c) c.textContent = shown.length + (shown.length!==list.length ? ' / '+list.length : ''); wireNm(); };
   const readNm=()=>{ const p=state.page; const e=document.getElementById('nmName'); if (e) p.name=e.value; p.closeArm=false; p.delArm=false; };
   const openNm=(name)=>{ const n = name==null ? null : knownNames().find((x)=>x.name===name); const idx = n ? knownNames().indexOf(n) : null;
