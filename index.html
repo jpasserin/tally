@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=100"></script>
+<script src="backend.js?v=101"></script>
 <script>
-const APP_VERSION="100";
+const APP_VERSION="101";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -537,7 +537,7 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought','Openings'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
@@ -546,7 +546,8 @@ function configTab(){
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
-        Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'' })))
+        Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
+        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -624,6 +625,7 @@ function readConfig(tab){
       category: ACCOUNT_CATEGORIES.some(([k])=>k===col(r,'Category'))?col(r,'Category'):'Cash',
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes', funds: [],
+      openings: (()=>{ try { const o = JSON.parse(col(r,'Openings')||'null'); return o && typeof o==='object' ? o : undefined; } catch (e) { return undefined; } })(),
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
@@ -640,12 +642,12 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire))) throw new Error('Not a Tally import file.');
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire))) throw new Error('Not a Tally import file.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
   const year = +j.year || null;
@@ -658,27 +660,19 @@ function importFile(j){
   for (const a of j.accounts) {
     if (!a.key) continue;
     const known = store.accounts.find((x)=>same(x.key, a.key));
-    /* A later book opens the account at what its own pages say. Where that
-       differs from what the app holds at the previous year's end, one
-       adjustment on 1 January makes the balances follow the books - it can
-       be deleted like any operation. */
-    if (known && !isFund(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length && opsOf(known.key).some((o)=>o.date < year+'-01-01')) {
-      /* what the app holds from the earlier books: everything but what this file brings (a re-import
-         brings the same ids) and its own earlier adjustment - whatever the dates say */
-      const mine = new Set(((j.ops && j.ops[a.key]) || []).map((o)=>String(o.id))); mine.add(year+'-'+known.key+'-opening');
-      const before = r2((+known.opening||0) + opsOf(known.key).filter((o)=>!mine.has(o.id)).reduce((t,o)=>t+(o.amount||0), 0));
-      const diff = r2(+a.opening - before);
-      if (Math.abs(diff) >= 0.01) {
-        const id = year+'-'+known.key+'-opening', list = opsOf(known.key);
-        const adj = { id, date:year+'-01-01', name:'Opening adjustment', amount:diff, note:'the '+year+' book opens at '+money(+a.opening, known.currency), tag:'x', splits:[], budget:'', oneoff:true };
-        const i = list.findIndex((x)=>x.id===id); if (i>=0) Object.assign(list[i], adj); else list.push(adj);
-        adjusted++; touched.add(known.key);
-      }
+    /* Each book says what the account opened at that year. The account keeps
+       every book's opening; once the operations are in, the years are gone
+       through in order and, where a book opens at something other than what
+       the earlier ones left, one adjustment on 1 January makes the balances
+       follow the books. The oldest book sets the account's own opening. */
+    if (known && !isFund(known) && !isProp(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
+      known.openings = known.openings || {}; known.openings[year] = r2(+a.opening); touched.add('Config');
     }
     if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
+        ...(year && a.type!=='Fund' && a.type!=='Property' && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
         ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}) });
       accounts++;
     } else if (isPel(known)) {
@@ -709,8 +703,35 @@ function importFile(j){
       else { list.push(clean); ops++; }
     }
     touched.add(key);
+    adjusted += reconcileOpenings(acc, touched);
   }
+  /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
+  for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
+    if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
   return { accounts, ops, adjusted, names, touched:[...touched] };
+}
+/* The books' openings against what the app holds: the oldest book sets the
+   account's opening; every later book gets an adjustment where it opens at
+   something other than what the books before it left (their operations by
+   the year in their id, so nothing depends on the order of import), or none
+   where it agrees - an adjustment no longer needed goes. */
+function reconcileOpenings(acc, touched){
+  const years = Object.keys(acc.openings||{}).map(Number).sort((x,y)=>x-y);
+  if (!years.length) return 0;
+  const list = opsOf(acc.key), bookYear = (id) => { const m = /^(\d{4})-/.exec(String(id)); return m ? +m[1] : null; };
+  let made = 0;
+  if (acc.opening !== acc.openings[years[0]]) { acc.opening = acc.openings[years[0]]; touched.add('Config'); }
+  for (const y of years) {
+    const id = y+'-'+acc.key+'-opening', i = list.findIndex((x)=>x.id===id);
+    if (y===years[0]) { if (i>=0) { list.splice(i, 1); touched.add(acc.key); } continue; }
+    const before = r2(acc.opening + list.filter((o)=>{ const by = bookYear(o.id); return by==null ? o.date < y+'-01-01' : by < y; }).reduce((t,o)=>t+(o.amount||0), 0));
+    const diff = r2(acc.openings[y] - before);
+    if (Math.abs(diff) >= 0.01) {
+      const adj = { id, date:y+'-01-01', name:'Opening adjustment', amount:diff, note:'the '+y+' book opens at '+money(acc.openings[y], acc.currency), tag:'x', splits:[], budget:'', oneoff:true };
+      const j = list.findIndex((x)=>x.id===id); if (j>=0) { if (list[j].amount!==diff) { Object.assign(list[j], adj); touched.add(acc.key); made++; } } else { list.push(adj); touched.add(acc.key); made++; }
+    } else if (i>=0) { list.splice(i, 1); touched.add(acc.key); }
+  }
+  return made;
 }
 
 const connected = () => !!(store.backend.url && store.backend.token);
