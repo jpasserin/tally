@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=91"></script>
+<script src="backend.js?v=92"></script>
 <script>
-const APP_VERSION="91";
+const APP_VERSION="92";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1276,7 +1276,7 @@ function computeWarnings(){
   const knownList = knownNames().map((n)=>({ k:canonName(n.name), tags:n.tags.map((t)=>String(t).trim().toLowerCase()) })).filter((n)=>n.k).sort((x,y)=>y.k.length-x.k.length);
   const knownCache = new Map();
   const knownTags = (o) => { const c = canonName(o.name); if (!c) return null; if (knownCache.has(c)) return knownCache.get(c);
-    const hit = knownList.find((n)=>c.startsWith(n.k)); const r = hit ? hit.tags : null; knownCache.set(c, r); return r; };
+    const hit = knownList.find((n)=>fitsName(c, n.k)); const r = hit ? hit.tags : null; knownCache.set(c, r); return r; };
   const knownPair = (o) => { const ts = knownTags(o); return !!ts && ts.includes(String(o.tag||'').trim().toLowerCase()); };
   const trusted = (kind, o) => trust.has(trustKey(kind, o)) || knownPair(o);
   let hidden = 0;
@@ -2613,15 +2613,17 @@ const catDirty = (p) => p.name.trim()!==p.was.name || p.type!==p.was.type || p.t
 /* Known names: a payee and the tags it is known under - TMobile under Phone.
    A name may be known under several tags. Kept in Config as `name` rows. */
 const knownNames = () => store.names || (store.names = []);
-/* Names are matched on their letters alone - lower case, accents, spaces,
-   punctuation, store numbers and phone numbers dropped - and a known name
-   matches an operation whose name starts with it: "Trader Joe's" covers
-   "TRADER JOE'S #036 QPS". The longest known name that fits wins. */
-const canonName = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]+/g, '');
+/* Names are matched on their words - lower case, accents gone, digits and
+   punctuation turned into breaks - and a known name matches an operation
+   whose name is it, or starts with it as whole words: "Trader Joe's" covers
+   "TRADER JOE'S #036 QPS", "CAF" does not cover "Cafe Laurent". The longest
+   known name that fits wins. */
+const canonName = (s) => String(s||'').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z]+/g, ' ').trim();
+const fitsName = (c, k) => !!k && (c===k || c.startsWith(k+' ') || c.replace(/ /g, '')===k.replace(/ /g, ''));
 function knownFor(name){
   const c = canonName(name); if (!c) return null;
   let best = null;
-  for (const n of knownNames()) { const k = canonName(n.name); if (k && c.startsWith(k) && (!best || k.length > canonName(best.name).length)) best = n; }
+  for (const n of knownNames()) { const k = canonName(n.name); if (fitsName(c, k) && (!best || k.length > canonName(best.name).length)) best = n; }
   return best;
 }
 const nameTags = (name) => { const n = knownFor(name); return n ? n.tags : []; };
@@ -2670,7 +2672,7 @@ function namesSheet(p){
    narrowed by category; a tap opens the name's widget. */
 const nameShown = (n) => { const q = canonName(state.nmQ||''), c = state.nmCat;
   return (!q || canonName(n.name).includes(q)) && (!c || n.tags.some((t)=>(catOfTag(t)||{}).name===c)); };
-const nameCount = (n) => { const k = canonName(n.name); let z = 0; for (const a of familyCash()) for (const o of opsOf(a.key)) if (canonName(o.name).startsWith(k)) z++; return z; };
+const nameCount = (n) => { const k = canonName(n.name); let z = 0; for (const a of familyCash()) for (const o of opsOf(a.key)) if (fitsName(canonName(o.name), k)) z++; return z; };
 /* The list, sorted by name or by count, up or down. */
 function sortedNames(){
   const by = state.nmSort==='count' ? 'count' : 'name', desc = !!state.nmDesc;
