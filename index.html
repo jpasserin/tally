@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=98"></script>
+<script src="backend.js?v=99"></script>
 <script>
-const APP_VERSION="98";
+const APP_VERSION="99";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -701,7 +701,12 @@ function importFile(j){
         budget:String(o.budget||''), oneoff:!!o.oneoff };
       if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
       const i = list.findIndex((x)=>x.id===clean.id);
-      if (i>=0) Object.assign(list[i], clean); else { list.push(clean); ops++; }
+      /* An operation already here was maybe worked on since: its tag, splits,
+         budget, one-off mark, name and description are yours and stay. The
+         book still rules the figures - date, amount, fund, kind, shares,
+         price, source. */
+      if (i>=0) { const keep = list[i]; for (const k of ['date','amount','fund','kind','shares','price','src']) { if (clean[k]===undefined) delete keep[k]; else keep[k]=clean[k]; } }
+      else { list.push(clean); ops++; }
     }
     touched.add(key);
   }
