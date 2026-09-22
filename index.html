@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=106"></script>
+<script src="backend.js?v=107"></script>
 <script>
-const APP_VERSION="106";
+const APP_VERSION="107";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2283,10 +2283,14 @@ function lifeSummary(a, Y){
   const rows = [['Insurer', P.insurer], ['Policy', P.product], ['Number', P.number], ['Policy date', P.policyDate && dLabel(P.policyDate)], ['Issued', P.issueDate && dLabel(P.issueDate)],
     ['Insured', P.insured], ['Owner', P.owner], ['Beneficiaries', P.beneficiaries], ['Face amount', P.face && money(P.face, a.currency)],
     ['Annual premium', P.premium && money(P.premium, a.currency) + (P.premiumNote ? ' · ' + P.premiumNote : '')], ['Paid-up additions', P.pua && money(P.pua, a.currency) + ' a year' + (P.puaNote ? ' · ' + P.puaNote : '')],
-    ['Total initial premium', P.totalPremium && money(P.totalPremium, a.currency)], ['Dividends', P.dividends], ['Loans', P.loans], ['Riders', P.riders], ['Basis of values', P.basis]].filter(([,v])=>v);
+    ['Total initial premium', P.totalPremium && money(P.totalPremium, a.currency)], ['Dividends', P.dividends], ['Loans', P.loans], ['Riders', P.riders], ['Basis of values', P.basis], ['The plan', P.plan]].filter(([,v])=>v);
   const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR).sort((x,y)=>y-x);
   const yrow = (y) => { const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const c = lifeCashAt(a, e), pd = lifePaidAt(a, e), pd0 = lifePaidAt(a, (y-1)+'-12-31'); return { y, paid:r2(pd-pd0), cash:c, growth:r2(c-pd), benefit:lifeMarkAt(a, 'Benefit', e) }; };
   const g = Array.isArray(P.guaranteed) ? P.guaranteed : [];
+  const ill = Array.isArray(P.illustrated) ? P.illustrated : [];
+  const illAt = (d) => { const r = ill.find((x)=>x[0]===d); return r ? r[1] : null; };
+  const guarAt = (d) => { const r = g.find((x)=>x[0]===d); return r ? r[1] : null; };
+  const dates = [...new Set([...g.map((x)=>x[0]), ...ill.map((x)=>x[0])])].sort();
   return `
   <div class="card">
     <h2>Policy</h2>
@@ -2301,11 +2305,13 @@ function lifeSummary(a, Y){
   </div>
   ${g.length ? `
   <div class="card">
-    <h2>Guaranteed values <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    <h2>By anniversary <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
     ${P.guaranteedNote ? `<div class="hint" style="margin:0 0 6px">${esc(P.guaranteedNote)}</div>` : ''}
+    ${ill.length && P.illustratedNote ? `<div class="hint" style="margin:0 0 6px">${esc(P.illustratedNote)}</div>` : ''}
     <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Anniversary</th><th>Guaranteed</th><th>Actual</th><th>Paid-up</th></tr></thead>
-      <tbody>${g.map(([d,c,rpu])=>{ const past = d <= TODAY(); const marked = past && opsOf(a.key).some((o)=>o.kind==='Value' && o.date <= d && o.date > yearsAgo(d)); const act = marked ? lifeCashAt(a, d) : null; return `<tr${past?'':' class="muted"'}><td>${dLabel(d)}</td><td>${money(c, a.currency)}</td><td>${act!=null?'<b>'+money(act, a.currency)+'</b>':'—'}</td><td>${rpu?money(rpu, a.currency):'—'}</td></tr>`; }).join('')}</tbody>
+      <thead><tr><th>Anniversary</th><th>Guaranteed</th>${ill.length?'<th>Illustrated</th>':''}<th>Actual</th></tr></thead>
+      <tbody>${dates.map((d)=>{ const past = d <= TODAY(); const marked = past && opsOf(a.key).some((o)=>o.kind==='Value' && o.date <= d && o.date > yearsAgo(d)); const act = marked ? lifeCashAt(a, d) : null; const gc = guarAt(d), ic = illAt(d);
+        return `<tr${past?'':' class="muted"'}><td>${dLabel(d)}</td><td>${gc!=null?money(gc, a.currency):'—'}</td>${ill.length?`<td>${ic!=null?money(ic, a.currency):'—'}</td>`:''}<td>${act!=null?'<b>'+money(act, a.currency)+'</b>':'—'}</td></tr>`; }).join('')}</tbody>
     </table></div>
   </div>` : ''}`;
 }
