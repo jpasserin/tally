@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=90"></script>
+<script src="backend.js?v=91"></script>
 <script>
-const APP_VERSION="90";
+const APP_VERSION="91";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1470,13 +1470,15 @@ function asidePage(items){
    that fit, applied to all the ticked ones. */
 const selectAllBtn = (n) => store.locked ? '' : `<button class="gbtn ghost" data-warnall="1">${state.sel.length===n&&n?'None':'All'}</button>`;
 /* The findings of a kind that carry the name typed in the filter. */
-const warnShown = (g) => { const q = (state.warnQ||'').trim().toLowerCase(); return q ? g.items.filter(({o,a})=>(o ? o.name : a.key).toLowerCase().includes(q)) : g.items; };
+const warnShown = (g) => { const q = (state.warnQ||'').trim().toLowerCase();
+  return g.items.filter(({o,a})=>(!q || (o ? o.name : a.key).toLowerCase().includes(q)) && (!state.warnKnown || (o && nameTags(o.name).length > 0))); };
 function warnPage(g){
   const shown = warnShown(g);
   return `
   <div class="card">
     <h2>${esc(g.title)} <span class="fbar"><span class="muted" id="warnCount">${shown.length}</span>${selectAllBtn(shown.length)}</span></h2>
-    <div class="fsearch"><input id="warnQ" placeholder="Name" value="${esc(state.warnQ||'')}" autocapitalize="off"><span class="fx" data-warnqclear="1">×</span></div>
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px"><div class="fsearch" style="flex:1;margin:0"><input id="warnQ" placeholder="Name" value="${esc(state.warnQ||'')}" autocapitalize="off"><span class="fx" data-warnqclear="1">×</span></div>
+      <button class="gbtn ghost" style="flex:0 0 auto" data-warnknown="1">${state.warnKnown?'Known':'All'}</button></div>
     <div class="rows" id="warnList">${warnRows(g, shown)}</div>
   </div>
   <div style="height:56px"></div>
@@ -3387,7 +3389,7 @@ function wire(){
     state.budget=null; state.page=null; commit(); });
 
   /* warnings: a kind opens its page; fixes act on the ticked findings */
-  document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; state.warnQ=''; render(); });
+  document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; state.warnQ=''; state.warnKnown=false; render(); });
   document.querySelectorAll('[data-warnabout]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'warnabout', fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-warnaboutclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-warnclose]').forEach((el)=>el.onclick=()=>{ state.warnKind=null; state.sel=[]; state.bulk=null; render(); });
@@ -3408,6 +3410,7 @@ function wire(){
   wireWarnRows();
   /* typing a name redraws the list alone, so the field keeps the finger */
   document.querySelectorAll('[data-warnqclear]').forEach((el)=>el.onclick=()=>{ state.warnQ=''; render(); });
+  document.querySelectorAll('[data-warnknown]').forEach((el)=>el.onclick=()=>{ state.warnKnown=!state.warnKnown; state.sel=[]; render(); });
   const wq = document.getElementById('warnQ');
   if (wq) wq.oninput = () => { state.warnQ = wq.value; const g = warnings().find((x)=>x.kind===state.warnKind); const l = document.getElementById('warnList'); if (!g || !l) return;
     const shown = warnShown(g); l.innerHTML = warnRows(g, shown); const c = document.getElementById('warnCount'); if (c) c.textContent = String(shown.length);
