@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=105"></script>
+<script src="backend.js?v=106"></script>
 <script>
-const APP_VERSION="105";
+const APP_VERSION="106";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -306,12 +306,21 @@ const CURRENCIES = ['USD','EUR','AUD'];
    will bring their own settings later. */
 const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
-const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property'];
+const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life'];
 /* A property: what it is worth (valuations, one every so often), what is
    still owed on it (a mortgage, worked out month by month), and what it
    costs (fees, taxes, insurance, works - kept for the record, not in the
    balance). A share says how much of it is yours. */
 const isProp = (a) => a && a.type==='Property';
+/* A life insurance policy: premiums and paid-up additions go in, the cash
+   value (what surrendering would give) is the balance, the death benefit is
+   what it insures. The policy's facts ride along for the record. */
+const isLife = (a) => a && a.type==='Life';
+const LIFE_KINDS = [['Premium','Premium'], ['PUA','Paid-up addition'], ['Dividend','Dividend'], ['Value','Cash value'], ['Benefit','Death benefit']];
+const lifeMarkAt = (a, kind, end) => { let v = null; for (const o of opsOf(a.key)) if (o.kind===kind && o.date <= end && (!v || o.date >= v.date)) v = o; return v ? +v.amount : 0; };
+const lifeCashAt = (a, end) => lifeMarkAt(a, 'Value', end);
+const yearsAgo = (d) => String(+d.slice(0,4)-1) + d.slice(4);
+const lifePaidAt = (a, end) => r2(opsOf(a.key).filter((o)=>(o.kind==='Premium' || o.kind==='PUA') && o.date <= end).reduce((t,o)=>t+(o.amount||0), 0));
 const propShare = (a) => isFinite(+a.share) && +a.share > 0 ? +a.share/100 : 1;
 const PROP_KINDS = [['HOA','HOA'], ['Tax','Property tax'], ['Insurance','Insurance'], ['Improvement','Works'], ['Other','Other']];
 const propValueAt = (a, end) => { let v = null; for (const o of opsOf(a.key)) if (o.kind==='Value' && o.date <= end && (!v || o.date >= v.date)) v = o; return v ? +v.amount : 0; };
@@ -452,7 +461,7 @@ function checkOp(o){
   }
   if (used >= Math.abs(o.amount)) throw new Error('Secondary tags must add up to less than the amount.');
 }
-const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
+const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
 /* The years the records span - first operation to last - or just this one. */
 const THIS_YEAR = new Date().getFullYear();
 function years(){
@@ -467,7 +476,7 @@ function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year
    last day. The current year is simply everything. */
 const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a) : valueAt(a, year+'-12-31');
 /* Any account at the end of any day. */
-const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
+const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : isLife(a) ? lifeCashAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
 /* The rate for a month: that month's end from the sheet; failing that the
    latest month before it; for the current month, or when the sheet has
    nothing yet, today's live rate. Null when there is nothing at all. */
@@ -540,7 +549,7 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought','Openings'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought','Openings','Policy'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
@@ -550,7 +559,7 @@ function configTab(){
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
-        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'' })))
+        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:isLife(a)&&a.policy?JSON.stringify(a.policy):'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -629,6 +638,7 @@ function readConfig(tab){
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes', funds: [],
       openings: (()=>{ try { const o = JSON.parse(col(r,'Openings')||'null'); return o && typeof o==='object' ? o : undefined; } catch (e) { return undefined; } })(),
+      ...(type==='Life' ? { policy: (()=>{ try { const p = JSON.parse(col(r,'Policy')||'null'); return p && typeof p==='object' ? p : null; } catch (e) { return null; } })() } : {}),
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
@@ -668,15 +678,16 @@ function importFile(j){
        through in order and, where a book opens at something other than what
        the earlier ones left, one adjustment on 1 January makes the balances
        follow the books. The oldest book sets the account's own opening. */
-    if (known && !isFund(known) && !isProp(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
+    if (known && !isFund(known) && !isProp(known) && !isLife(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
       known.openings = known.openings || {}; known.openings[year] = r2(+a.opening); touched.add('Config');
     }
     if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
-        ...(year && a.type!=='Fund' && a.type!=='Property' && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
+        ...(year && a.type!=='Fund' && a.type!=='Property' && a.type!=='Life' && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
         ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}),
+        ...(a.type==='Life' ? { policy: a.policy && typeof a.policy==='object' ? a.policy : null } : {}),
         ...(a.type==='Property' ? { share: isFinite(+a.share) && +a.share > 0 ? +a.share : 100, bought: /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '',
           mortgage: a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null } : {}) });
       accounts++;
@@ -684,6 +695,8 @@ function importFile(j){
       /* a plan's terms, when the book names them and the app does not know them yet */
       if (!known.opened && /^\d{4}-\d{2}-\d{2}/.test(a.opened||'')) known.opened = a.opened.slice(0,10);
       if (known.rate==null && isFinite(+a.rate)) known.rate = +a.rate;
+    } else if (isLife(known)) {
+      if (a.policy && typeof a.policy==='object') known.policy = a.policy;      /* the policy's facts follow the file */
     } else if (isProp(known)) {
       /* a house's terms, the same way */
       if (!known.bought && /^\d{4}-\d{2}-\d{2}/.test(a.bought||'')) known.bought = a.bought.slice(0,10);
@@ -914,6 +927,7 @@ function tabSummary(){
 const isGrowthOp = (o) => /interest|int[ée]r[êe]t|dividend|growth|plus-value/i.test((o.name||'')+' '+(o.tag||'')) || ((catOfTag(o.tag)||{}).type==='Income');
 function paidAt(a, end){
   if (isFund(a)) return r2(fundsOf(a).reduce((t,f)=>t+fundAt(a, f, end).paid, 0));
+  if (isLife(a)) return lifePaidAt(a, end);
   return r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end && !isGrowthOp(o)).reduce((t,o)=>t+(o.amount||0), 0));
 }
 /* Summary ▸ Savings: the family's Savings accounts month by month - paid in,
@@ -1025,7 +1039,7 @@ function nwByMonthCard(Y){
    operation's month. A secondary tag takes its own part; the main tag keeps
    the rest. Tags no category claims are shown as Unfiled, not dropped. */
 const catOfTag = (t) => store.categories.find((c)=>c.tags.some((x)=>same(x, t))) || null;
-const cashAccounts = () => store.accounts.filter((a)=>!isFund(a) && !isProp(a));
+const cashAccounts = () => store.accounts.filter((a)=>!isFund(a) && !isProp(a) && !isLife(a));
 /* Every category's total over a year ("2013") or a month ("2013-04"), in
    the shown currency at each operation's month's rate. */
 const sumsByCategory = (year) => sumsFor(String(year));
@@ -2240,9 +2254,96 @@ function pmortSheet(p, a){
   </div>`;
 }
 
+/* ------------------------------------------------------------------- life --*/
+const LIFE_VIEWS = [['summary','Summary'],['ops','Operations']];
+const lifeKindLabel = (k) => (LIFE_KINDS.find(([x])=>x===k)||[k,k])[1];
+function lifePage(a){
+  const p = state.page;
+  const Y = theYear();
+  const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
+  const view = LIFE_VIEWS.some(([k])=>k===state.lview) ? state.lview : 'summary';
+  const cash = lifeCashAt(a, end), paid = lifePaidAt(a, end), benefit = lifeMarkAt(a, 'Benefit', end);
+  const cashConv = a.currency!==store.cur ? conv(cash, a.currency, store.cur, yearMonth(Y)) : null;
+  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='lop' ? lopSheet(p, a) : '';
+  return widget + `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
+    <div class="hero">${money(cash, a.currency)}</div>
+    ${cashConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(cashConv, store.cur)}</div>`:''}
+    <div class="herosub">cash value · ${money(paid, a.currency)} paid in · <span style="color:${cash-paid<0?'var(--bad)':'var(--good)'}">${money(r2(cash-paid), a.currency)}</span>${benefit?' · insures '+money(benefit, a.currency):''} · ${Y}</div>
+    <div class="chips" style="margin-top:10px">${LIFE_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-lview="${k}">${l}</button>`).join('')}</div>
+  </div>
+  ${view==='summary' ? lifeSummary(a, Y) : lifeOps(a, Y)}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+function lifeSummary(a, Y){
+  const P = a.policy || {};
+  const rows = [['Insurer', P.insurer], ['Policy', P.product], ['Number', P.number], ['Policy date', P.policyDate && dLabel(P.policyDate)], ['Issued', P.issueDate && dLabel(P.issueDate)],
+    ['Insured', P.insured], ['Owner', P.owner], ['Beneficiaries', P.beneficiaries], ['Face amount', P.face && money(P.face, a.currency)],
+    ['Annual premium', P.premium && money(P.premium, a.currency) + (P.premiumNote ? ' · ' + P.premiumNote : '')], ['Paid-up additions', P.pua && money(P.pua, a.currency) + ' a year' + (P.puaNote ? ' · ' + P.puaNote : '')],
+    ['Total initial premium', P.totalPremium && money(P.totalPremium, a.currency)], ['Dividends', P.dividends], ['Loans', P.loans], ['Riders', P.riders], ['Basis of values', P.basis]].filter(([,v])=>v);
+  const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR).sort((x,y)=>y-x);
+  const yrow = (y) => { const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const c = lifeCashAt(a, e), pd = lifePaidAt(a, e), pd0 = lifePaidAt(a, (y-1)+'-12-31'); return { y, paid:r2(pd-pd0), cash:c, growth:r2(c-pd), benefit:lifeMarkAt(a, 'Benefit', e) }; };
+  const g = Array.isArray(P.guaranteed) ? P.guaranteed : [];
+  return `
+  <div class="card">
+    <h2>Policy</h2>
+    ${rows.length ? `<div class="rows">${rows.map(([k,v])=>`<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No policy details yet.</div>`}
+  </div>
+  <div class="card">
+    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    ${years.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Year</th><th>Paid in</th><th>Cash value</th><th>Growth</th><th>Death benefit</th></tr></thead>
+      <tbody>${years.map(yrow).map((r)=>`<tr><td>${r.y}</td><td>${money(r.paid, a.currency)}</td><td><b>${money(r.cash, a.currency)}</b></td><td style="color:${r.growth<0?'var(--bad)':'var(--good)'}">${money(r.growth, a.currency)}</td><td>${r.benefit?money(r.benefit, a.currency):'—'}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>
+  ${g.length ? `
+  <div class="card">
+    <h2>Guaranteed values <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    ${P.guaranteedNote ? `<div class="hint" style="margin:0 0 6px">${esc(P.guaranteedNote)}</div>` : ''}
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Anniversary</th><th>Guaranteed</th><th>Actual</th><th>Paid-up</th></tr></thead>
+      <tbody>${g.map(([d,c,rpu])=>{ const past = d <= TODAY(); const marked = past && opsOf(a.key).some((o)=>o.kind==='Value' && o.date <= d && o.date > yearsAgo(d)); const act = marked ? lifeCashAt(a, d) : null; return `<tr${past?'':' class="muted"'}><td>${dLabel(d)}</td><td>${money(c, a.currency)}</td><td>${act!=null?'<b>'+money(act, a.currency)+'</b>':'—'}</td><td>${rpu?money(rpu, a.currency):'—'}</td></tr>`; }).join('')}</tbody>
+    </table></div>
+  </div>` : ''}`;
+}
+function lifeOps(a, Y){
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  return `
+  <div class="card">
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-lopnew="1"${LK()}>+</button></span></h2>
+    ${ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap ${o.kind==='Value'||o.kind==='Benefit'?'muted':''}" data-lopedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(lifeKindLabel(o.kind))}${o.name && canonName(o.name)!==canonName(lifeKindLabel(o.kind)) && o.name!==o.kind?' <span class="muted" style="font-weight:400">· '+esc(o.name)+'</span>':''}</div>
+          <div class="sub">${esc(o.date)}${o.note?' · '+esc(o.note):''}</div></div>
+        <span class="v ${o.kind==='Value'||o.kind==='Benefit'?'':'pos'}">${money(o.amount, a.currency)}</span>
+      </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
+function lopSheet(p, a){
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-lopclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New operation':esc(lifeKindLabel(p.was.lkind))}</h3>
+      <div class="field"><label>Kind</label><div class="chips">${LIFE_KINDS.map(([k,l])=>`<button class="chip ${p.lkind===k?'on':''}" data-lopkind="${k}">${l}</button>`).join('')}</div></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="loDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>Amount ${esc(SYM[a.currency]||a.currency)}</label><input id="loAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+      </div>
+      <div class="field"><label>Note</label><input id="loNote" value="${esc(p.note)}"></div>
+      ${p.id==null?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-lopdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-lopclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-lopsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+
 function accountPage(a){
   if (isFund(a)) return fundAccountPage(a);
   if (isProp(a)) return propertyPage(a);
+  if (isLife(a)) return lifePage(a);
   const p = state.page;
   const Y = theYear();
   const f = opFilter();
@@ -3235,7 +3336,7 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; render(); });
   document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
@@ -3306,7 +3407,7 @@ function wire(){
     if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
-  document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; if (el.dataset.acctype==='Property') state.page.category='Property'; render(); });
+  document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; if (el.dataset.acctype==='Property') state.page.category='Property'; if (el.dataset.acctype==='Life') state.page.category='Savings'; render(); });
   document.querySelectorAll('[data-accowner]').forEach((el)=>el.onclick=()=>{ readAcc(); const o=el.dataset.accowner, p=state.page;
     p.owners = p.owners.includes(o) ? p.owners.filter((x)=>x!==o) : [...p.owners, o]; render(); });
   const ak=document.getElementById('aKey'), ao=document.getElementById('aOpening');
@@ -3423,6 +3524,27 @@ function wire(){
     if (kind==='mortgage') { a.mortgage=null; state.page=null; commit('Config'); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset[kind]); state.page=null; commit(a.key); });
   delP('data-pvaldelete', 'pvaldelete'); delP('data-pexpdelete', 'pexpdelete'); delP('data-pmortdelete', 'mortgage');
+
+  /* a life policy: its views and operations */
+  const lifeAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isLife(a) ? a : null; };
+  document.querySelectorAll('[data-lview]').forEach((el)=>el.onclick=()=>{ state.lview=el.dataset.lview; state.page=null; render(); });
+  const LO = [['loDate','date'],['loAmount','amount'],['loNote','note']];
+  const openLo = (id) => { const a = lifeAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
+    const cur = { date:o?o.date:dflt(), lkind:o?o.kind:'Premium', amount:o?String(o.amount):'', note:o?(o.note||''):'' };
+    state.page={ kind:'lop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-lopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openLo(null); });
+  document.querySelectorAll('[data-lopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openLo(el.dataset.lopedit); });
+  document.querySelectorAll('[data-lopkind]').forEach((el)=>el.onclick=()=>{ readP(LO); state.page.lkind=el.dataset.lopkind; render(); });
+  if (state.page && state.page.kind==='lop') for (const [id] of LO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(LO, ['date','lkind','amount','note'], 'data-lopclose');
+  document.querySelectorAll('[data-lopsave]').forEach((el)=>el.onclick=()=>{ readP(LO); const p=state.page, a=lifeAcc(); if (!a) return;
+    const o = { id:p.id||uid(), date:p.date, name:lifeKindLabel(p.lkind), kind:p.lkind, amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('An amount.'); render(); return; }
+    const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) Object.assign(list[i], o); else list.push(o);
+    state.page=null; commit(a.key); });
+  document.querySelectorAll('[data-lopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=lifeAcc(); if (!a) return;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.lopdelete); state.page=null; commit(a.key); });
 
   /* operations - the widget */
   const acct = () => opAcct();
