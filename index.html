@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=87"></script>
+<script src="backend.js?v=88"></script>
 <script>
-const APP_VERSION="87";
+const APP_VERSION="88";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2295,7 +2295,8 @@ function opSheet(p, a){
       <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
       <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
       <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select>
-        <div id="oKnown">${knownChips(p.name, p.tag)}</div></div>
+        <div id="oKnown">${knownChips(p.name, p.tag)}</div>
+        ${p.name.trim() && p.tag && !nameTags(p.name).some((t)=>same(t, p.tag)) ? `<button class="chip" style="margin-top:5px" data-oprule="1">Make it a tag rule: ${esc(p.name.trim())} → ${esc(p.tag)}</button>` : ''}</div>
       ${budgetsFor(p.budget).length?`<div class="field"><label>Budget</label>
         <div class="chips">${budgetsFor(p.budget).map((b)=>`<button class="chip ${same(p.budget||'', b.name)?'on':''}" data-opbudget="${esc(b.name)}"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</button>`).join('')}</div></div>`:''}
       <div class="field"><label>Secondary tags</label>
@@ -2574,7 +2575,7 @@ function settingsFx(){
    heading would be. Nothing slides up from the bottom. */
 function settingsTags(){
   const p = state.page;
-  return (p && p.kind==='cat' ? catSheet(p) : p && p.kind==='names' ? namesSheet(p) : '') + `
+  return (p && p.kind==='cat' ? catSheet(p) : p && p.kind==='names' ? namesSheet(p) : p && p.kind==='name' ? nameSheet(p) : '') + `
   <div class="card">
     <h2>Categories <button class="gbtn" data-catnew="1"${LK()}>+</button></h2>
     ${store.categories.length ? `<div class="rows" id="catRows">${store.categories.map((c,i)=>`
@@ -2589,6 +2590,7 @@ function settingsTags(){
       </div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>
+  ${knownNamesCard()}
   ${(function(){ const un = unfiledTags(); if (!un.length) return '';
     /* A tag with no category: pick one from the row and it is filed. */
     return `<div class="card">
@@ -2630,31 +2632,80 @@ function forgetName(name, tag){
   n.tags = n.tags.filter((t)=>!same(t, tag));
   if (!n.tags.length) store.names = knownNames().filter((x)=>x!==n);
 }
-/* The records' suggestions for a category: every payee seen at least twice
-   under one of its tags and not yet known under it, with the count. */
-function suggestNames(c){
+/* The records' suggestions: every payee seen at least twice under a tag it
+   is not yet known under, with the count and the tag's category. */
+function suggestNames(){
   const count = {};
   for (const a of familyCash()) for (const o of opsOf(a.key)) { if (!o.name || !o.name.trim()) continue;
-    for (const t of opTags(o)) { if (!c.tags.some((x)=>same(x, t))) continue;
-      const k = o.name.trim().toLowerCase()+'|'+t.toLowerCase(); (count[k] = count[k] || { name:o.name.trim(), tag:c.tags.find((x)=>same(x, t)), n:0 }).n++; } }
+    for (const t of opTags(o)) { const c = catOfTag(t); if (!c || same(t, 'x')) continue;
+      const k = canonName(o.name)+'|'+t.toLowerCase(); (count[k] = count[k] || { name:o.name.trim(), tag:c.tags.find((x)=>same(x, t)), cat:c.name, n:0 }).n++; } }
   return Object.values(count).filter((x)=>x.n >= 2 && !nameTags(x.name).some((t)=>same(t, x.tag))).sort((x,y)=>y.n-x.n || x.name.localeCompare(y.name));
 }
+/* Find, over every category: the records' suggestions grouped by category. */
 function namesSheet(p){
-  const c = store.categories[p.index];
   const picked = new Set(p.picked);
+  const groups = store.categories.map((c)=>({ c, list: p.found.map((x,i)=>({ x, i })).filter(({x})=>x.cat===c.name) })).filter((g)=>g.list.length);
   return `
   <div class="sheetwrap">
     <div class="scrim" data-namesclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
-      <h3>Names in ${esc(c.name)} <span class="muted" style="font-size:12px;font-weight:600">${p.found.length} found${p.found.length?' · '+picked.size+' picked':''}</span>
+      <h3>Names in the records <span class="muted" style="font-size:12px;font-weight:600">${p.found.length} found${p.found.length?' · '+picked.size+' picked':''}</span>
         ${p.found.length?`<button class="gbtn ghost" style="margin-left:auto" data-namesall="1">${picked.size===p.found.length?'None':'All'}</button>`:''}</h3>
-      ${p.found.length ? `<div class="rows">${p.found.map((x,i)=>`
+      ${p.found.length ? groups.map((g)=>`
+      <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)"><span class="dot" style="background:${typeColor(g.c.type)}"></span>${esc(g.c.name)}</div>
+      <div class="rows">${g.list.map(({x,i})=>`
       <div class="row tap" data-namepick="${i}">
         <span class="ck ${picked.has(i)?'on':''}">${picked.has(i)?'✓':''}</span>
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(x.name)}</div><div class="sub">${esc(x.tag)}</div></div>
         <span class="v">${x.n}</span>
-      </div>`).join('')}</div>` : `<div class="hint" style="margin:0 0 6px">No payee seen twice under these tags that is not known already.</div>`}
+      </div>`).join('')}</div>`).join('') : `<div class="hint" style="margin:0 0 6px">No payee seen twice under a tag that is not known already.</div>`}
       <div class="foot stick"><button class="btn close" data-namesclose="1">Close</button>${p.found.length?`<button class="btn primary" data-namessave="1">Save ${picked.size}</button>`:''}</div>
+    </div>
+  </div>`;
+}
+/* The Known names group: a name a row with its tags, searched by name and
+   narrowed by category; a tap opens the name's widget. */
+const nameShown = (n) => { const q = canonName(state.nmQ||''), c = state.nmCat;
+  return (!q || canonName(n.name).includes(q)) && (!c || n.tags.some((t)=>(catOfTag(t)||{}).name===c)); };
+const nameCount = (n) => { const k = canonName(n.name); let z = 0; for (const a of familyCash()) for (const o of opsOf(a.key)) if (canonName(o.name).startsWith(k)) z++; return z; };
+function knownNamesCard(){
+  const list = knownNames().slice().sort((x,y)=>x.name.localeCompare(y.name));
+  const shown = list.filter(nameShown);
+  const cats = store.categories.filter((c)=>list.some((n)=>n.tags.some((t)=>(catOfTag(t)||{}).name===c.name)));
+  return `
+  <div class="card">
+    <h2>Known names <span class="fbar"><span class="muted" id="nmCount">${shown.length}${shown.length!==list.length?' / '+list.length:''}</span><button class="gbtn ghost" data-nmfind="1"${LK()}>Find</button><button class="gbtn" data-nmnew="1"${LK()}>+</button></span></h2>
+    ${list.length ? `
+    <div class="fsearch"><input id="nmQ" placeholder="Name" value="${esc(state.nmQ||'')}" autocapitalize="off"><span class="fx" data-nmqclear="1">×</span></div>
+    ${cats.length > 1 ? `<div class="chips" style="margin-bottom:6px"><button class="chip ${!state.nmCat?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nmcat="">All</button>${cats.map((c)=>`<button class="chip ${state.nmCat===c.name?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nmcat="${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}</button>`).join('')}</div>` : ''}
+    <div class="rows" id="nmList">${nameRows(shown)}</div>`
+    : `<div class="hint" style="margin-top:0">None yet. Find reads the records.</div>`}
+  </div>`;
+}
+const nameRows = (shown) => shown.length ? shown.map((n)=>`
+      <div class="row tap" data-nmedit="${esc(n.name)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(n.name)}</div>
+          <div class="caps">${n.tags.map((t)=>`<span class="cap" style="border-color:${typeColor((catOfTag(t)||{}).type)}">${esc(t)}</span>`).join('')}</div></div>
+        <span class="muted" style="font-size:11.5px">${nameCount(n)}</span><span class="chev">›</span>
+      </div>`).join('') : `<div class="hint" style="margin-top:0">Nothing matches.</div>`;
+/* A name's widget: the name, its tags one at a time, Delete. */
+const nmDirty = (p) => JSON.stringify([p.name.trim(), p.tags]) !== JSON.stringify([p.was.name, p.was.tags]);
+function nameSheet(p){
+  const isNew = p.index==null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-nmclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New known name':esc(p.was.name)}</h3>
+      <div class="field"><label>Name</label><input id="nmName" value="${esc(p.name)}"></div>
+      <div class="field"><label>Tags</label>
+        <div class="tagbox">${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-nmtagdel="${i}">×</span></span>`).join('')}
+          <select id="nmTag" style="flex:1;min-width:120px;border:0;background:transparent">${tagOptions('')}</select></div></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-nmdelete="1">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-nmclose="1">${p.closeArm?'Close?':'Close'}</button>
+        <button class="btn primary" data-nmsave="1">Save</button>
+      </div>
     </div>
   </div>`;
 }
@@ -2662,8 +2713,7 @@ function namesSheet(p){
 const knownChips = (name, tag) => { const ts = nameTags(name); return ts.length ? `<div class="chips" style="margin-top:5px">${ts.map((t)=>`<button class="chip ${same(t, tag||'')?'on':''}" style="padding:2px 9px;font-size:11.5px" data-opknown="${esc(t)}">${esc(t)}</button>`).join('')}</div>` : ''; };
 function catSheet(p){
   const isNew = p.index==null;
-  const c = isNew ? null : store.categories[p.index];
-  const known = c ? knownNames().flatMap((n)=>n.tags.filter((t)=>c.tags.some((x)=>same(x, t))).map((t)=>({ name:n.name, tag:t }))).sort((x,y)=>x.name.localeCompare(y.name)) : [];
+
   return `
   <div class="sheetwrap">
     <div class="scrim" data-catclose="1"></div>
@@ -2679,8 +2729,6 @@ function catSheet(p){
           ${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-tagdel="${i}">×</span></span>`).join('')}
           <input id="cTagIn" value="${esc(p.draft||'')}" autocapitalize="off" autocomplete="off" enterkeyhint="done">
         </div></div>
-      ${isNew?'':`<div class="field"><label>Known names <button class="gbtn ghost" style="margin-left:8px" data-catnames="${p.index}">Find</button></label>
-        ${known.length ? `<div class="tagbox">${known.map((k)=>`<span class="cap">${esc(k.name)} <span class="muted" style="font-size:10.5px">${esc(k.tag)}</span><span class="x ${state.nameArm===k.name+'|'+k.tag?'arm':''}" data-namedel="${esc(k.name)}|${esc(k.tag)}">${state.nameArm===k.name+'|'+k.tag?'?':'×'}</span></span>`).join('')}</div>` : `<div class="hint" style="margin:0">None yet.</div>`}</div>`}
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-catdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-catclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -2888,17 +2936,39 @@ function wire(){
     p.draft=''; p.focus=true; render(); };
   document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(null); });
   document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(+el.dataset.catedit); });
-  /* known names: found in the records, kept or forgotten */
-  document.querySelectorAll('[data-catnames]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const i=+el.dataset.catnames, c=store.categories[i]; if (!c) return;
-    const found = suggestNames(c); state.page={ kind:'names', index:i, found, picked:[], fresh:true }; render(); state.page.fresh=false; });
+  /* known names: the group, its search and filter, Find, the widget */
+  document.querySelectorAll('[data-nmfind]').forEach((el)=>el.onclick=()=>{ if (store.locked) return;
+    const found = suggestNames(); state.page={ kind:'names', found, picked:[], fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-namesall]').forEach((el)=>el.onclick=()=>{ const p=state.page; p.picked = p.picked.length===p.found.length ? [] : p.found.map((x,k)=>k); render(); });
   document.querySelectorAll('[data-namepick]').forEach((el)=>el.onclick=()=>{ const p=state.page, i=+el.dataset.namepick; p.picked = p.picked.includes(i) ? p.picked.filter((x)=>x!==i) : [...p.picked, i]; render(); });
-  document.querySelectorAll('[data-namesclose]').forEach((el)=>el.onclick=()=>{ const p=state.page; openCat(p.index); });
+  document.querySelectorAll('[data-namesclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   document.querySelectorAll('[data-namessave]').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const i of p.picked) { const x=p.found[i]; if (x) learnName(x.name, x.tag); }
-    openCat(p.index); commit('Config'); });
-  document.querySelectorAll('[data-namedel]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation(); const k=el.dataset.namedel;
-    if (state.nameArm!==k) { state.nameArm=k; render(); return; }
-    const i=k.indexOf('|'); forgetName(k.slice(0,i), k.slice(i+1)); state.nameArm=null; commit('Config'); });
+    state.page=null; commit('Config'); });
+  document.querySelectorAll('[data-nmcat]').forEach((el)=>el.onclick=()=>{ state.nmCat=el.dataset.nmcat||null; render(); });
+  document.querySelectorAll('[data-nmqclear]').forEach((el)=>el.onclick=()=>{ state.nmQ=''; render(); });
+  const nq=document.getElementById('nmQ');
+  if (nq) nq.oninput=()=>{ state.nmQ=nq.value; const l=document.getElementById('nmList'), c=document.getElementById('nmCount'); const list = knownNames().slice().sort((x,y)=>x.name.localeCompare(y.name)), shown = list.filter(nameShown);
+    if (l) l.innerHTML = nameRows(shown); if (c) c.textContent = shown.length + (shown.length!==list.length ? ' / '+list.length : ''); wireNm(); };
+  const readNm=()=>{ const p=state.page; const e=document.getElementById('nmName'); if (e) p.name=e.value; p.closeArm=false; p.delArm=false; };
+  const openNm=(name)=>{ const n = name==null ? null : knownNames().find((x)=>x.name===name); const idx = n ? knownNames().indexOf(n) : null;
+    const cur = { name:n?n.name:'', tags:n?n.tags.slice():[] };
+    state.page={ kind:'name', index:idx, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  const wireNm=()=>document.querySelectorAll('[data-nmedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openNm(el.dataset.nmedit); });
+  wireNm();
+  document.querySelectorAll('[data-nmnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openNm(null); });
+  const nt=document.getElementById('nmTag');
+  if (nt && state.page && state.page.kind==='name') nt.onchange=()=>{ readNm(); const t=nt.value; if (t && !state.page.tags.some((x)=>same(x, t))) state.page.tags.push(t); render(); };
+  const nn=document.getElementById('nmName'); if (nn && state.page && state.page.kind==='name') nn.oninput=()=>{ state.page.name=nn.value; state.page.closeArm=false; state.page.delArm=false; };
+  document.querySelectorAll('[data-nmtagdel]').forEach((el)=>el.onclick=()=>{ readNm(); state.page.tags.splice(+el.dataset.nmtagdel, 1); render(); });
+  document.querySelectorAll('[data-nmclose]').forEach((el)=>el.onclick=()=>{ const p=state.page; const e=document.getElementById('nmName'); if (e) p.name=e.value;
+    if (nmDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; } state.page=null; render(); });
+  document.querySelectorAll('[data-nmsave]').forEach((el)=>el.onclick=()=>{ readNm(); const p=state.page; const name=p.name.trim();
+    if (!name) { alert('A name.'); render(); return; } if (!p.tags.length) { alert('At least one tag.'); render(); return; }
+    const clash = knownNames().find((x,i)=>i!==p.index && canonName(x.name)===canonName(name)); if (clash) { alert('"'+clash.name+'" is already known.'); render(); return; }
+    if (p.index==null) knownNames().push({ name, tags:p.tags.slice() }); else Object.assign(knownNames()[p.index], { name, tags:p.tags.slice() });
+    state.page=null; commit('Config'); });
+  document.querySelectorAll('[data-nmdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    knownNames().splice(p.index, 1); state.page=null; commit('Config'); });
   document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
   /* The name capsule follows the name as it is typed - no redraw, the field
      you are typing in must stay put. */
@@ -3228,6 +3298,8 @@ function wire(){
     state.page=null; state.opAccount=null; commit('Dismissed'); });
   document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', amount:'' }); render(); });
   document.querySelectorAll('[data-opspdel]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.splice(+el.dataset.opspdel,1); render(); });
+  /* this payee under this tag, known from now on */
+  document.querySelectorAll('[data-oprule]').forEach((el)=>el.onclick=()=>{ readOp(); const p=state.page; if (!p.name.trim() || !p.tag) return; learnName(p.name.trim(), p.tag); markDirty('Config'); save(); render(); pushSoon(); });
   if (state.page && state.page.kind==='op') {
     for (const id of ['oDate','oName','oAmount','oNote','oTag'].concat(state.page.splits.flatMap((sp,i)=>['oSpTag'+i,'oSpAmt'+i]))) {
       const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; };
