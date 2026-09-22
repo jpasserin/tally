@@ -271,9 +271,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=82"></script>
+<script src="backend.js?v=83"></script>
 <script>
-const APP_VERSION="82";
+const APP_VERSION="83";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1437,7 +1437,7 @@ function warnPage(g){
   return `
   <div class="card">
     <h2>${esc(g.title)} <span class="fbar"><span class="muted" id="warnCount">${shown.length}</span>${selectAllBtn(shown.length)}</span></h2>
-    <div class="fsearch"><input id="warnQ" placeholder="Name" value="${esc(state.warnQ||'')}" autocapitalize="off"></div>
+    <div class="fsearch"><input id="warnQ" placeholder="Name" value="${esc(state.warnQ||'')}" autocapitalize="off"><span class="fx" data-warnqclear="1">×</span></div>
     <div class="rows" id="warnList">${warnRows(g, shown)}</div>
   </div>
   <div style="height:56px"></div>
@@ -3207,6 +3207,7 @@ function wire(){
   };
   wireWarnRows();
   /* typing a name redraws the list alone, so the field keeps the finger */
+  document.querySelectorAll('[data-warnqclear]').forEach((el)=>el.onclick=()=>{ state.warnQ=''; render(); });
   const wq = document.getElementById('warnQ');
   if (wq) wq.oninput = () => { state.warnQ = wq.value; const g = warnings().find((x)=>x.kind===state.warnKind); const l = document.getElementById('warnList'); if (!g || !l) return;
     const shown = warnShown(g); l.innerHTML = warnRows(g, shown); const c = document.getElementById('warnCount'); if (c) c.textContent = String(shown.length);
