@@ -271,16 +271,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=84"></script>
+<script src="backend.js?v=85"></script>
 <script>
-const APP_VERSION="84";
+const APP_VERSION="85";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], rates:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -525,6 +525,7 @@ function configTab(){
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
+      .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'' })))
@@ -586,7 +587,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[];
+  const cats=[], people=[], accounts=[], budgets=[], names=[];
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -594,6 +595,7 @@ function readConfig(tab){
     if (!name) continue;
     if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: withName(name, splitTags(col(r,'Tags'))) });
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
+    if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       owners: splitTags(col(r,'Owners')),
@@ -608,7 +610,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets };
+  return { categories:cats, people, accounts, budgets, names };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -731,7 +733,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; }
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
   for (const a of store.accounts) ops[a.key] = keep.includes(a.key) && store.ops[a.key] ? store.ops[a.key] : readOps(tab(a.key));
@@ -2557,7 +2559,7 @@ function settingsFx(){
    heading would be. Nothing slides up from the bottom. */
 function settingsTags(){
   const p = state.page;
-  return (p && p.kind==='cat' ? catSheet(p) : '') + `
+  return (p && p.kind==='cat' ? catSheet(p) : p && p.kind==='names' ? namesSheet(p) : '') + `
   <div class="card">
     <h2>Categories <button class="gbtn" data-catnew="1"${LK()}>+</button></h2>
     ${store.categories.length ? `<div class="rows" id="catRows">${store.categories.map((c,i)=>`
@@ -2588,8 +2590,51 @@ function settingsTags(){
    capsule. Close asks once (red) if anything was typed; Save is the wide blue
    one. Tapping the dark area behind counts as Close. */
 const catDirty = (p) => p.name.trim()!==p.was.name || p.type!==p.was.type || p.tags.join('\u0001')!==p.was.tags.join('\u0001') || !!p.draft;
+/* Known names: a payee and the tags it is known under - TMobile under Phone.
+   A name may be known under several tags. Kept in Config as `name` rows. */
+const knownNames = () => store.names || (store.names = []);
+const nameTags = (name) => { const n = knownNames().find((x)=>same(x.name, name)); return n ? n.tags : []; };
+function learnName(name, tag){
+  let n = knownNames().find((x)=>same(x.name, name));
+  if (!n) { n = { name:String(name).trim(), tags:[] }; knownNames().push(n); }
+  if (!n.tags.some((t)=>same(t, tag))) n.tags.push(tag);
+}
+function forgetName(name, tag){
+  const n = knownNames().find((x)=>same(x.name, name)); if (!n) return;
+  n.tags = n.tags.filter((t)=>!same(t, tag));
+  if (!n.tags.length) store.names = knownNames().filter((x)=>x!==n);
+}
+/* The records' suggestions for a category: every payee seen at least twice
+   under one of its tags and not yet known under it, with the count. */
+function suggestNames(c){
+  const count = {};
+  for (const a of familyCash()) for (const o of opsOf(a.key)) { if (!o.name || !o.name.trim()) continue;
+    for (const t of opTags(o)) { if (!c.tags.some((x)=>same(x, t))) continue;
+      const k = o.name.trim().toLowerCase()+'|'+t.toLowerCase(); (count[k] = count[k] || { name:o.name.trim(), tag:c.tags.find((x)=>same(x, t)), n:0 }).n++; } }
+  return Object.values(count).filter((x)=>x.n >= 2 && !nameTags(x.name).some((t)=>same(t, x.tag))).sort((x,y)=>y.n-x.n || x.name.localeCompare(y.name));
+}
+function namesSheet(p){
+  const c = store.categories[p.index];
+  const picked = new Set(p.picked);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-namesclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>Names in ${esc(c.name)} <span class="muted" style="font-size:12px;font-weight:600">${p.found.length} found${p.found.length?' · '+picked.size+' picked':''}</span></h3>
+      ${p.found.length ? `<div class="rows">${p.found.map((x,i)=>`
+      <div class="row tap" data-namepick="${i}">
+        <span class="ck ${picked.has(i)?'on':''}">${picked.has(i)?'✓':''}</span>
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(x.name)}</div><div class="sub">${esc(x.tag)}</div></div>
+        <span class="v">${x.n}</span>
+      </div>`).join('')}</div>` : `<div class="hint" style="margin:0 0 6px">No payee seen twice under these tags that is not known already.</div>`}
+      <div class="foot stick"><button class="btn close" data-namesclose="1">Close</button>${p.found.length?`<button class="btn primary" data-namessave="1">Save ${picked.size}</button>`:''}</div>
+    </div>
+  </div>`;
+}
 function catSheet(p){
   const isNew = p.index==null;
+  const c = isNew ? null : store.categories[p.index];
+  const known = c ? knownNames().flatMap((n)=>n.tags.filter((t)=>c.tags.some((x)=>same(x, t))).map((t)=>({ name:n.name, tag:t }))).sort((x,y)=>x.name.localeCompare(y.name)) : [];
   return `
   <div class="sheetwrap">
     <div class="scrim" data-catclose="1"></div>
@@ -2605,6 +2650,8 @@ function catSheet(p){
           ${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-tagdel="${i}">×</span></span>`).join('')}
           <input id="cTagIn" value="${esc(p.draft||'')}" autocapitalize="off" autocomplete="off" enterkeyhint="done">
         </div></div>
+      ${isNew?'':`<div class="field"><label>Known names <button class="gbtn ghost" style="margin-left:8px" data-catnames="${p.index}">Find</button></label>
+        ${known.length ? `<div class="tagbox">${known.map((k)=>`<span class="cap">${esc(k.name)} <span class="muted" style="font-size:10.5px">${esc(k.tag)}</span><span class="x ${state.nameArm===k.name+'|'+k.tag?'arm':''}" data-namedel="${esc(k.name)}|${esc(k.tag)}">${state.nameArm===k.name+'|'+k.tag?'?':'×'}</span></span>`).join('')}</div>` : `<div class="hint" style="margin:0">None yet.</div>`}</div>`}
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-catdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-catclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -2800,7 +2847,7 @@ function wire(){
   /* categories - the widget */
   const readCat=()=>{ const n=document.getElementById('cName'), t=document.getElementById('cTagIn');
     if (n) state.page.name=n.value; if (t) state.page.draft=t.value; state.page.closeArm=false; state.page.delArm=false; };
-  const openCat=(index)=>{ const c=index==null?null:store.categories[index];
+  const openCat=(index)=>{ const c=index==null?null:store.categories[index]; state.nameArm=null;
     const extras = c ? withoutName(c.name, c.tags) : [];
     state.page={ kind:'cat', index, name:c?c.name:'', type:c?c.type:'Necessity', tags:extras.slice(), draft:'',
       was:{ name:c?c.name:'', type:c?c.type:'Necessity', tags:extras.slice() }, closeArm:false, focus:false, fresh:true };
@@ -2812,6 +2859,16 @@ function wire(){
     p.draft=''; p.focus=true; render(); };
   document.querySelectorAll('[data-catnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(null); });
   document.querySelectorAll('[data-catedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openCat(+el.dataset.catedit); });
+  /* known names: found in the records, kept or forgotten */
+  document.querySelectorAll('[data-catnames]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const i=+el.dataset.catnames, c=store.categories[i]; if (!c) return;
+    const found = suggestNames(c); state.page={ kind:'names', index:i, found, picked:found.map((x,k)=>k), fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-namepick]').forEach((el)=>el.onclick=()=>{ const p=state.page, i=+el.dataset.namepick; p.picked = p.picked.includes(i) ? p.picked.filter((x)=>x!==i) : [...p.picked, i]; render(); });
+  document.querySelectorAll('[data-namesclose]').forEach((el)=>el.onclick=()=>{ const p=state.page; openCat(p.index); });
+  document.querySelectorAll('[data-namessave]').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const i of p.picked) { const x=p.found[i]; if (x) learnName(x.name, x.tag); }
+    openCat(p.index); commit('Config'); });
+  document.querySelectorAll('[data-namedel]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation(); const k=el.dataset.namedel;
+    if (state.nameArm!==k) { state.nameArm=k; render(); return; }
+    const i=k.indexOf('|'); forgetName(k.slice(0,i), k.slice(i+1)); state.nameArm=null; commit('Config'); });
   document.querySelectorAll('[data-cattype]').forEach((el)=>el.onclick=()=>{ readCat(); state.page.type=el.dataset.cattype; render(); });
   /* The name capsule follows the name as it is typed - no redraw, the field
      you are typing in must stay put. */
