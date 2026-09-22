@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=96"></script>
+<script src="backend.js?v=97"></script>
 <script>
-const APP_VERSION="96";
+const APP_VERSION="97";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1228,7 +1228,8 @@ function tabOperations(){
   <div class="card">
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${filterActive(f)?shown.length+' · '+money(sum, store.cur):''}</span>
-        <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span></span></h2>
+        <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
+        ${shown.length && !store.locked ? `<button class="gbtn ghost" data-opselall="1">${shown.every(({o})=>state.sel.includes(o.id))?'None':'All'}</button>` : ''}</span></h2>
     ${filterChips(f)}
     <div id="opsList">${filterActive(f) ? opRowsMixed(shown) : `<div class="hint" style="margin-top:0">Search or filter.</div>`}</div>
   </div>
@@ -3161,6 +3162,10 @@ function wire(){
     document.querySelectorAll('[data-selop]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
       const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id]; render(); }); };
   document.querySelectorAll('[data-fopen]').forEach((el)=>el.onclick=()=>{ F.open=!F.open; F.picking=null; render(); });
+  /* Operations: every operation the filter shows, ticked or unticked at once */
+  document.querySelectorAll('[data-opselall]').forEach((el)=>el.onclick=()=>{ if (!filterActive(F)) return;
+    const ids = filterOps(familyCash().flatMap((x)=>opsOf(x.key)), F).map((o)=>o.id);
+    state.sel = ids.every((id)=>state.sel.includes(id)) ? [] : ids; state.bulk=null; render(); });
   const fq=document.getElementById('fq'); if (fq) fq.oninput=()=>{ F.q=fq.value; refreshOps(); };
   const fmin=document.getElementById('fmin'); if (fmin) fmin.oninput=()=>{ F.min=fmin.value; refreshOps(); };
   const fmax=document.getElementById('fmax'); if (fmax) fmax.oninput=()=>{ F.max=fmax.value; refreshOps(); };
