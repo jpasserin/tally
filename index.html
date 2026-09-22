@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=97"></script>
+<script src="backend.js?v=98"></script>
 <script>
-const APP_VERSION="97";
+const APP_VERSION="98";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -363,7 +363,8 @@ function fundAt(a, f, end){
   const last = prices[prices.length-1];
   /* shares held: the latest mark, moved by every buy, sale, dividend or fee
      since it (a sale sold out leaves no mark behind) */
-  const move = (o) => (o.kind==='Sell' || o.kind==='Fee') ? -Math.abs(o.shares||0) : Math.abs(o.shares||0);
+  /* a sale or a fee takes shares; anything else moves them the way its sign says (growth carried out of a fund is negative) */
+  const move = (o) => (o.kind==='Sell' || o.kind==='Fee') ? -Math.abs(o.shares||0) : (o.shares||0);
   let shares = ops.filter((o)=>o.kind!=='Price' && (!last || o.date > last.date)).reduce((t,o)=>t+move(o), last ? last.shares : 0);
   if (shares < 1e-9) shares = 0;
   const price = last ? last.price : null;
@@ -372,6 +373,22 @@ function fundAt(a, f, end){
 }
 const r2 = (v) => Math.round((v+Number.EPSILON)*100)/100;
 const r3 = (v) => Math.round((v+Number.EPSILON)*1e3)/1e3;
+/* A fund's holding split by source at a day: shares (signed moves since the
+   start), value at the latest price, paid in, growth. Operations with no
+   source go under "—". */
+function fundSources(a, f, end){
+  const ops = fundOps(a, f.name).filter((o)=>o.date <= end && o.kind!=='Price');
+  const price = (fundOps(a, f.name).filter((o)=>o.kind==='Price' && o.price>0 && o.date <= end).sort((x,y)=>x.date<y.date?-1:1).pop()||{}).price;
+  const by = {};
+  for (const o of ops) { const k = o.src || '—'; const b = by[k] = by[k] || { src:k, shares:0, paid:0, amount:0 };
+    b.shares += (o.kind==='Sell' || o.kind==='Fee') ? -Math.abs(o.shares||0) : (o.shares||0);
+    if (o.kind==='Buy') b.paid += (o.amount||0); else if (o.kind==='Sell') b.paid -= Math.abs(o.amount||0);
+    if (o.kind!=='Buy' && o.kind!=='Sell') b.amount += (o.amount||0); }
+  return Object.values(by).map((b)=>{ const shares = Math.abs(b.shares) < 1e-9 ? 0 : r3(b.shares);
+    const value = f.kind==='invested' ? (price!=null ? r2(shares*price) : r2(b.paid)) : r2(b.paid + b.amount);
+    return { src:b.src, shares, value, paid:r2(b.paid), growth:r2(value - b.paid) }; })
+    .filter((b)=>b.shares || b.value || b.paid).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src));
+}
 const fundValueAt = (a, end) => r2(fundsOf(a).reduce((t,f)=>t+fundAt(a, f, end).raw, 0));
 const same = (a,b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 const splitTags = (s) => { const out=[]; for (const x of String(s||'').split(',').map((v)=>v.trim()).filter(Boolean)) if (!out.some((y)=>same(y,x))) out.push(x); return out; };
@@ -550,11 +567,14 @@ function readDismissed(tab){
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
-const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id','Fund','Kind','Shares','Unit price'];
+const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id','Fund','Kind','Shares','Unit price','Source'];
+/* Where a fund's money came from - taxed differently, so followed apart:
+   Roth and Traditional (his own), Match and Profit sharing (the employer's). */
+const SOURCES = ['Roth','Traditional','Match','Profit sharing'];
 function opsTab(a){
   return { name:a.key, headers:OPS_HEADERS,
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount==null?'':o.amount, o.note||'', o.tag,
-      o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price]) };
+      o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'']) };
 }
 /* The third tab, "Budgets": every operation that carries a budget, one row
    each, grouped by budget then date. A mirror for reading - the account tabs
@@ -579,6 +599,7 @@ function readOps(tab){
     if (!date || (!isFinite(amount) && kind!=='Price')) continue;
     out.push({ id: str(col(r,'Id')) || uid(), date, name: str(col(r,'Name')), amount: isFinite(amount) ? amount : null, note: str(col(r,'Description')),
       fund: fund || undefined, kind: kind || undefined, shares: isFinite(num3(col(r,'Shares'))) ? num3(col(r,'Shares')) : undefined, price: isFinite(num4(col(r,'Unit price'))) ? num4(col(r,'Unit price')) : undefined,
+      src: str(col(r,'Source')) || undefined,
       tag: str(col(r,'Tag')),
       splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const i=x.lastIndexOf(':');
         return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
@@ -678,7 +699,7 @@ function importFile(j){
       const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : Math.round(+o.amount*100)/100, note:String(o.note||''),
         tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount })),
         budget:String(o.budget||''), oneoff:!!o.oneoff };
-      if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; }
+      if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
       const i = list.findIndex((x)=>x.id===clean.id);
       if (i>=0) Object.assign(list[i], clean); else { list.push(clean); ops++; }
     }
@@ -1892,6 +1913,22 @@ function fundAccountPage(a){
     <div class="herosub">${money(at.paid, a.currency)} paid in · <span style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</span> ${inv?'growth':'interest'}${inv&&at.shares!=null?' · '+at.shares.toLocaleString('en-US',{maximumFractionDigits:3})+' shares'+(at.price!=null?' at '+at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):''):''}</div>
   </div>
   ${fundChartCard(a, f, Y)}
+  ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
+    const all = fundsOf(a).flatMap((x)=>fundSources(a, x, end)); const tot = {}; for (const b of all) { const t = tot[b.src] = tot[b.src] || { src:b.src, value:0, paid:0 }; t.value += b.value; t.paid += b.paid; }
+    const total = Object.values(tot).reduce((t,b)=>t+b.value, 0);
+    return `
+  <div class="card">
+    <h2>By source <span class="muted" style="text-transform:none;letter-spacing:0">${esc(f.name)}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Source</th>${inv?'<th>Shares</th>':''}<th>Paid in</th><th>Growth</th><th>Value</th></tr></thead>
+      <tbody>${rows.map((b)=>`<tr><td>${esc(b.src)}</td>${inv?`<td>${b.shares.toLocaleString('en-US',{maximumFractionDigits:3})}</td>`:''}<td>${money(b.paid, a.currency)}</td><td style="color:${b.growth<0?'var(--bad)':'var(--good)'}">${money(b.growth, a.currency)}</td><td><b>${money(b.value, a.currency)}</b></td></tr>`).join('')}</tbody>
+    </table></div>
+    ${fundsOf(a).length > 1 ? `<h2 style="margin-top:10px">Whole account</h2>
+    <table class="fx">
+      <thead><tr><th>Source</th><th>Paid in</th><th>Growth</th><th>Value</th><th>%</th></tr></thead>
+      <tbody>${Object.values(tot).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src)).map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(r2(b.paid), a.currency)}</td><td style="color:${b.value-b.paid<0?'var(--bad)':'var(--good)'}">${money(r2(b.value-b.paid), a.currency)}</td><td><b>${money(r2(b.value), a.currency)}</b></td><td>${total?(b.value/total*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}</tbody>
+    </table>` : ''}
+  </div>`; })()}
   <div class="card">
     <h2>By month</h2>
     <div style="overflow-x:auto"><table class="fx">
@@ -1943,7 +1980,7 @@ function fundChartCard(a, f, Y){
     ${rangeChart('fb', pts, fundSeries(f, key), state.fbLo, state.fbHi)}
   </div>`;
 }
-const fopDirty = (p) => JSON.stringify([p.date,p.fkind,p.amount,p.shares,p.price,p.note.trim()]) !== JSON.stringify([p.was.date,p.was.fkind,p.was.amount,p.was.shares,p.was.price,p.was.note]);
+const fopDirty = (p) => JSON.stringify([p.date,p.fkind,p.amount,p.shares,p.price,p.note.trim(),p.fsrc||'']) !== JSON.stringify([p.was.date,p.was.fkind,p.was.amount,p.was.shares,p.was.price,p.was.note,p.was.fsrc||'']);
 function fopSheet(p, a, f){
   const isNew = p.id==null, inv = f.kind==='invested';
   const kinds = inv ? INV_OP_KINDS : CASH_OP_KINDS;
@@ -1954,6 +1991,7 @@ function fopSheet(p, a, f){
     <div class="sheet${p.fresh?' enter':''}">
       <h3>${isNew?'New operation':esc(p.was.fkind)} <span class="muted" style="font-size:12px;font-weight:600">${esc(f.name)}</span></h3>
       <div class="field"><label>Kind</label><div class="chips">${kinds.map((k)=>`<button class="chip ${p.fkind===k?'on':''}" data-fopkind="${k}">${k}</button>`).join('')}</div></div>
+      ${isPrice?'':`<div class="field"><label>Source</label><div class="chips">${[['','—']].concat(SOURCES.map((s)=>[s,s])).map(([k,l])=>`<button class="chip ${(p.fsrc||'')===k?'on':''}" style="padding:3px 9px;font-size:11.5px" data-fopsrc="${esc(k)}">${esc(l)}</button>`).join('')}</div></div>`}
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Date</label><input id="fDate" type="date" value="${esc(p.date)}"></div>
         ${isPrice?'':`<div class="field" style="flex:1"><label>Amount ${esc(SYM[a.currency]||a.currency)}</label><input id="fAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>`}
@@ -3240,23 +3278,26 @@ function wire(){
     const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
     const Y = theYear();
     const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), fkind:o?o.kind:(f.kind==='invested'?'Buy':'Paid in'), amount:o&&o.amount!=null?String(o.amount):'',
-      shares:o&&o.shares!=null?String(o.shares):'', price:o&&o.price!=null?String(o.price):'', note:o?(o.note||''):'' };
+      shares:o&&o.shares!=null?String(o.shares):'', price:o&&o.price!=null?String(o.price):'', note:o?(o.note||''):'',
+      /* a new operation takes the fund's last source, so a Roth account stays Roth without a tap */
+      fsrc:o?(o.src||''):((fundOps(a, f.name).filter((x)=>x.src).sort((x,y)=>x.date<y.date?1:-1)[0]||{}).src||'') };
     state.page={ kind:'fop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-fopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFop(null); });
   document.querySelectorAll('[data-fopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFop(el.dataset.fopedit); });
   document.querySelectorAll('[data-fopkind]').forEach((el)=>el.onclick=()=>{ readFop(); state.page.fkind=el.dataset.fopkind; render(); });
+  document.querySelectorAll('[data-fopsrc]').forEach((el)=>el.onclick=()=>{ readFop(); state.page.fsrc=el.dataset.fopsrc; render(); });
   if (state.page && state.page.kind==='fop') for (const id of ['fDate','fAmount','fShares','fPrice','fNote']) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   document.querySelectorAll('[data-fopsave]').forEach((el)=>el.onclick=()=>{
     readFop(); const p=state.page, a=acct(), f=fundNow(); if (!a || !f) return;
     const inv = f.kind==='invested';
     const o = { id:p.id||uid(), date:p.date, fund:f.name, kind:p.fkind, amount: p.fkind==='Price' ? null : num(p.amount),
       shares: inv && String(p.shares).trim()!=='' ? num3(p.shares) : undefined, price: inv && String(p.price).trim()!=='' ? num4(p.price) : undefined,
-      name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+      name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false, src: p.fkind==='Price' ? undefined : (p.fsrc || undefined) };
     if (o.shares!==undefined && !isFinite(o.shares)) o.shares = undefined; if (o.price!==undefined && !isFinite(o.price)) o.price = undefined;
     try { checkFop(o, inv); } catch (e) { alert(e.message); render(); return; }
     const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
-    if (i>=0) Object.assign(list[i], o); else list.push(o);
+    if (i>=0) { Object.assign(list[i], o); if (!o.src) delete list[i].src; } else list.push(o);
     state.page=null; commit(a.key); });
   document.querySelectorAll('[data-fopclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
