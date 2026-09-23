@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=108"></script>
+<script src="backend.js?v=109"></script>
 <script>
-const APP_VERSION="108";
+const APP_VERSION="109";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -306,7 +306,7 @@ const CURRENCIES = ['USD','EUR','AUD'];
    will bring their own settings later. */
 const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
-const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life'];
+const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life','Bond','Options'];
 /* A property: what it is worth (valuations, one every so often), what is
    still owed on it (a mortgage, worked out month by month), and what it
    costs (fees, taxes, insurance, works - kept for the record, not in the
@@ -321,6 +321,96 @@ const lifeMarkAt = (a, kind, end) => { let v = null; for (const o of opsOf(a.key
 const lifeCashAt = (a, end) => lifeMarkAt(a, 'Value', end);
 const yearsAgo = (d) => String(+d.slice(0,4)-1) + d.slice(4);
 const lifePaidAt = (a, end) => r2(opsOf(a.key).filter((o)=>(o.kind==='Premium' || o.kind==='PUA') && o.date <= end).reduce((t,o)=>t+(o.amount||0), 0));
+/* Accounts whose worth the app works out itself, not a sum of operations. */
+const isBond = (a) => a && a.type==='Bond';
+const isOpt = (a) => a && a.type==='Options';
+const ownValue = (a) => isFund(a) || isProp(a) || isLife(a) || isBond(a) || isOpt(a);
+
+/* ---- Series I savings bonds (TreasuryDirect) ----
+   Each row: the month a rate was announced (May, November), the semiannual
+   inflation rate, and the fixed rate given to bonds bought in the six months
+   from then. A bond keeps its fixed rate for life and takes each new
+   inflation rate at its own six-month reset, counted from its issue month.
+   Composite rate = fixed + 2 x inflation + fixed x inflation, to the
+   hundredth of a percent. Interest is credited monthly, compounded every
+   six months, for thirty years: within a period the $25 unit grows by
+   (1 + rate/2)^(months/6), rounded to the cent. Nothing can be cashed in
+   the first year; cashing before five years forfeits the last three months,
+   and TreasuryDirect shows the value net of them - that is the balance. */
+const IBOND = [['2022-05',4.81,0.0],['2022-11',3.24,0.4],['2023-05',1.69,0.9],['2023-11',1.97,1.3],['2024-05',1.48,1.3],['2024-11',0.95,1.2],['2025-05',1.43,1.1],['2025-11',1.56,0.9],['2026-05',1.67,0.9]];
+const IBOND_LAST = IBOND[IBOND.length-1][0];
+const ymAdd = (ym, n) => { const y = +ym.slice(0,4), m = +ym.slice(5,7)-1+n; return String(y+Math.floor(m/12)) + '-' + String(((m%12)+12)%12+1).padStart(2,'0'); };
+const ymDiff = (a, b) => (+b.slice(0,4)-+a.slice(0,4))*12 + (+b.slice(5,7)-+a.slice(5,7));
+const ibondInflation = (ym) => { let r = null; for (const [p, i] of IBOND) if (p <= ym) r = i; return r; };
+const ibondFixed = (ym) => { let f = 0; for (const [p, , fx] of IBOND) if (p <= ym) f = fx; return f; };
+const ibondComposite = (fixed, infl) => Math.round((fixed + 2*infl + fixed*infl/100) * 100) / 100;
+/* the rate of the six-month period starting in a month, for a bond with this fixed rate; assumed = past the announcements we know */
+const ibondRate = (fixed, periodStart) => { const infl = ibondInflation(periodStart); return { rate: infl==null ? 0 : ibondComposite(fixed, infl), assumed: periodStart > ymAdd(IBOND_LAST, 5) }; };
+/* one $25 unit after `months` months of interest */
+function ibondUnit(fixed, issueYM, months){
+  let v = 25, start = 25;
+  for (let k = 1; k <= Math.min(months, 360); k++) {
+    if ((k-1)%6===0) start = v;
+    const { rate } = ibondRate(fixed, ymAdd(issueYM, Math.floor((k-1)/6)*6));
+    v = Math.round(start * Math.pow(1 + rate/200, ((k-1)%6+1)/6) * 100) / 100;
+  }
+  return v;
+}
+/* the bonds held at a day: every Buy, less the Sells (oldest cashed first, by face) */
+function bondsHeld(a, end){
+  const ops = opsOf(a.key).filter((o)=>o.date <= end).sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+  const held = [];
+  for (const o of ops) {
+    if (o.kind==='Sell') { let left = Math.abs(o.amount||0); for (const b of held) { const take = Math.min(b.face, left); b.face -= take; left -= take; if (left <= 0) break; } }
+    else if (o.kind==='Buy' || !o.kind) held.push({ o, face:+o.amount||0, fixed: o.price!=null ? +o.price : ibondFixed(o.date.slice(0,7)), issue:o.date.slice(0,7) });
+  }
+  return held.filter((b)=>b.face > 0);
+}
+/* a bond's worth at a month: what TreasuryDirect shows (net of the three months held back in the first five years) and what it has earned */
+function bondWorth(b, ym){
+  const n = Math.max(0, ymDiff(b.issue, ym)); const units = b.face/25;
+  const earned = r2(ibondUnit(b.fixed, b.issue, n) * units);
+  const shown = r2(ibondUnit(b.fixed, b.issue, n >= 60 ? n : Math.max(0, n-3)) * units);
+  return { shown, earned, held:r2(earned-shown), months:n };
+}
+function bondValueAt(a, end){
+  const ym = end.slice(0,7); let shown = 0, earned = 0, face = 0;
+  for (const b of bondsHeld(a, end)) { const w = bondWorth(b, ym); shown += w.shown; earned += w.earned; face += b.face; }
+  return { shown:r2(shown), earned:r2(earned), held:r2(earned-shown), face:r2(face) };
+}
+const bondPaidAt = (a, end) => r2(opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=> o.kind==='Sell' ? t-Math.abs(o.amount||0) : (o.kind==='Buy' || !o.kind) ? t+(+o.amount||0) : t, 0));
+
+/* ---- stock options ----
+   A Grant: so many options (shares) at a strike (price), vesting in equal
+   yearly tranches from a day (vest) over the account's vesting years,
+   exercisable until a day (until). Exercise: options bought (shares at the
+   strike, amount = what was paid). Sale: shares sold (amount = proceeds).
+   Price: the company's price per share. The worth is the vested, unexercised
+   options' gain at the latest price, plus any shares held. */
+const OPT_KINDS = [['Grant','Grant'],['Exercise','Exercise'],['Sell','Sale'],['Price','Price']];
+const optYears = (a) => (a.policy && +a.policy.vestYears > 0) ? +a.policy.vestYears : 5;
+const optPriceAt = (a, end) => { let v = null; for (const o of opsOf(a.key)) if (o.kind==='Price' && o.price > 0 && o.date <= end && (!v || o.date >= v.date)) v = o; return v ? +v.price : null; };
+/* full years from a day to another */
+const yearsBetween = (from, to) => { if (!from || to < from) return 0; let k = +to.slice(0,4) - +from.slice(0,4); if (to.slice(5) < from.slice(5)) k--; return Math.max(0, k); };
+function optGrants(a, end){
+  const Y = optYears(a);
+  const grants = opsOf(a.key).filter((o)=>o.kind==='Grant' && o.date <= end).sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0)
+    .map((o)=>({ o, qty:Math.round(o.shares||0), strike:+o.price||0, vest:o.vest||o.date, until:o.until||'', exercised:0 }));
+  for (const g of grants) { g.vested = (g.until && end > g.until) ? 0 : Math.min(g.qty, Math.floor(g.qty * Math.min(Y, yearsBetween(g.vest, end)) / Y)); g.expired = !!(g.until && end > g.until); }
+  /* exercises take from the vested options at that strike, oldest grant first */
+  for (const o of opsOf(a.key).filter((o)=>o.kind==='Exercise' && o.date <= end)) {
+    let left = Math.round(o.shares||0);
+    for (const g of grants) { if (left <= 0) break; if (Math.abs(g.strike - (+o.price||g.strike)) > 0.005) continue; const take = Math.min(left, Math.max(0, g.vested - g.exercised)); g.exercised += take; left -= take; }
+  }
+  return grants;
+}
+const optSharesHeld = (a, end) => opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=> o.kind==='Exercise' ? t+Math.round(o.shares||0) : o.kind==='Sell' ? t-Math.round(o.shares||0) : t, 0);
+function optValueAt(a, end){
+  const price = optPriceAt(a, end); if (price==null) return 0;
+  const gain = optGrants(a, end).reduce((t,g)=>t + Math.max(0, g.vested - g.exercised) * Math.max(0, price - g.strike), 0);
+  return r2(gain + Math.max(0, optSharesHeld(a, end)) * price);
+}
+const optPaidAt = (a, end) => r2(opsOf(a.key).filter((o)=>o.kind==='Exercise' && o.date <= end).reduce((t,o)=>t+Math.abs(o.amount||0), 0));
 const propShare = (a) => isFinite(+a.share) && +a.share > 0 ? +a.share/100 : 1;
 const PROP_KINDS = [['HOA','HOA'], ['Tax','Property tax'], ['Insurance','Insurance'], ['Improvement','Works'], ['Other','Other']];
 const propValueAt = (a, end) => { let v = null; for (const o of opsOf(a.key)) if (o.kind==='Value' && o.date <= end && (!v || o.date >= v.date)) v = o; return v ? +v.amount : 0; };
@@ -461,7 +551,7 @@ function checkOp(o){
   }
   if (used >= Math.abs(o.amount)) throw new Error('Secondary tags must add up to less than the amount.');
 }
-const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
+const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : isBond(a) ? bondValueAt(a, TODAY()).shown : isOpt(a) ? optValueAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
 /* The years the records span - first operation to last - or just this one. */
 const THIS_YEAR = new Date().getFullYear();
 function years(){
@@ -476,7 +566,7 @@ function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year
    last day. The current year is simply everything. */
 const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a) : valueAt(a, year+'-12-31');
 /* Any account at the end of any day. */
-const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : isLife(a) ? lifeCashAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
+const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : isLife(a) ? lifeCashAt(a, end) : isBond(a) ? bondValueAt(a, end).shown : isOpt(a) ? optValueAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
 /* The rate for a month: that month's end from the sheet; failing that the
    latest month before it; for the current month, or when the sheet has
    nothing yet, today's live rate. Null when there is nothing at all. */
@@ -559,7 +649,7 @@ function configTab(){
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
-        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:isLife(a)&&a.policy?JSON.stringify(a.policy):'' })))
+        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -580,14 +670,14 @@ function readDismissed(tab){
 }
 /* One tab per account, named by its key: the operations, one per row.
    Secondary tags travel as "Tag:12.5; Other:3". */
-const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id','Fund','Kind','Shares','Unit price','Source'];
+const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id','Fund','Kind','Shares','Unit price','Source','Vest','Expire'];
 /* Where a fund's money came from - taxed differently, so followed apart:
    Roth and Traditional (his own), Match and Profit sharing (the employer's). */
 const SOURCES = ['Roth','Traditional','Match','Profit sharing'];
 function opsTab(a){
   return { name:a.key, headers:OPS_HEADERS,
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount==null?'':o.amount, o.note||'', o.tag,
-      o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'']) };
+      o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'', o.vest||'', o.until||'']) };
 }
 /* The third tab, "Budgets": every operation that carries a budget, one row
    each, grouped by budget then date. A mirror for reading - the account tabs
@@ -609,10 +699,11 @@ function readOps(tab){
     date = date instanceof Date ? date.toISOString().slice(0,10) : str(date).slice(0,10);
     const amount = num(col(r,'Amount'));
     const fund = str(col(r,'Fund')), kind = str(col(r,'Kind'));
-    if (!date || (!isFinite(amount) && kind!=='Price')) continue;
+    if (!date || (!isFinite(amount) && kind!=='Price' && kind!=='Grant')) continue;
     out.push({ id: str(col(r,'Id')) || uid(), date, name: str(col(r,'Name')), amount: isFinite(amount) ? amount : null, note: str(col(r,'Description')),
       fund: fund || undefined, kind: kind || undefined, shares: isFinite(num3(col(r,'Shares'))) ? num3(col(r,'Shares')) : undefined, price: isFinite(num4(col(r,'Unit price'))) ? num4(col(r,'Unit price')) : undefined,
       src: str(col(r,'Source')) || undefined,
+      vest: str(col(r,'Vest')).slice(0,10) || undefined, until: str(col(r,'Expire')).slice(0,10) || undefined,
       tag: str(col(r,'Tag')),
       splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const i=x.lastIndexOf(':');
         return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
@@ -638,7 +729,7 @@ function readConfig(tab){
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes', funds: [],
       openings: (()=>{ try { const o = JSON.parse(col(r,'Openings')||'null'); return o && typeof o==='object' ? o : undefined; } catch (e) { return undefined; } })(),
-      ...(type==='Life' ? { policy: (()=>{ try { const p = JSON.parse(col(r,'Policy')||'null'); return p && typeof p==='object' ? p : null; } catch (e) { return null; } })() } : {}),
+      ...(type==='Life' || type==='Options' ? { policy: (()=>{ try { const p = JSON.parse(col(r,'Policy')||'null'); return p && typeof p==='object' ? p : null; } catch (e) { return null; } })() } : {}),
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
@@ -678,16 +769,16 @@ function importFile(j){
        through in order and, where a book opens at something other than what
        the earlier ones left, one adjustment on 1 January makes the balances
        follow the books. The oldest book sets the account's own opening. */
-    if (known && !isFund(known) && !isProp(known) && !isLife(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
+    if (known && !ownValue(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
       known.openings = known.openings || {}; known.openings[year] = r2(+a.opening); touched.add('Config');
     }
     if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
-        ...(year && a.type!=='Fund' && a.type!=='Property' && a.type!=='Life' && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
+        ...(year && !['Fund','Property','Life','Bond','Options'].includes(a.type) && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
         ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}),
-        ...(a.type==='Life' ? { policy: a.policy && typeof a.policy==='object' ? a.policy : null } : {}),
+        ...(a.type==='Life' || a.type==='Options' ? { policy: a.policy && typeof a.policy==='object' ? a.policy : null } : {}),
         ...(a.type==='Property' ? { share: isFinite(+a.share) && +a.share > 0 ? +a.share : 100, bought: /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '',
           mortgage: a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null } : {}) });
       accounts++;
@@ -695,8 +786,8 @@ function importFile(j){
       /* a plan's terms, when the book names them and the app does not know them yet */
       if (!known.opened && /^\d{4}-\d{2}-\d{2}/.test(a.opened||'')) known.opened = a.opened.slice(0,10);
       if (known.rate==null && isFinite(+a.rate)) known.rate = +a.rate;
-    } else if (isLife(known)) {
-      if (a.policy && typeof a.policy==='object') known.policy = a.policy;      /* the policy's facts follow the file */
+    } else if (isLife(known) || isOpt(known)) {
+      if (a.policy && typeof a.policy==='object') known.policy = a.policy;      /* the policy's facts, the options' terms follow the file */
     } else if (isProp(known)) {
       /* a house's terms, the same way */
       if (!known.bought && /^\d{4}-\d{2}-\d{2}/.test(a.bought||'')) known.bought = a.bought.slice(0,10);
@@ -710,19 +801,20 @@ function importFile(j){
       fundsOf(acc).push({ name:String(f.name), kind: f.kind==='invested'?'invested':'cash', index:String(f.index||'') });
     const list = opsOf(key);
     for (const o of (j.ops && j.ops[a.key]) || []) {
-      const isPrice = o.kind==='Price';
+      const isPrice = o.kind==='Price' || o.kind==='Grant';      /* no money moves: a price mark, a grant of options */
       if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || (!isPrice && (!isFinite(+o.amount) || +o.amount===0))) continue;
       const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : Math.round(+o.amount*100)/100, note:String(o.note||''),
         tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount })),
         budget:String(o.budget||''), oneoff:!!o.oneoff };
       if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
-      else if (o.kind) clean.kind=String(o.kind);      /* a property's valuation or cost */
+      else if (o.kind) { clean.kind=String(o.kind); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src);
+        if (/^\d{4}-\d{2}-\d{2}/.test(o.vest||'')) clean.vest=String(o.vest).slice(0,10); if (/^\d{4}-\d{2}-\d{2}/.test(o.until||'')) clean.until=String(o.until).slice(0,10); }      /* a valuation, a cost, a bond, a grant */
       const i = list.findIndex((x)=>x.id===clean.id);
       /* An operation already here was maybe worked on since: its tag, splits,
          budget, one-off mark, name and description are yours and stay. The
          book still rules the figures - date, amount, fund, kind, shares,
          price, source. */
-      if (i>=0) { const keep = list[i]; for (const k of ['date','amount','fund','kind','shares','price','src']) { if (clean[k]===undefined) delete keep[k]; else keep[k]=clean[k]; } }
+      if (i>=0) { const keep = list[i]; for (const k of ['date','amount','fund','kind','shares','price','src','vest','until']) { if (clean[k]===undefined) delete keep[k]; else keep[k]=clean[k]; } }
       else { list.push(clean); ops++; }
     }
     touched.add(key);
@@ -929,6 +1021,8 @@ const isGrowthOp = (o) => /interest|int[ée]r[êe]t|dividend|growth|plus-value/i
 function paidAt(a, end){
   if (isFund(a)) return r2(fundsOf(a).reduce((t,f)=>t+fundAt(a, f, end).paid, 0));
   if (isLife(a)) return lifePaidAt(a, end);
+  if (isBond(a)) return bondPaidAt(a, end);
+  if (isOpt(a)) return optPaidAt(a, end);
   return r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end && !isGrowthOp(o)).reduce((t,o)=>t+(o.amount||0), 0));
 }
 /* Summary ▸ Savings: the family's Savings accounts month by month - paid in,
@@ -1057,7 +1151,7 @@ function tidyCategories(){
   else store.categories.push({ name:'Transfer', type:'Transfer', tags:['Transfer','x'] });
   return true;
 }
-const cashAccounts = () => store.accounts.filter((a)=>!isFund(a) && !isProp(a) && !isLife(a));
+const cashAccounts = () => store.accounts.filter((a)=>!ownValue(a));
 /* Every category's total over a year ("2013") or a month ("2013-04"), in
    the shown currency at each operation's month's rate. */
 const sumsByCategory = (year) => sumsFor(String(year));
@@ -2365,10 +2459,269 @@ function lopSheet(p, a){
   </div>`;
 }
 
+/* ------------------------------------------------------------------- bonds --*/
+const BOND_VIEWS = [['summary','Summary'],['ops','Operations']];
+const pct = (v) => (Math.round(v*100)/100).toFixed(2) + '%';
+const ymLabel = (ym) => MON[+ym.slice(5,7)-1] + ' ' + ym.slice(0,4);
+const periodLabel = (ym) => MON[+ym.slice(5,7)-1] + '–' + MON[+ymAdd(ym, 5).slice(5,7)-1] + ' ' + ymAdd(ym, 5).slice(0,4);
+function bondPage(a){
+  const p = state.page;
+  const Y = theYear();
+  const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
+  const view = BOND_VIEWS.some(([k])=>k===state.bview) ? state.bview : 'summary';
+  const w = bondValueAt(a, end);
+  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='bop' ? bopSheet(p, a) : '';
+  return widget + `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
+    <div class="hero">${money(w.shown, a.currency)}</div>
+    <div class="herosub">TreasuryDirect value · ${money(w.face, a.currency)} bought · earned <span style="color:var(--good)">${money(w.earned, a.currency)}</span>${w.held?' · '+money(w.held, a.currency)+' held back':''} · ${esc(a.owners.join(', '))} · ${Y}</div>
+    <div class="chips" style="margin-top:10px">${BOND_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-bview="${k}">${l}</button>`).join('')}</div>
+  </div>
+  ${view==='summary' ? bondSummary(a, Y, end) : bondOps(a, Y)}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+function bondSummary(a, Y, end){
+  const ym = end.slice(0,7), held = bondsHeld(a, end);
+  const rows = held.map((b)=>{ const w = bondWorth(b, ym); const per = ymAdd(b.issue, Math.floor(Math.max(0, w.months)/6)*6); const r = ibondRate(b.fixed, per);
+    return { b, w, rate:r.rate, assumed:r.assumed, cash:ymAdd(b.issue, 12), free:ymAdd(b.issue, 60), ends:ymAdd(b.issue, 360) }; });
+  /* the rate periods of each distinct issue month and fixed rate, to the current one */
+  const groups = []; for (const b of held) { const k = b.issue+'|'+b.fixed; let g = groups.find((x)=>x.k===k); if (!g) { g = { k, issue:b.issue, fixed:b.fixed, face:0 }; groups.push(g); } g.face += b.face; }
+  const periods = (g) => { const out = []; const n = Math.max(0, ymDiff(g.issue, ym)); for (let i = 0; i*6 <= n; i++) { const per = ymAdd(g.issue, i*6); const r = ibondRate(g.fixed, per);
+    out.push({ per, rate:r.rate, assumed:r.assumed, end:r2(ibondUnit(g.fixed, g.issue, (i+1)*6) * g.face/25), current: i*6 <= n && n < (i+1)*6 }); } return out; };
+  const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR); if (years.length) for (let y = years[0]; y <= Math.min(THIS_YEAR, Y); y++) if (!years.includes(y)) years.push(y); years.sort((x,y)=>y-x);
+  const yrow = (y) => { const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = bondValueAt(a, e); return { y, paid:r2(bondPaidAt(a, e) - bondPaidAt(a, (y-1)+'-12-31')), shown:v.shown, earned:v.earned }; };
+  return `
+  <div class="card">
+    <h2>Bonds <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Issued</th><th>Face</th><th>Fixed</th><th>Rate now</th><th>Value</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${ymLabel(r.b.issue)}</td><td>${money(r.b.face, a.currency)}</td><td>${pct(r.b.fixed)}</td><td>${pct(r.rate)}${r.assumed?' <span class="muted">assumed</span>':''}</td><td><b>${money(r.w.shown, a.currency)}</b></td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="rows" style="margin-top:6px">${rows.map((r)=>`<div class="row" style="display:block"><div class="sub">${ymLabel(r.b.issue)} · earned ${money(r.w.earned, a.currency)}${r.w.held?', '+money(r.w.held, a.currency)+' held back':''} · cashable from ${ymLabel(r.cash)} · full value from ${ymLabel(r.free)} · stops earning ${ymLabel(r.ends)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No bond yet.</div>`}
+  </div>
+  ${groups.map((g)=>`
+  <div class="card">
+    <h2>Rates <span class="muted" style="text-transform:none;letter-spacing:0">${ymLabel(g.issue)} · fixed ${pct(g.fixed)} · ${money(g.face, a.currency)}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Period</th><th>Rate</th><th>Worth at its end</th></tr></thead>
+      <tbody>${periods(g).map((r)=>`<tr${r.assumed?' class="muted"':''}><td>${periodLabel(r.per)}${r.current?' <span class="muted">now</span>':''}</td><td>${pct(r.rate)}${r.assumed?' assumed':''}</td><td>${money(r.end, a.currency)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin:6px 0 0">Interest is credited monthly and compounded every six months from the issue month; the first five years, TreasuryDirect shows the value without the last three months. Federal tax only, when cashed; none for the state.</div>
+  </div>`).join('')}
+  <div class="card">
+    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
+    ${years.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Year</th><th>Bought</th><th>Value</th><th>Earned</th></tr></thead>
+      <tbody>${years.map(yrow).map((r)=>`<tr><td>${r.y}</td><td>${money(r.paid, a.currency)}</td><td><b>${money(r.shown, a.currency)}</b></td><td style="color:var(--good)">${money(r.earned, a.currency)}</td></tr>`).join('')}</tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+function bondOps(a, Y){
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  return `
+  <div class="card">
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-bopnew="1"${LK()}>+</button></span></h2>
+    ${ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap" data-bopedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${o.kind==='Sell'?'Cashed':'Bought'}${o.name && o.name!==o.kind?' <span class="muted" style="font-weight:400">· '+esc(o.name)+'</span>':''}</div>
+          <div class="sub">${esc(o.date)}${o.kind!=='Sell'?' · fixed '+pct(o.price!=null?+o.price:ibondFixed(o.date.slice(0,7))):''}${o.note?' · '+esc(o.note):''}</div></div>
+        <span class="v ${o.kind==='Sell'?'neg':'pos'}">${money(o.kind==='Sell'?-Math.abs(o.amount):o.amount, a.currency)}</span>
+      </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
+function bopSheet(p, a){
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-bopclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New operation':(p.was.bkind==='Sell'?'Cashed':'Bought')}</h3>
+      <div class="field"><label>Kind</label><div class="chips">${[['Buy','Bought'],['Sell','Cashed']].map(([k,l])=>`<button class="chip ${p.bkind===k?'on':''}" data-bopkind="${k}">${l}</button>`).join('')}</div></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="boDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>${p.bkind==='Sell'?'Face cashed':'Face'} ${esc(SYM[a.currency]||a.currency)}</label><input id="boAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+      </div>
+      ${p.bkind==='Sell' ? '' : `<div class="field"><label>Fixed rate %</label><input id="boRate" inputmode="decimal" value="${esc(p.rate)}" style="text-align:right"></div>`}
+      <div class="field"><label>Note</label><input id="boNote" value="${esc(p.note)}"></div>
+      ${p.id==null?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-bopdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-bopclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-bopsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+
+/* ----------------------------------------------------------------- options --*/
+const OPT_VIEWS = [['summary','Summary'],['schedule','Schedule'],['whatif','What if'],['ops','Operations']];
+const optKindLabel = (k) => (OPT_KINDS.find(([x])=>x===k)||[k,k])[1];
+const qty = (n) => Math.round(n).toLocaleString('en-US');
+function optPage(a){
+  const p = state.page;
+  const Y = theYear();
+  const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
+  const view = OPT_VIEWS.some(([k])=>k===state.oview) ? state.oview : 'summary';
+  const grants = optGrants(a, end), price = optPriceAt(a, end);
+  const vested = grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised), 0), unvested = grants.reduce((t,g)=>t+(g.expired?0:g.qty-g.vested), 0);
+  const worth = optValueAt(a, end);
+  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='oop' ? oopSheet(p, a) : '';
+  return widget + `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
+    <div class="hero">${money(worth, a.currency)}</div>
+    <div class="herosub">vested options' gain${optSharesHeld(a, end)>0?' and shares':''} · ${qty(vested)} vested · ${qty(unvested)} unvested${price!=null?' · price '+money(price, a.currency):''} · ${Y}</div>
+    <div class="chips" style="margin-top:10px">${OPT_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-oview="${k}">${l}</button>`).join('')}</div>
+  </div>
+  ${view==='summary' ? optSummary(a, Y, end) : view==='schedule' ? optSchedule(a, Y, end) : view==='whatif' ? optWhatIf(a, end) : optOps(a, Y)}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+function optSummary(a, Y, end){
+  const P = a.policy || {};
+  const grants = optGrants(a, end), price = optPriceAt(a, end);
+  const cost = grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised)*g.strike, 0);
+  const worthNow = price==null ? 0 : grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised)*price, 0);
+  const prices = opsOf(a.key).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const held = optSharesHeld(a, end);
+  return `
+  <div class="card">
+    <h2>Grants</h2>
+    ${grants.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Granted</th><th>Options</th><th>Strike</th><th>Vested</th><th>Unvested</th></tr></thead>
+      <tbody>${grants.map((g)=>`<tr${g.expired?' class="muted"':''}><td>${dLabel(g.o.date)}</td><td>${qty(g.qty)}</td><td>${money(g.strike, a.currency)}</td><td><b>${qty(Math.max(0, g.vested-g.exercised))}</b>${g.exercised?' <span class="muted">+'+qty(g.exercised)+' exercised</span>':''}</td><td>${g.expired?'expired':qty(g.qty-g.vested)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="rows" style="margin-top:6px">${grants.map((g)=>`<div class="row" style="display:block"><div class="sub">${dLabel(g.o.date)} · vesting from ${dLabel(g.vest)} over ${optYears(a)} years${g.until?' · expires '+dLabel(g.until):''}</div></div>`).join('')}</div>
+    <div class="rows" style="margin-top:6px">
+      <div class="row"><span class="k">Cost to exercise the vested</span><span class="v">${money(cost, a.currency)}</span></div>
+      <div class="row"><span class="k">Their worth at ${price!=null?money(price, a.currency):'—'}</span><span class="v">${money(worthNow, a.currency)}</span></div>
+      <div class="row"><span class="k"><b>Gain if exercised and sold today</b></span><span class="v ${worthNow-cost<0?'neg':'pos'}"><b>${money(r2(worthNow-cost), a.currency)}</b></span></div>
+      ${held>0?`<div class="row"><span class="k">Shares held</span><span class="v">${qty(held)}${price!=null?' · '+money(r2(held*price), a.currency):''}</span></div>`:''}
+    </div>` : `<div class="hint" style="margin-top:0">No grant yet.</div>`}
+  </div>
+  <div class="card">
+    <h2>Price <span class="muted" style="text-transform:none;letter-spacing:0">${esc(P.company||'')}</span></h2>
+    ${prices.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Date</th><th>Price</th><th>Change</th></tr></thead>
+      <tbody>${prices.map((o,i)=>{ const prev = prices[i+1]; const ch = prev ? (o.price/prev.price-1)*100 : null; return `<tr><td>${dLabel(o.date)}</td><td><b>${money(o.price, a.currency)}</b></td><td style="color:${ch==null?'var(--muted)':ch<0?'var(--bad)':'var(--good)'}">${ch==null?'—':(ch>0?'+':'')+pct(ch)}</td></tr>`; }).join('')}</tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">No price yet.</div>`}
+    ${Array.isArray(P.offers) && P.offers.length ? `<div class="hint" style="margin:6px 0 0">${P.offers.map(([d,v])=>'A buyer offered '+money(v, a.currency)+' on '+dLabel(d)).join(' · ')}</div>` : ''}
+  </div>
+  ${P.plan || (Array.isArray(P.notes) && P.notes.length) ? `
+  <div class="card">
+    <h2>Terms</h2>
+    <div class="rows">${P.plan?`<div class="row" style="display:block"><div class="k" style="white-space:normal">${esc(P.plan)}</div></div>`:''}${(P.notes||[]).map((n)=>`<div class="row" style="display:block"><div class="k" style="white-space:normal;color:var(--muted)">${esc(n)}</div></div>`).join('')}</div>
+  </div>` : ''}`;
+}
+function optSchedule(a, Y, end){
+  const Yv = optYears(a), price = optPriceAt(a, end);
+  const grants = opsOf(a.key).filter((o)=>o.kind==='Grant').map((o)=>({ qty:Math.round(o.shares||0), strike:+o.price||0, vest:o.vest||o.date, until:o.until||'' }));
+  if (!grants.length) return `<div class="card"><h2>Schedule</h2><div class="hint" style="margin-top:0">No grant yet.</div></div>`;
+  const events = [];
+  for (const g of grants) for (let k = 1; k <= Yv; k++) { const d = String(+g.vest.slice(0,4)+k) + g.vest.slice(4); const n = Math.floor(g.qty*k/Yv) - Math.floor(g.qty*(k-1)/Yv); if (n > 0) events.push({ d, n, strike:g.strike }); }
+  events.sort((x,y)=>x.d<y.d?-1:1);
+  const years = [...new Set(events.map((e)=>+e.d.slice(0,4)))];
+  let cum = 0;
+  const rows = years.map((y)=>{ const ev = events.filter((e)=>+e.d.slice(0,4)===y); const n = ev.reduce((t,e)=>t+e.n, 0); cum += n;
+    const gain = price==null ? null : ev.reduce((t,e)=>t+e.n*Math.max(0, price-e.strike), 0);
+    return { y, n, cum, gain, days: ev.map((e)=>dLabel(e.d).slice(0,-5)+' · '+qty(e.n)+' at '+money(e.strike, a.currency)).join(' · '), past: y+'-12-31' <= end }; });
+  return `
+  <div class="card">
+    <h2>Schedule <span class="muted" style="text-transform:none;letter-spacing:0">${Yv} years</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Year</th><th>Vesting</th><th>Vested by then</th><th>Gain at ${price!=null?money(price, a.currency):'—'}</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr${r.past?'':' class="muted"'}><td>${r.y}</td><td>${qty(r.n)}</td><td><b>${qty(r.cum)}</b></td><td>${r.gain==null?'—':money(r.gain, a.currency)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="rows" style="margin-top:6px">${rows.map((r)=>`<div class="row" style="display:block"><div class="sub">${r.y} · ${esc(r.days)}</div></div>`).join('')}</div>
+  </div>`;
+}
+/* Exercising N vested options at a price, taxed on the gain; then selling
+   the shares later at another price, taxed on that gain. The figures redraw
+   in place as the fields change; nothing is kept. */
+function optWhatIf(a, end){
+  const P = a.policy || {};
+  const grants = optGrants(a, end), price = optPriceAt(a, end);
+  const vested = grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised), 0);
+  const w = state.whatif || {};
+  const v = { qty: w.qty!=null ? w.qty : vested, price: w.price!=null ? w.price : (price||0), tax1: w.tax1!=null ? w.tax1 : (+P.taxExercise||0), sale: w.sale!=null ? w.sale : (price||0), tax2: w.tax2!=null ? w.tax2 : (+P.taxSale||0) };
+  const f = optFigures(grants, v);
+  const field = (id, label, val) => `<div class="field" style="flex:1;min-width:0"><label>${label}</label><input id="${id}" inputmode="decimal" value="${esc(val)}" style="text-align:right" data-whatif="${id}"></div>`;
+  return `
+  <div class="card">
+    <h2>What if</h2>
+    <div class="btnrow">${field('wiQty', 'Options', v.qty)}${field('wiPrice', 'Exercise price', v.price)}${field('wiTax1', 'Tax %', v.tax1)}</div>
+    <div class="rows" id="wiOut1">${optWhatIfRows1(f, a)}</div>
+    <div class="btnrow" style="margin-top:8px">${field('wiSale', 'Sale price later', v.sale)}${field('wiTax2', 'Tax %', v.tax2)}</div>
+    <div class="rows" id="wiOut2">${optWhatIfRows2(f, a)}</div>
+    <div class="hint" style="margin:6px 0 0">The gain at exercise (price less strike) is taxed as pay where the options were earned; the later gain (sale less price at exercise) as a capital gain where you live then. Cheapest strikes first.</div>
+  </div>`;
+}
+function optFigures(grants, v){
+  const pool = grants.filter((g)=>g.vested-g.exercised > 0).sort((x,y)=>x.strike-y.strike);
+  let left = Math.max(0, Math.round(v.qty||0)), cost = 0, n = 0;
+  for (const g of pool) { const take = Math.min(left, g.vested-g.exercised); cost += take*g.strike; n += take; left -= take; }
+  const worth = n*(+v.price||0), gain1 = worth - cost, tax1 = Math.max(0, gain1)*(+v.tax1||0)/100;
+  const proceeds = n*(+v.sale||0), gain2 = proceeds - worth, tax2 = Math.max(0, gain2)*(+v.tax2||0)/100;
+  return { n, cost:r2(cost), worth:r2(worth), gain1:r2(gain1), tax1:r2(tax1), net1:r2(gain1-tax1), proceeds:r2(proceeds), gain2:r2(gain2), tax2:r2(tax2), net:r2(gain1-tax1+gain2-tax2), short: left>0 };
+}
+const optWhatIfRows1 = (f, a) => `
+      <div class="row"><span class="k">Cost to exercise ${qty(f.n)}${f.short?' <span class="muted">(all that is vested)</span>':''}</span><span class="v">${money(f.cost, a.currency)}</span></div>
+      <div class="row"><span class="k">Worth at that price</span><span class="v">${money(f.worth, a.currency)}</span></div>
+      <div class="row"><span class="k">Gain at exercise</span><span class="v ${f.gain1<0?'neg':'pos'}">${money(f.gain1, a.currency)}</span></div>
+      <div class="row"><span class="k">Tax on it</span><span class="v neg">${money(-f.tax1, a.currency)}</span></div>
+      <div class="row"><span class="k"><b>Net if sold at once</b></span><span class="v ${f.net1<0?'neg':'pos'}"><b>${money(f.net1, a.currency)}</b></span></div>`;
+const optWhatIfRows2 = (f, a) => `
+      <div class="row"><span class="k">Proceeds</span><span class="v">${money(f.proceeds, a.currency)}</span></div>
+      <div class="row"><span class="k">Gain since exercise</span><span class="v ${f.gain2<0?'neg':'pos'}">${money(f.gain2, a.currency)}</span></div>
+      <div class="row"><span class="k">Tax on it</span><span class="v neg">${money(-f.tax2, a.currency)}</span></div>
+      <div class="row"><span class="k"><b>Net in all</b></span><span class="v ${f.net<0?'neg':'pos'}"><b>${money(f.net, a.currency)}</b></span></div>`;
+function optOps(a, Y){
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const line = (o) => o.kind==='Grant' ? qty(o.shares||0)+' options at '+money(o.price||0, a.currency)+(o.vest?' · vesting from '+dLabel(o.vest):'')+(o.until?' · until '+dLabel(o.until):'')
+    : o.kind==='Price' ? money(o.price||0, a.currency)+' a share' : qty(o.shares||0)+' at '+money(o.price||0, a.currency);
+  return `
+  <div class="card">
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-oopnew="1"${LK()}>+</button></span></h2>
+    ${ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap ${o.kind==='Price'?'muted':''}" data-oopedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(optKindLabel(o.kind))} <span class="muted" style="font-weight:400">· ${esc(line(o))}</span></div>
+          <div class="sub">${esc(o.date)}${o.note?' · '+esc(o.note):''}</div></div>
+        ${o.amount!=null && (o.kind==='Exercise' || o.kind==='Sell') ? `<span class="v ${o.kind==='Exercise'?'neg':'pos'}">${money(o.kind==='Exercise'?-Math.abs(o.amount):Math.abs(o.amount), a.currency)}</span>` : ''}
+      </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
+function oopSheet(p, a){
+  const k = p.okind, money_ = k==='Exercise' || k==='Sell';
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-oopclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New operation':esc(optKindLabel(p.was.okind))}</h3>
+      <div class="field"><label>Kind</label><div class="chips">${OPT_KINDS.map(([x,l])=>`<button class="chip ${k===x?'on':''}" data-oopkind="${x}">${l}</button>`).join('')}</div></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="ooDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>${k==='Grant'?'Strike':'Price'} ${esc(SYM[a.currency]||a.currency)}</label><input id="ooPrice" inputmode="decimal" value="${esc(p.price)}" style="text-align:right"></div>
+      </div>
+      ${k==='Price' ? '' : `<div class="btnrow">
+        <div class="field" style="flex:1"><label>${k==='Grant'?'Options':'Shares'}</label><input id="ooQty" inputmode="numeric" value="${esc(p.qty)}" style="text-align:right"></div>
+        ${money_ ? `<div class="field" style="flex:1"><label>${k==='Exercise'?'Paid':'Received'} ${esc(SYM[a.currency]||a.currency)}</label><input id="ooAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>` : ''}
+      </div>`}
+      ${k==='Grant' ? `<div class="btnrow">
+        <div class="field" style="flex:1"><label>Vesting from</label><input id="ooVest" type="date" value="${esc(p.vest)}"></div>
+        <div class="field" style="flex:1"><label>Expires</label><input id="ooUntil" type="date" value="${esc(p.until)}"></div>
+      </div>` : ''}
+      <div class="field"><label>Note</label><input id="ooNote" value="${esc(p.note)}"></div>
+      ${p.id==null?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-oopdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-oopclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-oopsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+
 function accountPage(a){
   if (isFund(a)) return fundAccountPage(a);
   if (isProp(a)) return propertyPage(a);
   if (isLife(a)) return lifePage(a);
+  if (isBond(a)) return bondPage(a);
+  if (isOpt(a)) return optPage(a);
   const p = state.page;
   const Y = theYear();
   const f = opFilter();
@@ -3361,7 +3714,7 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.whatif=null; render(); });
   document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
@@ -3549,6 +3902,64 @@ function wire(){
     if (kind==='mortgage') { a.mortgage=null; state.page=null; commit('Config'); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset[kind]); state.page=null; commit(a.key); });
   delP('data-pvaldelete', 'pvaldelete'); delP('data-pexpdelete', 'pexpdelete'); delP('data-pmortdelete', 'mortgage');
+
+  /* savings bonds: views and operations */
+  const bondAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isBond(a) ? a : null; };
+  document.querySelectorAll('[data-bview]').forEach((el)=>el.onclick=()=>{ state.bview=el.dataset.bview; state.page=null; render(); });
+  const BO = [['boDate','date'],['boAmount','amount'],['boRate','rate'],['boNote','note']];
+  const openBo = (id) => { const a = bondAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
+    const d = o ? o.date : dflt();
+    const cur = { date:d, bkind:o ? (o.kind==='Sell'?'Sell':'Buy') : 'Buy', amount:o?String(Math.abs(o.amount)):'', rate:o && o.price!=null ? String(o.price) : String(ibondFixed(d.slice(0,7))), note:o?(o.note||''):'' };
+    state.page={ kind:'bop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-bopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBo(null); });
+  document.querySelectorAll('[data-bopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBo(el.dataset.bopedit); });
+  document.querySelectorAll('[data-bopkind]').forEach((el)=>el.onclick=()=>{ readP(BO); state.page.bkind=el.dataset.bopkind; render(); });
+  if (state.page && state.page.kind==='bop') for (const [id] of BO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(BO, ['date','bkind','amount','rate','note'], 'data-bopclose');
+  document.querySelectorAll('[data-bopsave]').forEach((el)=>el.onclick=()=>{ readP(BO); const p=state.page, a=bondAcc(); if (!a) return;
+    const o = { id:p.id||uid(), date:p.date, name:p.bkind==='Sell'?'Cashed':'I bond', kind:p.bkind, amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+    if (p.bkind!=='Sell') o.price = num(p.rate);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('A face value.'); render(); return; } if (p.bkind!=='Sell' && !(o.price >= 0)) { alert('A fixed rate.'); render(); return; }
+    const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) { const keep = list[i]; for (const k of Object.keys(keep)) if (!(k in o)) delete keep[k]; Object.assign(keep, o); } else list.push(o);
+    state.page=null; commit(a.key); });
+  document.querySelectorAll('[data-bopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=bondAcc(); if (!a) return;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.bopdelete); state.page=null; commit(a.key); });
+
+  /* stock options: views, the what-if fields, operations */
+  const optAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isOpt(a) ? a : null; };
+  document.querySelectorAll('[data-oview]').forEach((el)=>el.onclick=()=>{ state.oview=el.dataset.oview; state.page=null; state.whatif=null; render(); });
+  for (const wid of ['wiQty','wiPrice','wiTax1','wiSale','wiTax2']) { const we = document.getElementById(wid); if (we) we.oninput=()=>{ const a = optAcc(); if (!a) return;
+    const g = (id) => { const e = document.getElementById(id); return e ? parseFloat(String(e.value).replace(',', '.')) : NaN; };
+    const v = { qty:g('wiQty'), price:g('wiPrice'), tax1:g('wiTax1'), sale:g('wiSale'), tax2:g('wiTax2') };
+    for (const k of Object.keys(v)) if (!isFinite(v[k])) v[k] = 0;
+    state.whatif = v;
+    const Y = theYear(), end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
+    const f = optFigures(optGrants(a, end), v);
+    const o1 = document.getElementById('wiOut1'), o2 = document.getElementById('wiOut2');
+    if (o1) o1.innerHTML = optWhatIfRows1(f, a); if (o2) o2.innerHTML = optWhatIfRows2(f, a); }; }
+  const OO = [['ooDate','date'],['ooPrice','price'],['ooQty','qty'],['ooAmount','amount'],['ooVest','vest'],['ooUntil','until'],['ooNote','note']];
+  const openOo = (id) => { const a = optAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
+    const cur = { date:o?o.date:dflt(), okind:o?(o.kind||'Price'):'Price', price:o && o.price!=null ? String(o.price) : '', qty:o && o.shares!=null ? String(o.shares) : '', amount:o && o.amount!=null ? String(Math.abs(o.amount)) : '', vest:o?(o.vest||''):'', until:o?(o.until||''):'', note:o?(o.note||''):'' };
+    state.page={ kind:'oop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-oopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOo(null); });
+  document.querySelectorAll('[data-oopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOo(el.dataset.oopedit); });
+  document.querySelectorAll('[data-oopkind]').forEach((el)=>el.onclick=()=>{ readP(OO); state.page.okind=el.dataset.oopkind; render(); });
+  if (state.page && state.page.kind==='oop') for (const [id] of OO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(OO, ['date','okind','price','qty','amount','vest','until','note'], 'data-oopclose');
+  document.querySelectorAll('[data-oopsave]').forEach((el)=>el.onclick=()=>{ readP(OO); const p=state.page, a=optAcc(); if (!a) return;
+    const k = p.okind, price = parseFloat(String(p.price).replace(',', '.')), n = Math.round(parseFloat(p.qty));
+    const o = { id:p.id||uid(), date:p.date, name:optKindLabel(k), kind:k, amount:null, note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; }
+    if (!(price > 0)) { alert(k==='Grant' ? 'A strike.' : 'A price.'); render(); return; } o.price = Math.round(price*10000)/10000;
+    if (k!=='Price') { if (!(n > 0)) { alert(k==='Grant' ? 'How many options.' : 'How many shares.'); render(); return; } o.shares = n; }
+    if (k==='Exercise' || k==='Sell') { const amt = num(p.amount); o.amount = isFinite(amt) && amt > 0 ? amt : r2(n*o.price); }
+    if (k==='Grant') { if (/^\d{4}-\d{2}-\d{2}$/.test(p.vest)) o.vest = p.vest; if (/^\d{4}-\d{2}-\d{2}$/.test(p.until)) o.until = p.until; }
+    const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) { const keep = list[i]; for (const kk of Object.keys(keep)) if (!(kk in o)) delete keep[kk]; Object.assign(keep, o); } else list.push(o);
+    state.page=null; commit(a.key); });
+  document.querySelectorAll('[data-oopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=optAcc(); if (!a) return;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.oopdelete); state.page=null; commit(a.key); });
 
   /* a life policy: its views and operations */
   const lifeAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isLife(a) ? a : null; };
