@@ -281,9 +281,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=117"></script>
+<script src="backend.js?v=118"></script>
 <script>
-const APP_VERSION="117";
+const APP_VERSION="118";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2622,12 +2622,13 @@ function bondSummary(a, Y, end){
 function bondMonths(a, Y, end){
   const hist = state.bhist==='history';
   const at = (e) => bondValueAt(a, e);
-  const cell = (r) => `<td>${r.paid?money(r.paid, a.currency):'—'}</td><td><b>${money(r.shown, a.currency)}</b></td><td>${money(r.earned, a.currency)}</td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td>`;
+  const cell = (r) => `<td>${r.paid?money(r.paid, a.currency):'—'}</td><td>${money(r.earned, a.currency)}</td><td><b>${money(r.shown, a.currency)}</b></td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td>`;
   let rows, head;
   if (hist) {
     const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR); if (years.length) for (let y = years[0]; y <= Math.min(THIS_YEAR, Y); y++) if (!years.includes(y)) years.push(y); years.sort((x,y)=>y-x);
-    rows = years.map((y)=>{ const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = at(e), prev = at((y-1)+'-12-31'); const paid = r2(bondPaidAt(a, e) - bondPaidAt(a, (y-1)+'-12-31'));
-      return { label:String(y), paid, shown:v.shown, earned:v.earned, int:r2(v.earned-prev.earned-paid) }; });
+    /* cumulative: all that was bought by then, and the interest = value less bought */
+    rows = years.map((y)=>{ const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = at(e); const paid = bondPaidAt(a, e);
+      return { label:String(y), paid, shown:v.shown, earned:v.earned, int:r2(v.shown-paid) }; });
     head = 'Year';
   } else {
     const last = end.slice(0,7);
@@ -2637,10 +2638,10 @@ function bondMonths(a, Y, end){
   }
   return `
   <div class="card">
-    <h2>${hist?'By year':'By month'} <span class="muted" style="text-transform:none;letter-spacing:0">${hist?'':Y+' · '}${esc(a.currency)}</span>
+    <h2>${hist?'By year':'By month'}
       <span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-bhist="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-bhist="history">History</button></span></h2>
     ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>${head}</th><th>Bought</th><th>Value</th><th>Earned value</th><th>Interest</th></tr></thead>
+      <thead><tr><th>${head}</th><th>Bought</th><th>Earned value</th><th>Value</th><th>Interest</th></tr></thead>
       <tbody>${rows.map((r)=>`<tr><td>${r.label}</td>${cell(r)}</tr>`).join('')}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
