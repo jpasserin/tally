@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=110"></script>
+<script src="backend.js?v=111"></script>
 <script>
-const APP_VERSION="110";
+const APP_VERSION="111";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -769,6 +769,19 @@ function importFile(j){
   for (const a of j.accounts) {
     if (!a.key) continue;
     const known = store.accounts.find((x)=>same(x.key, a.key));
+    /* An app too old to know the type once made this account Cash: the books'
+       type stands, with its terms, and the category the file gives it. */
+    if (known && known.type==='Cash' && a.type && a.type!=='Cash' && ACCOUNT_TYPES.includes(a.type)) {
+      known.type = a.type; delete known.openings;
+      if (known.category==='Cash' && ACCOUNT_CATEGORIES.some(([k])=>k===a.category)) known.category = a.category;
+      if (a.type==='Fund') known.funds = Array.isArray(known.funds) ? known.funds : [];
+      if (a.type==='PEL') { known.opened = /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : ''; known.rate = isFinite(+a.rate) ? +a.rate : null; }
+      if (a.type==='Life' || a.type==='Options') known.policy = a.policy && typeof a.policy==='object' ? a.policy : null;
+      if (a.type==='Property') { known.share = isFinite(+a.share) && +a.share > 0 ? +a.share : 100; known.bought = /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '';
+        known.mortgage = a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null; }
+      store.ops[known.key] = opsOf(known.key).filter((o)=>!/-opening$/.test(o.id));
+      touched.add('Config'); touched.add(known.key);
+    }
     /* Each book says what the account opened at that year. The account keeps
        every book's opening; once the operations are in, the years are gone
        through in order and, where a book opens at something other than what
@@ -2465,7 +2478,7 @@ function lopSheet(p, a){
 }
 
 /* ------------------------------------------------------------------- bonds --*/
-const BOND_VIEWS = [['summary','Summary'],['ops','Operations']];
+const BOND_VIEWS = [['summary','Summary'],['rates','Rates'],['ops','Operations']];
 const pct = (v) => (Math.round(v*100)/100).toFixed(2) + '%';
 const ymLabel = (ym) => MON[+ym.slice(5,7)-1] + ' ' + ym.slice(0,4);
 const periodLabel = (ym) => MON[+ym.slice(5,7)-1] + '–' + MON[+ymAdd(ym, 5).slice(5,7)-1] + ' ' + ymAdd(ym, 5).slice(0,4);
@@ -2484,7 +2497,7 @@ function bondPage(a){
     <div class="herosub">TreasuryDirect value · ${money(w.face, a.currency)} bought · earned <span style="color:var(--good)">${money(w.earned, a.currency)}</span>${w.held?' · '+money(w.held, a.currency)+' held back':''} · ${esc(a.owners.join(', '))} · ${Y}</div>
     <div class="chips" style="margin-top:10px">${BOND_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-bview="${k}">${l}</button>`).join('')}</div>
   </div>
-  ${view==='summary' ? bondSummary(a, Y, end) : bondOps(a, Y)}
+  ${view==='summary' ? bondSummary(a, Y, end) : view==='rates' ? bondRates(a, Y, end) : bondOps(a, Y)}
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
 }
@@ -2492,10 +2505,6 @@ function bondSummary(a, Y, end){
   const ym = end.slice(0,7), held = bondsHeld(a, end);
   const rows = held.map((b)=>{ const w = bondWorth(b, ym); const per = ymAdd(b.issue, Math.floor(Math.max(0, w.months)/6)*6); const r = ibondRate(b.fixed, per);
     return { b, w, rate:r.rate, assumed:r.assumed, cash:ymAdd(b.issue, 12), free:ymAdd(b.issue, 60), ends:ymAdd(b.issue, 360) }; });
-  /* the rate periods of each distinct issue month and fixed rate, to the current one */
-  const groups = []; for (const b of held) { const k = b.issue+'|'+b.fixed; let g = groups.find((x)=>x.k===k); if (!g) { g = { k, issue:b.issue, fixed:b.fixed, face:0 }; groups.push(g); } g.face += b.face; }
-  const periods = (g) => { const out = []; const n = Math.max(0, ymDiff(g.issue, ym)); for (let i = 0; i*6 <= n; i++) { const per = ymAdd(g.issue, i*6); const r = ibondRate(g.fixed, per);
-    out.push({ per, rate:r.rate, assumed:r.assumed, end:r2(ibondUnit(g.fixed, g.issue, (i+1)*6) * g.face/25), current: i*6 <= n && n < (i+1)*6 }); } return out; };
   const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR); if (years.length) for (let y = years[0]; y <= Math.min(THIS_YEAR, Y); y++) if (!years.includes(y)) years.push(y); years.sort((x,y)=>y-x);
   const yrow = (y) => { const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = bondValueAt(a, e); return { y, paid:r2(bondPaidAt(a, e) - bondPaidAt(a, (y-1)+'-12-31')), shown:v.shown, earned:v.earned }; };
   return `
@@ -2507,15 +2516,6 @@ function bondSummary(a, Y, end){
     </table></div>
     <div class="rows" style="margin-top:6px">${rows.map((r)=>`<div class="row" style="display:block"><div class="sub">${ymLabel(r.b.issue)} · earned ${money(r.w.earned, a.currency)}${r.w.held?', '+money(r.w.held, a.currency)+' held back':''} · cashable from ${ymLabel(r.cash)} · full value from ${ymLabel(r.free)} · stops earning ${ymLabel(r.ends)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No bond yet.</div>`}
   </div>
-  ${groups.map((g)=>`
-  <div class="card">
-    <h2>Rates <span class="muted" style="text-transform:none;letter-spacing:0">${ymLabel(g.issue)} · fixed ${pct(g.fixed)} · ${money(g.face, a.currency)}</span></h2>
-    <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Period</th><th>Rate</th><th>Worth at its end</th></tr></thead>
-      <tbody>${periods(g).map((r)=>`<tr${r.assumed?' class="muted"':''}><td>${periodLabel(r.per)}${r.current?' <span class="muted">now</span>':''}</td><td>${pct(r.rate)}${r.assumed?' assumed':''}</td><td>${money(r.end, a.currency)}</td></tr>`).join('')}</tbody>
-    </table></div>
-    <div class="hint" style="margin:6px 0 0">Interest is credited monthly and compounded every six months from the issue month; the first five years, TreasuryDirect shows the value without the last three months. Federal tax only, when cashed; none for the state.</div>
-  </div>`).join('')}
   ${bondMonths(a, Y, end)}
   <div class="card">
     <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
@@ -2542,7 +2542,25 @@ function bondMonths(a, Y, end){
       <thead><tr><th>Month</th><th>Rate</th><th>Shown</th><th>Earned</th><th>Interest</th></tr></thead>
       <tbody>${rows.map((r)=>`<tr><td>${MON[+r.ym.slice(5,7)-1]}</td><td>${r.rate}</td><td><b>${money(r.shown, a.currency)}</b></td><td>${money(r.earned, a.currency)}</td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td></tr>`).join('')}</tbody>
     </table></div>
-  </div>
+  </div>`;
+}
+/* The Rates view: each bond's six-month periods, from the issue month to the
+   one running now, and the announcements they come from. */
+function bondRates(a, Y, end){
+  const ym = end.slice(0,7), held = bondsHeld(a, end);
+  const groups = []; for (const b of held) { const k = b.issue+'|'+b.fixed; let g = groups.find((x)=>x.k===k); if (!g) { g = { k, issue:b.issue, fixed:b.fixed, face:0 }; groups.push(g); } g.face += b.face; }
+  const periods = (g) => { const out = []; const n = Math.max(0, ymDiff(g.issue, ym)); for (let i = 0; i*6 <= n; i++) { const per = ymAdd(g.issue, i*6); const r = ibondRate(g.fixed, per);
+    out.push({ per, rate:r.rate, assumed:r.assumed, end:r2(ibondUnit(g.fixed, g.issue, (i+1)*6) * g.face/25), interest:r2((ibondUnit(g.fixed, g.issue, (i+1)*6) - ibondUnit(g.fixed, g.issue, i*6)) * g.face/25), current: i*6 <= n && n < (i+1)*6 }); } return out; };
+  return `
+  ${groups.length ? groups.map((g)=>`
+  <div class="card">
+    <h2>Rates <span class="muted" style="text-transform:none;letter-spacing:0">${ymLabel(g.issue)} · fixed ${pct(g.fixed)} · ${money(g.face, a.currency)}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Period</th><th>Rate</th><th>Interest</th><th>Worth at its end</th></tr></thead>
+      <tbody>${periods(g).map((r)=>`<tr${r.assumed?' class="muted"':''}><td>${periodLabel(r.per)}${r.current?' <span class="muted">now</span>':''}</td><td>${pct(r.rate)}${r.assumed?' assumed':''}</td><td style="color:var(--good)">${money(r.interest, a.currency)}</td><td>${money(r.end, a.currency)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin:6px 0 0">Interest is credited monthly and compounded every six months from the issue month; the first five years, TreasuryDirect shows the value without the last three months. Federal tax only, when cashed; none for the state.</div>
+  </div>`).join('') : `<div class="card"><h2>Rates</h2><div class="hint" style="margin-top:0">No bond yet.</div></div>`}
   ${bondAnnouncements(a)}`;
 }
 /* TreasuryDirect's announcements, May and November: the semiannual inflation
