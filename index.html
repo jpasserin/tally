@@ -281,9 +281,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=116"></script>
+<script src="backend.js?v=117"></script>
 <script>
-const APP_VERSION="116";
+const APP_VERSION="117";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2574,10 +2574,11 @@ function bondPage(a){
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero">${money(w.shown, a.currency)}</div>
-    <div class="herosub">TreasuryDirect value · ${money(w.face, a.currency)} bought · earned <span style="color:var(--good)">${money(w.earned, a.currency)}</span>${w.held?' · '+money(w.held, a.currency)+' held back':''} · ${esc(a.owners.join(', '))} · ${Y}</div>
+    <div class="herosub">earned <span style="color:var(--good)">${money(w.earned, a.currency)}</span></div>
+    <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
     <div class="chips" style="margin-top:10px">${BOND_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-bview="${k}">${l}</button>`).join('')}</div>
   </div>
-  ${view==='summary' ? bondCashOut(a, Y, end) + bondSummary(a, Y, end) : view==='rates' ? bondRates(a, Y, end) : bondOps(a, Y)}
+  ${view==='summary' ? bondSummary(a, Y, end) : view==='rates' ? bondRates(a, Y, end) : bondOps(a, Y)}
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
 }
@@ -2603,45 +2604,45 @@ function bondCashOut(a, Y, end){
 }
 function bondSummary(a, Y, end){
   const ym = end.slice(0,7), held = bondsHeld(a, end);
-  const rows = held.map((b)=>{ const w = bondWorth(b, ym); const per = ymAdd(b.issue, Math.floor(Math.max(0, w.months)/6)*6); const r = ibondRate(b.fixed, per);
-    return { b, w, rate:r.rate, assumed:r.assumed, cash:ymAdd(b.issue, 12), free:ymAdd(b.issue, 60), ends:ymAdd(b.issue, 360) }; });
-  const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR); if (years.length) for (let y = years[0]; y <= Math.min(THIS_YEAR, Y); y++) if (!years.includes(y)) years.push(y); years.sort((x,y)=>y-x);
-  const yrow = (y) => { const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = bondValueAt(a, e); return { y, paid:r2(bondPaidAt(a, e) - bondPaidAt(a, (y-1)+'-12-31')), shown:v.shown, earned:v.earned }; };
+  const rows = held.map((b)=>({ b, w: bondWorth(b, ym) }));
   return `
   <div class="card">
     <h2>Bonds <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
     ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Issued</th><th>Face</th><th>Fixed</th><th>Rate now</th><th>Value</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${ymLabel(r.b.issue)}</td><td>${money(r.b.face, a.currency)}</td><td>${pct(r.b.fixed)}</td><td>${pct(r.rate)}${r.assumed?' <span class="muted">assumed</span>':''}</td><td><b>${money(r.w.shown, a.currency)}</b></td></tr>`).join('')}</tbody>
+      <thead><tr><th>Issued</th><th>Bought</th><th>Earned</th><th>Penalty*</th><th>Value</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${ymLabel(r.b.issue)}</td><td>${money(r.b.face, a.currency)}</td><td>${money(r.w.earned, a.currency)}</td><td>${r.w.held?money(r.w.held, a.currency):'—'}</td><td><b>${money(r.w.shown, a.currency)}</b></td></tr>`).join('')}</tbody>
     </table></div>
-    <div class="rows" style="margin-top:6px">${rows.map((r)=>`<div class="row" style="display:block"><div class="sub">${ymLabel(r.b.issue)} · earned ${money(r.w.earned, a.currency)}${r.w.held?', '+money(r.w.held, a.currency)+' held back':''} · cashable from ${ymLabel(r.cash)} · full value from ${ymLabel(r.free)} · stops earning ${ymLabel(r.ends)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No bond yet.</div>`}
+    <div class="hint" style="margin:6px 0 0">* Penalty: three months of interest, the first five years. Nothing can be cashed the first year. Stops earning after thirty years.</div>` : `<div class="hint" style="margin-top:0">No bond yet.</div>`}
   </div>
-  ${bondMonths(a, Y, end)}
-  <div class="card">
-    <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
-    ${years.length ? `<div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Year</th><th>Bought</th><th>Value</th><th>Earned</th></tr></thead>
-      <tbody>${years.map(yrow).map((r)=>`<tr><td>${r.y}</td><td>${money(r.paid, a.currency)}</td><td><b>${money(r.shown, a.currency)}</b></td><td style="color:var(--good)">${money(r.earned, a.currency)}</td></tr>`).join('')}</tbody>
-    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
-  </div>`;
+  ${bondMonths(a, Y, end)}`;
 }
-/* The year month by month: the rate the bonds earn, what TreasuryDirect
-   shows, what is earned, and the month's interest. */
+/* One card, two views: This year - the year month by month - or History -
+   year by year. Each row: what was bought, what TreasuryDirect shows, what
+   is earned, and the period's interest. */
 function bondMonths(a, Y, end){
-  const held = bondsHeld(a, end); if (!held.length) return '';
-  const last = end.slice(0,7);
-  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= last);
-  const at = (ym) => { let shown = 0, earned = 0; for (const b of bondsHeld(a, ym+'-31')) { const w = bondWorth(b, ym); shown += w.shown; earned += w.earned; } return { shown:r2(shown), earned:r2(earned) }; };
-  const rateOf = (ym) => { const rs = [...new Set(bondsHeld(a, ym+'-31').map((b)=>{ const n = Math.max(0, ymDiff(b.issue, ym)); return ibondRate(b.fixed, ymAdd(b.issue, Math.floor(n/6)*6)).rate; }))]; return rs.length===1 ? pct(rs[0]) : rs.length ? rs.map(pct).join(' / ') : '—'; };
-  const rows = months.map((ym)=>{ const v = at(ym), before = ymAdd(ym, -1), prev = at(before); const paid = r2(bondPaidAt(a, ym+'-31') - bondPaidAt(a, before+'-31'));
-    return { ym, rate:rateOf(ym), shown:v.shown, earned:v.earned, int:r2(v.earned-prev.earned-paid) }; });
+  const hist = state.bhist==='history';
+  const at = (e) => bondValueAt(a, e);
+  const cell = (r) => `<td>${r.paid?money(r.paid, a.currency):'—'}</td><td><b>${money(r.shown, a.currency)}</b></td><td>${money(r.earned, a.currency)}</td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td>`;
+  let rows, head;
+  if (hist) {
+    const years = [...new Set(opsOf(a.key).map((o)=>+o.date.slice(0,4)))].filter((y)=>y <= THIS_YEAR); if (years.length) for (let y = years[0]; y <= Math.min(THIS_YEAR, Y); y++) if (!years.includes(y)) years.push(y); years.sort((x,y)=>y-x);
+    rows = years.map((y)=>{ const e = y >= THIS_YEAR ? TODAY() : y+'-12-31'; const v = at(e), prev = at((y-1)+'-12-31'); const paid = r2(bondPaidAt(a, e) - bondPaidAt(a, (y-1)+'-12-31'));
+      return { label:String(y), paid, shown:v.shown, earned:v.earned, int:r2(v.earned-prev.earned-paid) }; });
+    head = 'Year';
+  } else {
+    const last = end.slice(0,7);
+    rows = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= last).map((ym)=>{ const v = at(ym+'-31'), before = ymAdd(ym, -1), prev = at(before+'-31'); const paid = r2(bondPaidAt(a, ym+'-31') - bondPaidAt(a, before+'-31'));
+      return { label:MON[+ym.slice(5,7)-1], paid, shown:v.shown, earned:v.earned, int:r2(v.earned-prev.earned-paid) }; });
+    head = 'Month';
+  }
   return `
   <div class="card">
-    <h2>By month <span class="muted" style="text-transform:none;letter-spacing:0">${Y} · ${esc(a.currency)}</span></h2>
-    <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Month</th><th>Rate</th><th>Shown</th><th>Earned</th><th>Interest</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${MON[+r.ym.slice(5,7)-1]}</td><td>${r.rate}</td><td><b>${money(r.shown, a.currency)}</b></td><td>${money(r.earned, a.currency)}</td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td></tr>`).join('')}</tbody>
-    </table></div>
+    <h2>${hist?'By year':'By month'} <span class="muted" style="text-transform:none;letter-spacing:0">${hist?'':Y+' · '}${esc(a.currency)}</span>
+      <span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-bhist="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-bhist="history">History</button></span></h2>
+    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>${head}</th><th>Bought</th><th>Value</th><th>Earned value</th><th>Interest</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${r.label}</td>${cell(r)}</tr>`).join('')}</tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
 /* The Rates view: each bond's six-month periods, from the issue month to the
@@ -4250,6 +4251,7 @@ function wire(){
   /* savings bonds: views and operations */
   const bondAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isBond(a) ? a : null; };
   document.querySelectorAll('[data-bview]').forEach((el)=>el.onclick=()=>{ state.bview=el.dataset.bview; state.page=null; render(); });
+  document.querySelectorAll('[data-bhist]').forEach((el)=>el.onclick=()=>{ state.bhist=el.dataset.bhist; render(); });
   const BO = [['boDate','date'],['boAmount','amount'],['boRate','rate'],['boNote','note']];
   const openBo = (id) => { const a = bondAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
     const d = o ? o.date : dflt();
