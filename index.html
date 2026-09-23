@@ -281,9 +281,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=114"></script>
+<script src="backend.js?v=115"></script>
 <script>
-const APP_VERSION="114";
+const APP_VERSION="115";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3615,10 +3615,12 @@ function deathDefault(a){
 function situationPage(){
   const day = TODAY(), ym = day.slice(0,7), cur = store.cur;
   const open = store.accounts.filter((a)=>!a.closed);
-  const owners = (a) => a.owners.length ? a.owners.join(' & ') : 'No owner';
-  const rank = (a) => { const kid = isChilds(a); const first = a.owners.length ? Math.min(...a.owners.map((o)=>{ const i = store.people.findIndex((p)=>same(p.name, o)); return i<0 ? 99 : i; })) : 98; return [kid?1:0, first, a.owners.length]; };
+  /* by category (Cash, Savings, Property, Excluded), then by currency, then by key */
   const groups = [];
-  for (const a of open.slice().sort((x,y)=>{ const a1 = rank(x), b1 = rank(y); return a1[0]-b1[0] || a1[1]-b1[1] || a1[2]-b1[2] || String(x.key).localeCompare(y.key); })) { const k = owners(a); let g = groups.find((x)=>x.k===k); if (!g) { g = { k, list:[] }; groups.push(g); } g.list.push(a); }
+  for (const [cat] of ACCOUNT_CATEGORIES) for (const c of CURRENCIES) {
+    const list = open.filter((a)=>a.category===cat && a.currency===c).sort((x,y)=>String(x.key).localeCompare(y.key));
+    if (list.length) groups.push({ k: cat + ' · ' + c, cat, c, list, sum: r2(list.reduce((t,a)=>t+valueAt(a, day), 0)) });
+  }
   const line = (k, v) => v ? `<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>` : '';
   const extra = (a) => {
     if (isPel(a)) return [['Plan', [a.opened ? 'opened ' + dLabel(a.opened) : '', a.rate!=null ? pct(a.rate) + ' gross' : ''].filter(Boolean).join(' · ')]];
@@ -3655,7 +3657,7 @@ function situationPage(){
     <div class="herosub">net worth of the family · ${open.length} open account${open.length===1?'':'s'}${kids?' · the children hold '+money(kids, cur):''} · ${ins.length} insurance polic${ins.length===1?'y':'ies'}</div>
   </div>
   ${groups.map((g)=>`
-  <div class="sub" style="margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(g.k)}</div>
+  <div class="sub" style="display:flex;align-items:center;gap:7px;margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)"><span class="dot" style="background:${(ACCOUNT_CATEGORIES.find(([k])=>k===g.cat)||['','#5b6170'])[1]}"></span>${esc(g.k)}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">${money(g.sum, g.c)}</span></div>
   ${g.list.map(block).join('')}`).join('')}
   <div class="sub" style="margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">Insurance</div>
   ${ins.length ? ins.map((x)=>`
