@@ -261,6 +261,15 @@
   .subnav button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round}
   .subnav button.active{color:var(--accent)}
+  /* Print (Save as PDF): the situation report alone, on white. */
+  @media print{
+    header,nav,.subnav,.closebar,.gbtn,.chev{display:none !important}
+    html,body{background:#fff !important;color:#000 !important}
+    .card{background:#fff !important;border:1px solid #bbb !important;box-shadow:none !important;break-inside:avoid;page-break-inside:avoid}
+    .card,.card *{color:#000 !important}
+    .muted,.sub,.hint{color:#555 !important}
+    .hero{color:#000 !important}
+  }
 </style>
 </head>
 <body>
@@ -272,16 +281,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=113"></script>
+<script src="backend.js?v=114"></script>
 <script>
-const APP_VERSION="113";
+const APP_VERSION="114";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -643,7 +652,7 @@ function checkPerson(name, type, skip){
 /* ----------------------------------------------------------- the sheet --
    Config is the FIRST tab and holds settings only: one row per category and
    per person. Financial records will get tabs of their own. */
-const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought','Openings','Policy'];
+const CONFIG_HEADERS = ['Kind','Name','Type','Tags','Currency','Owners','Category','Opening','Closed','Color','Amount','Date','Account','Opened','Rate','Share','Mortgage','Bought','Openings','Policy','Facts'];
 function configTab(){
   const row = (o) => CONFIG_HEADERS.map((h)=> o[h]==null ? '' : o[h]);
   return { name:'Config', index:1, headers:CONFIG_HEADERS,
@@ -651,10 +660,11 @@ function configTab(){
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
+      .concat((store.insurance||[]).map((x)=>row({ Kind:'insurance', Name:x.name, Type:x.kind, Policy:JSON.stringify(insuranceFacts(x)) })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
-        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'' })))
+        Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'', Facts:a.facts&&Object.keys(a.facts).length?JSON.stringify(a.facts):'' })))
       .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
@@ -718,7 +728,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[];
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[];
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -728,6 +738,8 @@ function readConfig(tab){
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
+    if (kind==='insurance' && name) { let f = {}; try { f = JSON.parse(col(r,'Policy')||'{}') || {}; } catch (e) { f = {}; }
+      insurance.push({ id: String(f.id||uid()), name, kind: INSURANCE_KINDS.includes(type) ? type : 'Other', ...insuranceFacts(f) }); }
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       owners: splitTags(col(r,'Owners')),
@@ -735,6 +747,7 @@ function readConfig(tab){
       opening: isFinite(num(col(r,'Opening'))) ? num(col(r,'Opening')) : 0,
       closed: col(r,'Closed')==='yes', funds: [],
       openings: (()=>{ try { const o = JSON.parse(col(r,'Openings')||'null'); return o && typeof o==='object' ? o : undefined; } catch (e) { return undefined; } })(),
+      facts: (()=>{ try { const f = JSON.parse(col(r,'Facts')||'null'); return f && typeof f==='object' ? f : undefined; } catch (e) { return undefined; } })(),
       ...(type==='Life' || type==='Options' ? { policy: (()=>{ try { const p = JSON.parse(col(r,'Policy')||'null'); return p && typeof p==='object' ? p : null; } catch (e) { return null; } })() } : {}),
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
@@ -744,7 +757,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names, ibond };
+  return { categories:cats, people, accounts, budgets, names, ibond, insurance };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -981,7 +994,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[];
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[];
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
@@ -3055,7 +3068,10 @@ function opSheet(p, a){
     </div>
   </div>`;
 }
-const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type, p.opening, p.closed]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type, p.was.opening, p.was.closed]);
+const accountDirty = (p) => JSON.stringify([p.key.trim(), p.currency, p.owners, p.category, p.type, p.opening, p.closed, tidyFacts(p.facts)]) !== JSON.stringify([p.was.key, p.was.currency, p.was.owners, p.was.category, p.was.type, p.was.opening, p.was.closed, tidyFacts(p.was.facts)]);
+/* the facts kept about an account, trimmed, empty ones dropped */
+const FACT_KEYS = ['institution','number','contact','access','tax','death','notes'];
+const tidyFacts = (f) => { const out = {}; for (const k of FACT_KEYS) { const v = String((f||{})[k]||'').trim(); if (v) out[k] = v; } return out; };
 /* Creating: everything. Editing: the owners, the starting balance and
    open/closed - the key, currency, category and type are shown, locked. */
 function accountSheet(p){
@@ -3080,6 +3096,17 @@ function accountSheet(p){
         <div class="chips">${store.people.map((x)=>`<button class="chip ${p.owners.includes(x.name)?'on':''}" data-accowner="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div></div>
       <div class="field"><label>Category</label>
         <div class="chips">${ACCOUNT_CATEGORIES.map(([k,col])=>`<button class="chip ${p.category===k?'on':''}" data-acccat="${k}"><span class="dot" style="background:${col}"></span>${k}</button>`).join('')}</div></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Institution</label><input id="aInst" value="${esc((p.facts||{}).institution||'')}" placeholder="Bank, insurer, broker"></div>
+        <div class="field" style="flex:1"><label>Account number</label><input id="aNum" value="${esc((p.facts||{}).number||'')}" autocapitalize="off"></div>
+      </div>
+      <div class="field"><label>Contact</label><input id="aContact" value="${esc((p.facts||{}).contact||'')}" placeholder="Phone, site, adviser"></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Access</label><input id="aAccess" value="${esc((p.facts||{}).access||'')}" placeholder="${esc(accessDefault({ ...p, key:p.key }))}"></div>
+        <div class="field" style="flex:1"><label>Tax</label><input id="aTax" value="${esc((p.facts||{}).tax||'')}" placeholder="${esc(taxDefault({ ...p, key:p.key }))}"></div>
+      </div>
+      <div class="field"><label>On death</label><input id="aDeath" value="${esc((p.facts||{}).death||'')}" placeholder="Beneficiaries, death benefit"></div>
+      <div class="field"><label>Notes</label><input id="aNotes" value="${esc((p.facts||{}).notes||'')}"></div>
       ${isNew ? `
       <div class="field"><label>Type</label>
         <div class="chips">${ACCOUNT_TYPES.map((k)=>`<button class="chip ${p.type===k?'on':''}" data-acctype="${k}">${k}</button>`).join('')}</div></div>`
@@ -3116,10 +3143,12 @@ const SETTINGS_TABS = [
   ['tags','Tags','<path d="M20.6 13.4 13.4 20.6a2 2 0 0 1-2.8 0L3 13V3h10l7.6 7.6a2 2 0 0 1 0 2.8z"/><circle cx="7.5" cy="7.5" r="1.5"/>'],
   ['people','People','<circle cx="9" cy="8" r="3.2"/><circle cx="17" cy="9" r="2.5"/><path d="M3 20c0-3.3 2.7-5.2 6-5.2s6 1.9 6 5.2"/><path d="M15 20c0-2.4 1-3.8 3-3.8s3 1.4 3 3.8"/>'],
   ['fx','Currency','<circle cx="12" cy="12" r="9"/><path d="M15 9.5a3 3 0 0 0-3-2c-1.7 0-3 1-3 2.2 0 2.6 6 1.3 6 4.2 0 1.3-1.3 2.3-3 2.3a3 3 0 0 1-3-2"/><path d="M12 5.5v13"/>'],
+  ['insurance','Insurance','<path d="M12 3 4 6v6c0 4.4 3.4 8.2 8 9 4.6-.8 8-4.6 8-9V6z"/><path d="m9 12 2 2 4-4"/>'],
   ['about','About','<circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><path d="M12 8h.01"/>'],
 ];
 
 function tabSettings(){
+  if (state.situation) return situationPage();
   const which = SETTINGS_TABS.some(([k])=>k===state.settings) ? state.settings : 'data';
   return `
   <div class="subnav">${SETTINGS_TABS.map(([id,label,icon])=>
@@ -3128,6 +3157,7 @@ function tabSettings(){
     : which==='tags' ? settingsTags()
     : which==='people' ? settingsPeople()
     : which==='fx' ? settingsFx()
+    : which==='insurance' ? settingsInsurance()
     : settingsAbout()}`;
 }
 
@@ -3510,6 +3540,136 @@ function catSheet(p){
     </div>
   </div>`;
 }
+/* ------------------------------------------------------------ insurance --
+   The policies that are not money: home, car, health, disability, life
+   cover... Kept as Config rows of kind insurance, listed under Settings and
+   in the situation report. */
+const INSURANCE_KINDS = ['Home','Car','Health','Disability','Life','Liability','Other'];
+const INS_KEYS = ['insurer','number','contact','premium','covers','beneficiaries','renewal','notes'];
+const insuranceFacts = (x) => { const out = { id: x.id }; for (const k of INS_KEYS) { const v = String((x||{})[k]||'').trim(); if (v) out[k] = v; } return out; };
+function settingsInsurance(){
+  const p = state.page;
+  const list = store.insurance || [];
+  return (p && p.kind==='ins' ? insSheet(p) : '') + `
+  <div class="card">
+    <h2>Insurance <button class="gbtn" data-insnew="1"${LK()}>+</button></h2>
+    ${list.length ? `<div class="rows">${list.map((x)=>`
+      <div class="row tap" data-insedit="${esc(x.id)}">
+        <div style="flex:1;min-width:0"><div class="k"><b>${esc(x.name)}</b> <span class="muted" style="font-size:11.5px">${esc(x.kind)}</span></div>
+          <div class="sub">${esc([x.insurer, x.number ? 'policy ' + x.number : '', x.premium, x.renewal ? 'renews ' + dLabel(x.renewal) : ''].filter(Boolean).join(' · '))}</div></div>
+        <span class="chev">›</span>
+      </div>`).join('')}</div>`
+    : `<div class="hint" style="margin-top:0">No policy yet.</div>`}
+  </div>`;
+}
+function insSheet(p){
+  const field = (id, label, key, extra) => `<div class="field" style="flex:1;min-width:0"><label>${label}</label><input id="${id}" value="${esc(p[key]||'')}"${extra||''}></div>`;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-insclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New policy':esc(p.was.name||'Policy')}</h3>
+      ${field('inName', 'Name', 'name', ' placeholder="Home insurance"')}
+      <div class="field"><label>Kind</label><div class="chips">${INSURANCE_KINDS.map((k)=>`<button class="chip ${p.ikind===k?'on':''}" data-inskind="${k}">${k}</button>`).join('')}</div></div>
+      <div class="btnrow">${field('inInsurer', 'Insurer', 'insurer')}${field('inNumber', 'Policy number', 'number', ' autocapitalize="off"')}</div>
+      ${field('inContact', 'Contact', 'contact', ' placeholder="Phone, site, agent"')}
+      <div class="btnrow">${field('inPremium', 'Premium', 'premium', ' placeholder="1,481 a year"')}${field('inRenewal', 'Renews', 'renewal', ' type="date"')}</div>
+      ${field('inCovers', 'Covers', 'covers', ' placeholder="What, who, how much"')}
+      ${field('inBenef', 'Beneficiaries', 'beneficiaries')}
+      ${field('inNotes', 'Notes', 'notes')}
+      ${p.id==null?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-insdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-insclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-inssave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+
+/* ------------------------------------------------------ the situation --
+   Every open account with what someone else would need to find the money:
+   institution, number, contact, holders, whether it can be reached, how it
+   is taxed, what happens on death - what was written down, or what the
+   account's type implies - then the insurance policies. Print it (the
+   browser's Print, Save as PDF) once a year. */
+function accessDefault(a){
+  if (isPel(a)) return a.opened ? 'Withdrawable from ' + dLabel(String(+a.opened.slice(0,4)+4) + a.opened.slice(4)) + ' (four years); the plan ends ' + dLabel(String(+a.opened.slice(0,4)+15) + a.opened.slice(4)) : 'Withdrawable four years after opening; the plan ends after fifteen';
+  if (isBond(a)) { const b = bondsHeld(a, TODAY()); return b.length ? b.map((x)=>'cashable from ' + ymLabel(ymAdd(x.issue, 12)) + ', full value from ' + ymLabel(ymAdd(x.issue, 60)) + ', stops earning ' + ymLabel(ymAdd(x.issue, 360))).filter((v,i,l)=>l.indexOf(v)===i).join('; ') : 'Cashable after one year, full value after five, earns for thirty'; }
+  if (isLife(a)) return 'Cash value by surrender or policy loan; the death benefit on death';
+  if (isProp(a)) return 'Real estate: a sale takes months; the mortgage is repaid from the price';
+  if (isOpt(a)) return 'Vested options can be exercised until they expire; 60 days after leaving the company';
+  if (isFund(a)) return /IRA|401/i.test(a.key) ? 'Retirement account: withdrawals before age 59½ carry a 10% penalty' : 'Sold on request, settled in days';
+  return a.category==='Savings' ? 'Available on request' : 'Available at any time';
+}
+function taxDefault(a){
+  if (isPel(a)) return 'Interest taxed in France (flat tax and social charges)';
+  if (isBond(a)) return 'US federal income tax on the interest when cashed; no state tax';
+  if (isLife(a)) return 'Growth tax-deferred; the death benefit paid income-tax free';
+  if (isOpt(a)) return 'The gain at exercise taxed as pay; a later gain as capital gain';
+  if (isFund(a)) return /IRA|401/i.test(a.key) ? 'Roth: withdrawals tax-free after 59½; Traditional: taxed as income' : 'Gains taxed when sold';
+  if (isProp(a)) return 'A gain on sale may be taxed';
+  return 'Interest taxable';
+}
+function deathDefault(a){
+  if (isLife(a)) { const P = a.policy || {}; const b = lifeMarkAt(a, 'Benefit', TODAY()); return (b ? 'Death benefit ' + money(b, a.currency) : 'Death benefit') + (P.beneficiaries ? ' to ' + P.beneficiaries : ''); }
+  if (isFund(a) && /IRA|401/i.test(a.key)) return 'To the named beneficiary, outside the will';
+  return '';
+}
+function situationPage(){
+  const day = TODAY(), ym = day.slice(0,7), cur = store.cur;
+  const open = store.accounts.filter((a)=>!a.closed);
+  const owners = (a) => a.owners.length ? a.owners.join(' & ') : 'No owner';
+  const rank = (a) => { const kid = isChilds(a); const first = a.owners.length ? Math.min(...a.owners.map((o)=>{ const i = store.people.findIndex((p)=>same(p.name, o)); return i<0 ? 99 : i; })) : 98; return [kid?1:0, first, a.owners.length]; };
+  const groups = [];
+  for (const a of open.slice().sort((x,y)=>{ const a1 = rank(x), b1 = rank(y); return a1[0]-b1[0] || a1[1]-b1[1] || a1[2]-b1[2] || String(x.key).localeCompare(y.key); })) { const k = owners(a); let g = groups.find((x)=>x.k===k); if (!g) { g = { k, list:[] }; groups.push(g); } g.list.push(a); }
+  const line = (k, v) => v ? `<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>` : '';
+  const extra = (a) => {
+    if (isPel(a)) return [['Plan', [a.opened ? 'opened ' + dLabel(a.opened) : '', a.rate!=null ? pct(a.rate) + ' gross' : ''].filter(Boolean).join(' · ')]];
+    if (isBond(a)) return [['Bonds', bondsHeld(a, day).map((b)=>ymLabel(b.issue) + ' · ' + money(b.face, a.currency) + ' at ' + pct(b.fixed) + ' fixed · worth ' + money(bondWorth(b, ym).shown, a.currency)).join('; ')]];
+    if (isLife(a)) { const P = a.policy || {}; return [['Policy', [P.insurer, P.product, P.number ? 'number ' + P.number : '', P.policyDate ? 'dated ' + dLabel(P.policyDate) : ''].filter(Boolean).join(' · ')], ['Premiums', [P.premium ? money(P.premium, a.currency) + ' a year' : '', P.pua ? 'paid-up additions ' + money(P.pua, a.currency) + ' a year' : ''].filter(Boolean).join(' · ')]]; }
+    if (isProp(a)) { const m = a.mortgage; const owed = m ? mortgageAt(m, day).owed : 0; return [['Property', [a.share!=null ? a.share + '% yours' : '', a.bought ? 'bought ' + dLabel(a.bought) : '', 'worth ' + money(lifeMarkAt(a, 'Value', day) || 0, a.currency)].filter(Boolean).join(' · ')], m ? ['Mortgage', money(owed, a.currency) + ' owed · ' + money(m.principal, a.currency) + ' at ' + pct(m.rate) + ' over ' + m.years + ' years' + (m.start ? ' from ' + dLabel(m.start) : '')] : null]; }
+    if (isOpt(a)) { const g = optGrants(a, day), P = a.policy || {}; const vested = g.reduce((t,x)=>t+Math.max(0, x.vested-x.exercised), 0), un = g.reduce((t,x)=>t+(x.expired?0:x.qty-x.vested), 0); return [['Options', [P.company, qty(vested) + ' vested', qty(un) + ' unvested', g.length ? 'expiring ' + g.map((x)=>x.until ? dLabel(x.until) : '—').filter((v,i,l)=>l.indexOf(v)===i).join(', ') : ''].filter(Boolean).join(' · ')]]; }
+    if (isFund(a)) return [['Holdings', fundsOf(a).map((f)=>{ const at = fundAt(a, f, day); return at.value ? f.name + (at.shares!=null && f.kind==='invested' ? ' · ' + at.shares.toLocaleString('en-US', { maximumFractionDigits:3 }) + ' shares' : '') + ' · ' + money(at.value, a.currency) : ''; }).filter(Boolean).join('; ')]];
+    return [];
+  };
+  const block = (a) => { const F = a.facts || {}; const v = valueAt(a, day); const c = a.currency!==cur ? conv(v, a.currency, cur, ym) : null;
+    return `
+    <div class="card sit">
+      <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b> <span class="muted" style="font-weight:400">${esc(a.type)} · ${esc(a.category)}</span></span>
+        <span class="v" style="text-transform:none;letter-spacing:0">${money(v, a.currency)}${c!=null?' <span class="muted">'+money(c, cur)+'</span>':''}</span></h2>
+      <div class="rows">
+        ${line('Institution', [F.institution, F.number ? 'account ' + F.number : ''].filter(Boolean).join(' · ') || (isLife(a) && a.policy && a.policy.insurer ? a.policy.insurer + (a.policy.number ? ' · policy ' + a.policy.number : '') : ''))}
+        ${line('Contact', F.contact)}
+        ${line('Holder', a.owners.join(', '))}
+        ${extra(a).filter(Boolean).map(([k,v])=>line(k, v)).join('')}
+        ${line('Access', F.access || accessDefault(a))}
+        ${line('Tax', F.tax || taxDefault(a))}
+        ${line('On death', F.death || deathDefault(a))}
+        ${line('Notes', F.notes)}
+      </div>
+    </div>`; };
+  const total = counted().filter((a)=>!a.closed).reduce((t,a)=>{ const c = conv(valueAt(a, day), a.currency, cur, ym); return c==null ? t : t + c; }, 0);
+  const kids = store.accounts.filter((a)=>!a.closed && isChilds(a) && a.category!=='Excluded').reduce((t,a)=>{ const c = conv(valueAt(a, day), a.currency, cur, ym); return c==null ? t : t + c; }, 0);
+  const ins = store.insurance || [];
+  return `
+  <div class="card sit">
+    <h2>Situation <span class="muted" style="text-transform:none;letter-spacing:0">${dLabel(day)}</span><button class="gbtn" data-sitprint="1">Print</button></h2>
+    <div class="hero">${money(total, cur)}</div>
+    <div class="herosub">net worth of the family · ${open.length} open account${open.length===1?'':'s'}${kids?' · the children hold '+money(kids, cur):''} · ${ins.length} insurance polic${ins.length===1?'y':'ies'}</div>
+  </div>
+  ${groups.map((g)=>`
+  <div class="sub" style="margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(g.k)}</div>
+  ${g.list.map(block).join('')}`).join('')}
+  <div class="sub" style="margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">Insurance</div>
+  ${ins.length ? ins.map((x)=>`
+  <div class="card sit">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(x.name)}</b> <span class="muted" style="font-weight:400">${esc(x.kind)}</span></span></h2>
+    <div class="rows">
+      ${line('Insurer', [x.insurer, x.number ? 'policy ' + x.number : ''].filter(Boolean).join(' · '))}
+      ${line('Contact', x.contact)}${line('Premium', x.premium)}${line('Covers', x.covers)}${line('Beneficiaries', x.beneficiaries)}${line('Renews', x.renewal ? dLabel(x.renewal) : '')}${line('Notes', x.notes)}
+    </div>
+  </div>`).join('') : `<div class="card sit"><div class="hint" style="margin:0">No policy written down - Settings › Insurance.</div></div>`}
+  <div class="hint sit" style="margin:8px 4px">Balances as of ${dLabel(day)}, converted at the month's rate. Tally v${APP_VERSION}.</div>
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-sitclose="1">Close</button></div>`;
+}
 function settingsPeople(){
   const p = state.page;
   return (p && p.kind==='person' ? personSheet(p) : '') + `
@@ -3577,7 +3737,7 @@ function settingsData(){
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
     </div>`
-    : `<div class="btnrow"><button class="btn" data-import="1"${LK()}>Import a file</button><button class="btn" data-export="1">Export</button></div>`}
+    : `<div class="btnrow"><button class="btn" data-import="1"${LK()}>Import a file</button><button class="btn" data-export="1">Export</button><button class="btn" data-situation="1">Situation</button></div>`}
     ${state.imp?`<div class="status ${state.imp.bad?'bad':'ok'}">${esc(state.imp.msg)}</div>`:''}
   </div>`;
 }
@@ -3869,12 +4029,15 @@ function wire(){
     const sh=document.getElementById('aShare'); if (sh) state.page.share=sh.value; const bt=document.getElementById('aBought'); if (bt) state.page.bought=bt.value;
     (state.page.funds||[]).forEach((f,i)=>{ const n=document.getElementById('afName'+i), x=document.getElementById('afIndex'+i);
       if (n) f.name=n.value; if (x) f.index=x.value; });
+    const F = state.page.facts = state.page.facts || {};
+    for (const [id,k] of [['aInst','institution'],['aNum','number'],['aContact','contact'],['aAccess','access'],['aTax','tax'],['aDeath','death'],['aNotes','notes']]) { const e=document.getElementById(id); if (e) F[k]=e.value; }
     state.page.closeArm=false; state.page.delArm=false; };
   const openAcc=(index, preset)=>{ const a=index==null?null:store.accounts[index];
     const cur = { key:a?a.key:'', currency:a?a.currency:'USD', owners:a?a.owners.slice():[], category:a?a.category:'Cash', type:a?a.type:'Cash',
       opening:a?String(a.opening||0):'0', closed:a?!!a.closed:false, opened:a?(a.opened||''):'', rate:a&&a.rate!=null?String(a.rate):'', share:a&&a.share!=null?String(a.share):'100', bought:a?(a.bought||''):'',
       /* a fund with operations cannot be taken out */
-      funds:a?fundsOf(a).map((f)=>({ name:f.name, kind:f.kind, index:f.index||'', locked: fundOps(a, f.name).length>0 })):[] };
+      funds:a?fundsOf(a).map((f)=>({ name:f.name, kind:f.kind, index:f.index||'', locked: fundOps(a, f.name).length>0 })):[],
+      facts: a && a.facts ? { ...a.facts } : {} };
     if (preset) Object.assign(cur, preset);
     state.page={ kind:'account', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
@@ -3969,6 +4132,7 @@ function wire(){
       : { key:p.key.trim(), currency:p.currency, owners:p.owners.slice(), category:p.category, type:p.type, opening:num(p.opening||'0'), closed:false, funds };
     if (a.type==='PEL') { a.opened = String(p.opened||'').trim(); a.rate = String(p.rate||'').trim()==='' ? null : num4(p.rate); }
     if (a.type==='Property') { a.share = String(p.share||'').trim()==='' ? 100 : num(p.share); a.bought = String(p.bought||'').trim(); if (a.mortgage===undefined) a.mortgage = null; }
+    const facts = tidyFacts(p.facts); if (Object.keys(facts).length) a.facts = facts; else delete a.facts;
     try { checkAccount(a, cur);
       if (a.type==='Property' && !(a.share > 0 && a.share <= 100)) throw new Error('A share between 0 and 100.');
       if (a.type==='Property' && !/^\d{4}-\d{2}-\d{2}$/.test(a.bought)) throw new Error('The day it was bought.');
@@ -4093,6 +4257,30 @@ function wire(){
   document.querySelectorAll('[data-bopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=bondAcc(); if (!a) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.bopdelete); state.page=null; commit(a.key); });
+
+  /* insurance policies */
+  const IN = [['inName','name'],['inInsurer','insurer'],['inNumber','number'],['inContact','contact'],['inPremium','premium'],['inRenewal','renewal'],['inCovers','covers'],['inBenef','beneficiaries'],['inNotes','notes']];
+  const openIns = (id) => { const x = id==null ? null : (store.insurance||[]).find((y)=>y.id===id);
+    const cur = { name:x?x.name:'', ikind:x?x.kind:'Home' }; for (const [,k] of IN) if (k!=='name') cur[k] = x ? (x[k]||'') : '';
+    state.page={ kind:'ins', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-insnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openIns(null); });
+  document.querySelectorAll('[data-insedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openIns(el.dataset.insedit); });
+  document.querySelectorAll('[data-inskind]').forEach((el)=>el.onclick=()=>{ readP(IN); state.page.ikind=el.dataset.inskind; render(); });
+  if (state.page && state.page.kind==='ins') for (const [id] of IN) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(IN, ['name','ikind'].concat(IN.map(([,k])=>k).filter((k)=>k!=='name')), 'data-insclose');
+  document.querySelectorAll('[data-inssave]').forEach((el)=>el.onclick=()=>{ readP(IN); const p=state.page;
+    const name = String(p.name||'').trim(); if (!name) { alert('A name.'); render(); return; }
+    if (p.renewal && !/^\d{4}-\d{2}-\d{2}$/.test(p.renewal)) { alert('A renewal date, or none.'); render(); return; }
+    const x = { id: p.id || uid(), name, kind: INSURANCE_KINDS.includes(p.ikind) ? p.ikind : 'Other', ...insuranceFacts(p) }; delete x.id; x.id = p.id || uid();
+    store.insurance = (store.insurance||[]).filter((y)=>y.id!==x.id).concat([x]);
+    state.page=null; commit('Config'); });
+  document.querySelectorAll('[data-insdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.insurance = (store.insurance||[]).filter((y)=>y.id!==el.dataset.insdelete); state.page=null; commit('Config'); });
+  /* the situation report */
+  document.querySelectorAll('[data-situation]').forEach((el)=>el.onclick=()=>{ state.situation=true; state.page=null; render(); });
+  document.querySelectorAll('[data-sitclose]').forEach((el)=>el.onclick=()=>{ state.situation=false; render(); });
+  document.querySelectorAll('[data-sitprint]').forEach((el)=>el.onclick=()=>{ if (typeof window.print==='function') window.print(); });
 
   /* the announcements written down */
   const IR = [['irMonth','month'],['irInfl','inflation'],['irFixed','fixed']];
