@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=111"></script>
+<script src="backend.js?v=112"></script>
 <script>
-const APP_VERSION="111";
+const APP_VERSION="112";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -462,11 +462,13 @@ function fundAt(a, f, end){
   const paid = ops.reduce((t,o)=> o.kind==='Buy' ? t+(o.amount||0) : o.kind==='Sell' ? t-Math.abs(o.amount||0) : t, 0);
   const prices = ops.filter((o)=>o.kind==='Price' && o.price>0).sort((x,y)=>x.date<y.date?-1:1);
   const last = prices[prices.length-1];
-  /* shares held: the latest mark, moved by every buy, sale, dividend or fee
-     since it (a sale sold out leaves no mark behind) */
+  /* shares held: the latest mark that counted them (a live quote marks the
+     price alone), moved by every buy, sale, dividend or fee since it (a sale
+     sold out leaves no mark behind) */
+  const anchor = prices.slice().reverse().find((o)=>o.shares!=null);
   /* a sale or a fee takes shares; anything else moves them the way its sign says (growth carried out of a fund is negative) */
   const move = (o) => (o.kind==='Sell' || o.kind==='Fee') ? -Math.abs(o.shares||0) : (o.shares||0);
-  let shares = ops.filter((o)=>o.kind!=='Price' && (!last || o.date > last.date)).reduce((t,o)=>t+move(o), last ? last.shares : 0);
+  let shares = ops.filter((o)=>o.kind!=='Price' && (!anchor || o.date > anchor.date)).reduce((t,o)=>t+move(o), anchor ? anchor.shares : 0);
   if (shares < 1e-9) shares = 0;
   const price = last ? last.price : null;
   const raw = price!=null ? shares*price : paid, value = r2(raw);
@@ -750,12 +752,12 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond))) throw new Error('Not a Tally import file.');
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
@@ -766,6 +768,15 @@ function importFile(j){
   /* known names, a list to merge */
   let names = 0;
   for (const n of (Array.isArray(j.names) ? j.names : [])) if (n && n.name && Array.isArray(n.tags)) for (const t of n.tags) if (t && !nameTags(n.name).some((x)=>same(x, t))) { learnName(String(n.name), String(t)); names++; }
+  /* I bond rate announcements (rates.js): kept only where they add to or change what the app knows */
+  let rates = 0;
+  for (const r of (Array.isArray(j.ibond) ? j.ibond : [])) {
+    if (!r || !/^\d{4}-\d{2}$/.test(r.month||'') || !isFinite(+r.inflation)) continue;
+    const row = { month:r.month, inflation:r2(+r.inflation), fixed:isFinite(+r.fixed)?r2(+r.fixed):0 };
+    const have = ibondTable().find((x)=>x[0]===row.month);
+    if (have && have[1]===row.inflation && have[2]===row.fixed) continue;
+    store.ibond = (store.ibond||[]).filter((x)=>x.month!==row.month).concat([row]); rates++; touched.add('Config');
+  }
   for (const a of j.accounts) {
     if (!a.key) continue;
     const known = store.accounts.find((x)=>same(x.key, a.key));
@@ -841,7 +852,7 @@ function importFile(j){
   /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
-  return { accounts, ops, adjusted, names, touched:[...touched] };
+  return { accounts, ops, adjusted, names, rates, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
    account's opening; every later book gets an adjustment where it opens at
@@ -2497,9 +2508,29 @@ function bondPage(a){
     <div class="herosub">TreasuryDirect value · ${money(w.face, a.currency)} bought · earned <span style="color:var(--good)">${money(w.earned, a.currency)}</span>${w.held?' · '+money(w.held, a.currency)+' held back':''} · ${esc(a.owners.join(', '))} · ${Y}</div>
     <div class="chips" style="margin-top:10px">${BOND_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-bview="${k}">${l}</button>`).join('')}</div>
   </div>
-  ${view==='summary' ? bondSummary(a, Y, end) : view==='rates' ? bondRates(a, Y, end) : bondOps(a, Y)}
+  ${view==='summary' ? bondCashOut(a, Y, end) + bondSummary(a, Y, end) : view==='rates' ? bondRates(a, Y, end) : bondOps(a, Y)}
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+/* What cashing everything would give at the end of the year shown - today,
+   for this year: nothing in a bond's first year; before five years, the
+   value less the last three months of interest. */
+function bondCashOut(a, Y, end){
+  const ym = end.slice(0,7), held = bondsHeld(a, end); if (!held.length) return '';
+  const when = Y >= THIS_YEAR ? 'today' : '31 Dec ' + Y;
+  const rows = held.map((b)=>{ const w = bondWorth(b, ym); return { b, w, can: w.months >= 12, free: w.months >= 60, from: ymAdd(b.issue, 12), freeFrom: ymAdd(b.issue, 60) }; });
+  const total = r2(rows.reduce((t,r)=>t + (r.can ? r.w.shown : 0), 0)), penalty = r2(rows.reduce((t,r)=>t + (r.can && !r.free ? r.w.held : 0), 0));
+  return `
+  <div class="card">
+    <h2>If cashed <span class="muted" style="text-transform:none;letter-spacing:0">${when}</span></h2>
+    <div class="rows">${rows.map((r)=>`
+      <div class="row"><span class="k">${ymLabel(r.b.issue)} · ${money(r.b.face, a.currency)}</span>
+        <span class="v ${r.can?'':'muted'}">${r.can ? money(r.w.shown, a.currency) : 'not before ' + ymLabel(r.from)}</span></div>
+      ${r.can && !r.free ? `<div class="row" style="display:block;padding-top:0"><div class="sub">penalty ${money(r.w.held, a.currency)}, the last three months' interest, until ${ymLabel(r.freeFrom)}</div></div>` : ''}`).join('')}
+      <div class="row"><span class="k"><b>You would get</b></span><span class="v"><b>${money(total, a.currency)}</b></span></div>
+    </div>
+    <div class="hint" style="margin:6px 0 0">An I bond cannot be cashed in its first year. Cashed before five years, it loses the last three months of interest - the difference between earned and shown${penalty?' ('+money(penalty, a.currency)+' here)':''}. Federal income tax is due on the interest the year it is cashed; none for the state.</div>
+  </div>`;
 }
 function bondSummary(a, Y, end){
   const ym = end.slice(0,7), held = bondsHeld(a, end);
@@ -3484,7 +3515,7 @@ function settingsData(){
     ${state.pending.files.length>1?`<div class="sub" style="margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(f.name)}</div>`:''}
     <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
-        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${(f.file.names||[]).length} known names</div>`}</div>`).join('') + `
+        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
@@ -3768,9 +3799,9 @@ function wire(){
     const pend=state.pending; if (!pend) return;
     try {
       const got = { accounts:0, ops:0, adjusted:0, names:0, touched:new Set() };
-      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; for (const t of r.touched) got.touched.add(t); }
+      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
