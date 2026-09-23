@@ -281,9 +281,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=118"></script>
+<script src="backend.js?v=119"></script>
 <script>
-const APP_VERSION="118";
+const APP_VERSION="119";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2158,20 +2158,30 @@ function fundAccountPage(a){
   const ops = fundOps(a, f.name).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
   const inv = f.kind==='invested';
   const cell = (v) => v==null ? '—' : money(v, a.currency);
+  const hist = state.fview==='history';
+  /* the funds worth showing: those with a balance, or moved this year; the one open, always */
+  const shown = funds.filter((x)=>x===f || Math.abs(fundAt(a, x, end).value) >= 0.005 || fundOps(a, x.name).some((o)=>o.date.slice(0,4)===String(Y)));
+  const listed = shown.length ? shown : funds;
+  const fmtSh = (v) => v.toLocaleString('en-US', { maximumFractionDigits:3 });
+  const growthPct = at.paid > 0 ? Math.round(at.interest / at.paid * 1000) / 10 : null;
+  const mark = inv ? fundOps(a, f.name).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0] : null;
+  const viewChipsF = `<span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-fview="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-fview="history">History</button></span>`;
   return widget + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
-    <div class="herosub">${esc(a.owners.join(', '))}${a.closed?' · closed':''} · ${Y}</div>
-    <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-fundsel="${esc(x.name)}">${esc(x.name)}${x.kind==='invested'&&x.index&&x.index!==x.name?' <span class="muted" style="font-size:10.5px">'+esc(x.index)+'</span>':''}</button>`).join('')}</div>
+    ${listed.map((x)=>`<div class="herosub">${esc(x.name)} <b style="color:var(--txt)">${money(fundAt(a, x, end).value, a.currency)}</b></div>`).join('')}
+    <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${a.closed?'closed · ':''}${Y}</div>
+    <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-fundsel="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div>
   </div>
   <div class="card">
-    <h2>${esc(f.name)} <span class="muted" style="text-transform:none;letter-spacing:0">${inv?'Invested'+(f.index?' · '+esc(f.index):''):'Cash'}</span></h2>
+    <h2>${esc(f.name)}${viewChipsF}</h2>
     <div class="hero ${at.value<0?'neg':''}" style="font-size:24px">${money(at.value, a.currency)}</div>
-    <div class="herosub">${money(at.paid, a.currency)} paid in · <span style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</span> ${inv?'growth':'interest'}${inv&&at.shares!=null?' · '+at.shares.toLocaleString('en-US',{maximumFractionDigits:3})+' shares'+(at.price!=null?' at '+at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):''):''}</div>
-    ${inv?`<div class="herosub">${liveLine(a, f)}</div>`:''}
+    <div class="herosub">Paid in ${inv&&at.shares!=null?fmtSh(at.shares)+' shares ':''}<b style="color:var(--txt)">${money(at.paid, a.currency)}</b></div>
+    <div class="herosub">${inv?'Growth':'Interest'} <b style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</b>${growthPct!=null?' ('+(growthPct>=0?'+':'')+growthPct+'%)':''}</div>
+    ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}
   </div>
   ${fundChartCard(a, f, Y)}
   ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
@@ -2190,15 +2200,20 @@ function fundAccountPage(a){
       <tbody>${Object.values(tot).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src)).map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(r2(b.paid), a.currency)}</td><td style="color:${b.value-b.paid<0?'var(--bad)':'var(--good)'}">${money(r2(b.value-b.paid), a.currency)}</td><td><b>${money(r2(b.value), a.currency)}</b></td><td>${total?(b.value/total*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}</tbody>
     </table>` : ''}
   </div>`; })()}
+  ${(function(){
+    const periods = hist
+      ? (function(){ const first = fundOps(a, f.name).map((o)=>+o.date.slice(0,4)).sort()[0]; if (!first) return []; const out = []; for (let y = Math.min(THIS_YEAR, Y); y >= first; y--) out.push({ label:String(y), end: y >= THIS_YEAR ? '9999-12-31' : y+'-12-31' }); return out; })()
+      : months.map((m)=>({ label:MON[+m.slice(5,7)-1], end:m+'-31' }));
+    return `
   <div class="card">
-    <h2>By month</h2>
-    <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Month</th><th>Paid in</th><th>${inv?'Growth':'Interest'}</th><th>Balance</th>${inv?'<th>Shares</th><th>Price</th>':''}</tr></thead>
-      <tbody>${months.map((m)=>{ const x = fundAt(a, f, m+'-31'); const empty = !x.value && !x.paid && !fundOps(a, f.name).some((o)=>o.date <= m+'-31');
-        return `<tr${empty?' class="muted"':''}><td>${MON[+m.slice(5,7)-1]}</td><td>${cell(x.paid)}</td><td style="color:${x.interest<0?'var(--bad)':'var(--good)'}">${cell(x.interest)}</td><td><b>${cell(x.value)}</b></td>${
+    <h2>${hist?'By year':'By month'}</h2>
+    ${periods.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>${hist?'Year':'Month'}</th><th>Paid in</th><th>${inv?'Growth':'Interest'}</th><th>Balance</th>${inv?'<th>Shares</th><th>Price</th>':''}</tr></thead>
+      <tbody>${periods.map((pr)=>{ const x = fundAt(a, f, pr.end); const empty = !x.value && !x.paid && !fundOps(a, f.name).some((o)=>o.date <= pr.end);
+        return `<tr${empty?' class="muted"':''}><td>${pr.label}</td><td>${cell(x.paid)}</td><td style="color:${x.interest<0?'var(--bad)':'var(--good)'}">${cell(x.interest)}</td><td><b>${cell(x.value)}</b></td>${
           inv?`<td>${x.shares!=null?x.shares.toLocaleString('en-US',{maximumFractionDigits:3}):'—'}</td><td>${x.price!=null?x.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'}</td>`:''}</tr>`; }).join('')}</tbody>
-    </table></div>
-  </div>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`; })()}
   <div class="card">
     <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-fopnew="1"${LK()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
@@ -2216,10 +2231,17 @@ function fundAccountPage(a){
 const FUND_METRICS = [['price','Price',true], ['paid','Paid in'], ['interest','Growth'], ['value','Balance'], ['shares','Shares',true]];
 const fmt3 = (v) => v.toLocaleString('en-US', { maximumFractionDigits:3 });
 const fmtPrice = (v) => v.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
-function fundPoints(a, f, Y, key){
+function fundPoints(a, f, Y, key, hist){
   const now = new Date().toISOString().slice(0,7);
-  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
   const at = (end) => { const x = fundAt(a, f, end); const v = x[key]; return isFinite(v) && v!=null ? v : 0; };
+  if (hist) {
+    /* all time: from the month before the fund's first operation to now */
+    const first = fundOps(a, f.name).map((o)=>o.date.slice(0,7)).sort()[0];
+    if (!first) return [];
+    const months = []; for (let m = first; m <= now; m = ymAdd(m, 1)) months.push(m);
+    return [{ label:mLabel(ymAdd(first, -1)), values:{ v: at(ymAdd(first, -1)+'-31') } }].concat(months.map((m)=>({ label:mLabel(m), values:{ v: at(m+'-31') } })));
+  }
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
   return [{ label:'1 Jan', values:{ v: at((Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ v: at(m+'-31') } })));
 }
 function fundSeries(f, key){
@@ -2229,7 +2251,7 @@ function fundSeries(f, key){
 const fundMetric = (f) => { const ok = FUND_METRICS.filter(([,,inv])=>!inv || f.kind==='invested').map(([k])=>k); return ok.includes(state.fmet) ? state.fmet : 'value'; };
 function fundChartCard(a, f, Y){
   const key = fundMetric(f);
-  const pts = fundPoints(a, f, Y, key);
+  const pts = fundPoints(a, f, Y, key, state.fview==='history');
   const n = pts.length;
   if (n < 2) return '';
   if (state.fbHi==null || state.fbHi > n-1 || state.fbHi < 1) state.fbHi = n-1;
@@ -4058,7 +4080,7 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.whatif=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.fview='year'; state.whatif=null; render(); });
   document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
@@ -4124,9 +4146,10 @@ function wire(){
   document.querySelectorAll('[data-accfundkind]').forEach((el)=>el.onclick=()=>{ readAcc(); const [i,k]=el.dataset.accfundkind.split('|'); const f=state.page.funds[+i]; if (f && !f.locked) f.kind=k; render(); });
   document.querySelectorAll('[data-fundsel]').forEach((el)=>el.onclick=()=>{ state.fund=el.dataset.fundsel; state.page=null; state.fbLo=state.fbHi=null; render(); });
   document.querySelectorAll('[data-fmet]').forEach((el)=>el.onclick=()=>{ state.fmet=el.dataset.fmet; render(); });
+  document.querySelectorAll('[data-fview]').forEach((el)=>el.onclick=()=>{ state.fview=el.dataset.fview; state.fbLo=state.fbHi=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account) { const a = store.accounts.find((x)=>x.key===state.account);
     const f = a && isFund(a) ? fundNowOf(a) : null;
-    if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
+    if (f) { const key = fundMetric(f); wireRangeChart('fb', fundPoints(a, f, theYear(), key, state.fview==='history'), fundSeries(f, key), ()=>({ lo:state.fbLo, hi:state.fbHi }), (lo,hi)=>{ state.fbLo=lo; state.fbHi=hi; }); } }
   document.querySelectorAll('[data-acccur]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.currency=el.dataset.acccur; render(); });
   document.querySelectorAll('[data-acccat]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.category=el.dataset.acccat; render(); });
   document.querySelectorAll('[data-acctype]').forEach((el)=>el.onclick=()=>{ readAcc(); state.page.type=el.dataset.acctype; if (el.dataset.acctype==='Property') state.page.category='Property'; if (el.dataset.acctype==='Life') state.page.category='Savings'; render(); });
