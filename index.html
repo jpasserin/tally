@@ -272,16 +272,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=109"></script>
+<script src="backend.js?v=110"></script>
 <script>
-const APP_VERSION="109";
+const APP_VERSION="110";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -338,14 +338,16 @@ const ownValue = (a) => isFund(a) || isProp(a) || isLife(a) || isBond(a) || isOp
    the first year; cashing before five years forfeits the last three months,
    and TreasuryDirect shows the value net of them - that is the balance. */
 const IBOND = [['2022-05',4.81,0.0],['2022-11',3.24,0.4],['2023-05',1.69,0.9],['2023-11',1.97,1.3],['2024-05',1.48,1.3],['2024-11',0.95,1.2],['2025-05',1.43,1.1],['2025-11',1.56,0.9],['2026-05',1.67,0.9]];
-const IBOND_LAST = IBOND[IBOND.length-1][0];
+/* the table as known: built in, then every announcement written down in the app (Config rows of kind ibond), the later word winning */
+const ibondTable = () => { const m = new Map(IBOND.map((r)=>[r[0], r])); for (const r of (store.ibond||[])) if (/^\d{4}-\d{2}$/.test(r.month||'')) m.set(r.month, [r.month, +r.inflation||0, +r.fixed||0]); return [...m.values()].sort((x,y)=>x[0]<y[0]?-1:1); };
+const ibondLast = () => { const t = ibondTable(); return t[t.length-1][0]; };
 const ymAdd = (ym, n) => { const y = +ym.slice(0,4), m = +ym.slice(5,7)-1+n; return String(y+Math.floor(m/12)) + '-' + String(((m%12)+12)%12+1).padStart(2,'0'); };
 const ymDiff = (a, b) => (+b.slice(0,4)-+a.slice(0,4))*12 + (+b.slice(5,7)-+a.slice(5,7));
-const ibondInflation = (ym) => { let r = null; for (const [p, i] of IBOND) if (p <= ym) r = i; return r; };
-const ibondFixed = (ym) => { let f = 0; for (const [p, , fx] of IBOND) if (p <= ym) f = fx; return f; };
+const ibondInflation = (ym) => { let r = null; for (const [p, i] of ibondTable()) if (p <= ym) r = i; return r; };
+const ibondFixed = (ym) => { let f = 0; for (const [p, , fx] of ibondTable()) if (p <= ym) f = fx; return f; };
 const ibondComposite = (fixed, infl) => Math.round((fixed + 2*infl + fixed*infl/100) * 100) / 100;
 /* the rate of the six-month period starting in a month, for a bond with this fixed rate; assumed = past the announcements we know */
-const ibondRate = (fixed, periodStart) => { const infl = ibondInflation(periodStart); return { rate: infl==null ? 0 : ibondComposite(fixed, infl), assumed: periodStart > ymAdd(IBOND_LAST, 5) }; };
+const ibondRate = (fixed, periodStart) => { const infl = ibondInflation(periodStart); return { rate: infl==null ? 0 : ibondComposite(fixed, infl), assumed: periodStart > ymAdd(ibondLast(), 5) }; };
 /* one $25 unit after `months` months of interest */
 function ibondUnit(fixed, issueYM, months){
   let v = 25, start = 25;
@@ -646,6 +648,7 @@ function configTab(){
     rows: store.categories.map((c)=>row({ Kind:'category', Name:c.name, Type:c.type, Tags:c.tags.join(', ') }))
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
+      .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
@@ -713,7 +716,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[];
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[];
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -722,6 +725,7 @@ function readConfig(tab){
     if (kind==='category') cats.push({ name, type: TYPES.some(([k])=>k===type)?type:'Misc', tags: withName(name, splitTags(col(r,'Tags'))) });
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
+    if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       owners: splitTags(col(r,'Owners')),
@@ -738,7 +742,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names };
+  return { categories:cats, people, accounts, budgets, names, ibond };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -752,6 +756,7 @@ function previewImport(j){
 }
 function importFile(j){
   if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire))) throw new Error('Not a Tally import file.');
+  if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
   const year = +j.year || null;
@@ -900,7 +905,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[];
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[];
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
@@ -2470,7 +2475,7 @@ function bondPage(a){
   const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
   const view = BOND_VIEWS.some(([k])=>k===state.bview) ? state.bview : 'summary';
   const w = bondValueAt(a, end);
-  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='bop' ? bopSheet(p, a) : '';
+  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='bop' ? bopSheet(p, a) : p && p.kind==='irt' ? irtSheet(p) : '';
   return widget + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
@@ -2511,12 +2516,66 @@ function bondSummary(a, Y, end){
     </table></div>
     <div class="hint" style="margin:6px 0 0">Interest is credited monthly and compounded every six months from the issue month; the first five years, TreasuryDirect shows the value without the last three months. Federal tax only, when cashed; none for the state.</div>
   </div>`).join('')}
+  ${bondMonths(a, Y, end)}
   <div class="card">
     <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
     ${years.length ? `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>Year</th><th>Bought</th><th>Value</th><th>Earned</th></tr></thead>
       <tbody>${years.map(yrow).map((r)=>`<tr><td>${r.y}</td><td>${money(r.paid, a.currency)}</td><td><b>${money(r.shown, a.currency)}</b></td><td style="color:var(--good)">${money(r.earned, a.currency)}</td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+/* The year month by month: the rate the bonds earn, what TreasuryDirect
+   shows, what is earned, and the month's interest. */
+function bondMonths(a, Y, end){
+  const held = bondsHeld(a, end); if (!held.length) return '';
+  const last = end.slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= last);
+  const at = (ym) => { let shown = 0, earned = 0; for (const b of bondsHeld(a, ym+'-31')) { const w = bondWorth(b, ym); shown += w.shown; earned += w.earned; } return { shown:r2(shown), earned:r2(earned) }; };
+  const rateOf = (ym) => { const rs = [...new Set(bondsHeld(a, ym+'-31').map((b)=>{ const n = Math.max(0, ymDiff(b.issue, ym)); return ibondRate(b.fixed, ymAdd(b.issue, Math.floor(n/6)*6)).rate; }))]; return rs.length===1 ? pct(rs[0]) : rs.length ? rs.map(pct).join(' / ') : '—'; };
+  const rows = months.map((ym)=>{ const v = at(ym), before = ymAdd(ym, -1), prev = at(before); const paid = r2(bondPaidAt(a, ym+'-31') - bondPaidAt(a, before+'-31'));
+    return { ym, rate:rateOf(ym), shown:v.shown, earned:v.earned, int:r2(v.earned-prev.earned-paid) }; });
+  return `
+  <div class="card">
+    <h2>By month <span class="muted" style="text-transform:none;letter-spacing:0">${Y} · ${esc(a.currency)}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Month</th><th>Rate</th><th>Shown</th><th>Earned</th><th>Interest</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${MON[+r.ym.slice(5,7)-1]}</td><td>${r.rate}</td><td><b>${money(r.shown, a.currency)}</b></td><td>${money(r.earned, a.currency)}</td><td style="color:${r.int>0?'var(--good)':'var(--muted)'}">${r.int?money(r.int, a.currency):'—'}</td></tr>`).join('')}</tbody>
+    </table></div>
+  </div>
+  ${bondAnnouncements(a)}`;
+}
+/* TreasuryDirect's announcements, May and November: the semiannual inflation
+   rate and the fixed rate of new bonds. Built in up to a point; the rest is
+   written down here and kept in Config. */
+function bondAnnouncements(a){
+  const own = new Set((store.ibond||[]).map((r)=>r.month));
+  const fixeds = [...new Set(bondsHeld(a, TODAY()).map((b)=>b.fixed))];
+  const rows = ibondTable().slice().reverse();
+  return `
+  <div class="card">
+    <h2>Announcements <span class="fbar"><span class="muted">${rows.length}</span><button class="gbtn" data-irtnew="1"${LK()}>+</button></span></h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>From</th><th>Inflation</th><th>New bonds</th>${fixeds.length===1?'<th>Yours</th>':''}</tr></thead>
+      <tbody>${rows.map(([m,i,f])=>`<tr class="tap" data-irtedit="${m}"><td>${ymLabel(m)}${own.has(m)?' <span class="muted">yours</span>':''}</td><td>${pct(i)}</td><td>${pct(f)}</td>${fixeds.length===1?`<td><b>${pct(ibondComposite(fixeds[0], i))}</b></td>`:''}</tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin:6px 0 0">Inflation is the six-month figure; a bond's rate = fixed + 2 × inflation + fixed × inflation, taken at its next six-month reset.</div>
+  </div>`;
+}
+function irtSheet(p){
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-irtclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New announcement':'Announcement'}</h3>
+      <div class="field"><label>From (YYYY-MM, a May or a November)</label><input id="irMonth" inputmode="numeric" value="${esc(p.month)}" placeholder="2026-11"></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Inflation % (six months)</label><input id="irInfl" inputmode="decimal" value="${esc(p.inflation)}" style="text-align:right"></div>
+        <div class="field" style="flex:1"><label>Fixed % for new bonds</label><input id="irFixed" inputmode="decimal" value="${esc(p.fixed)}" style="text-align:right"></div>
+      </div>
+      ${p.own?`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-irtdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`:''}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-irtclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-irtsave="1">Save</button></div>
+    </div>
   </div>`;
 }
 function bondOps(a, Y){
@@ -3671,7 +3730,9 @@ function wire(){
       const got=[]; let left=files.length, failed=false;
       const done=()=>{ if (failed) return;
         try {
-          const parsed = got.map((g)=>{ const j = JSON.parse(g.text); return { name:g.name, file:j, list:previewImport(j) }; });
+          const parsed = got.map((g)=>{ const j = JSON.parse(g.text);
+            if (j && j.needs && +j.needs > +APP_VERSION) throw new Error((g.name?g.name+': ':'')+'this file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
+            return { name:g.name, file:j, list:previewImport(j) }; });
           const rank = (p) => [ +p.file.year || 9999, (p.file.people||[]).length ? 1 : 0, p.name ];
           parsed.sort((x,y)=>{ const a=rank(x), b=rank(y); return a[0]-b[0] || a[1]-b[1] || String(a[2]).localeCompare(String(b[2])); });
           state.pending = { files:parsed }; state.imp = null;
@@ -3693,7 +3754,7 @@ function wire(){
       state.pending=null;
       state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'') };
       commit(...got.touched);
-    } catch (e) { state.imp={ msg:e.message, bad:true }; render(); } });
+    } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
   /* accounts - the widget */
   const readAcc=()=>{ const k=document.getElementById('aKey'), o=document.getElementById('aOpening'), od=document.getElementById('aOpened'), rt=document.getElementById('aRate');
@@ -3925,6 +3986,25 @@ function wire(){
   document.querySelectorAll('[data-bopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=bondAcc(); if (!a) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.bopdelete); state.page=null; commit(a.key); });
+
+  /* the announcements written down */
+  const IR = [['irMonth','month'],['irInfl','inflation'],['irFixed','fixed']];
+  const openIr = (m) => { const row = m ? ibondTable().find((r)=>r[0]===m) : null; const own = !!(m && (store.ibond||[]).some((r)=>r.month===m));
+    const cur = { month: row ? row[0] : '', inflation: row ? String(row[1]) : '', fixed: row ? String(row[2]) : '' };
+    state.page={ kind:'irt', id:m||null, own, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-irtnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openIr(null); });
+  document.querySelectorAll('[data-irtedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openIr(el.dataset.irtedit); });
+  if (state.page && state.page.kind==='irt') for (const [id] of IR) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(IR, ['month','inflation','fixed'], 'data-irtclose');
+  document.querySelectorAll('[data-irtsave]').forEach((el)=>el.onclick=()=>{ readP(IR); const p=state.page;
+    const month = String(p.month).trim(), infl = parseFloat(String(p.inflation).replace(',', '.')), fixed = parseFloat(String(p.fixed).replace(',', '.'));
+    if (!/^\d{4}-(05|11)$/.test(month)) { alert('A month: YYYY-05 or YYYY-11.'); render(); return; }
+    if (!isFinite(infl)) { alert('The inflation rate.'); render(); return; } if (!isFinite(fixed)) { alert('The fixed rate.'); render(); return; }
+    store.ibond = (store.ibond||[]).filter((r)=>r.month!==month && r.month!==p.id).concat([{ month, inflation:Math.round(infl*100)/100, fixed:Math.round(fixed*100)/100 }]);
+    state.page=null; commit('Config'); });
+  document.querySelectorAll('[data-irtdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ibond = (store.ibond||[]).filter((r)=>r.month!==el.dataset.irtdelete); state.page=null; commit('Config'); });
 
   /* stock options: views, the what-if fields, operations */
   const optAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isOpt(a) ? a : null; };
