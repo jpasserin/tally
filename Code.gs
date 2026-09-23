@@ -15,7 +15,7 @@
  * Tally never requires redeploying this.
  */
 
-var BACKEND_VERSION = 4;
+var BACKEND_VERSION = 5;
 
 /* ── configure ─────────────────────────────────────────────────────────── */
 var SHEET_ID = 'PUT_YOUR_SPREADSHEET_ID_HERE';
@@ -51,6 +51,7 @@ function handle(e, body) {
     if (action === 'pull') return json({ ok: true, backend: BACKEND_VERSION, tabs: pull() });
     if (action === 'push') return json({ ok: true, backend: BACKEND_VERSION, wrote: push(body) });
     if (action === 'rates') return json({ ok: true, backend: BACKEND_VERSION, rows: fetchRates(body.from, body.to) });
+    if (action === 'live') return json({ ok: true, backend: BACKEND_VERSION, rows: refreshLive() });
     return json({ ok: false, error: 'unknown action: ' + action });
   } catch (err) {
     return json({ ok: false, error: String(err && err.message || err) });
@@ -185,4 +186,130 @@ function monthEnd() {
 function ensureTrigger() {
   var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'monthEnd'; });
   if (!has) ScriptApp.newTrigger('monthEnd').timeBased().onMonthDay(1).atHour(6).create();
+}
+
+/* ── live figures ──────────────────────────────────────────────────────────
+   The "Live" tab: what the outside world last said, written the moment it is
+   fetched - every morning by a trigger, or when the app asks (action live).
+   Fund prices come from Yahoo Finance's chart endpoint, one request per
+   invested fund whose Config row carries a symbol in its Tags column (the
+   fund's "index" in the app: OGIAX, JRLVX, 0P00005VUV.F...). I bond rates
+   come from TreasuryDirect's two tables. The app reads this tab, turns each
+   row into a Price mark or a rate announcement of its own, and pushes them
+   into the record tabs; this tab is the landing strip, never the record.
+   Rows: Kind (price | ibond), Account, Fund, Date, Price, Currency, Symbol,
+   Name, Fixed, Fetched. A price row is one per account, fund and market day;
+   an ibond row one per announcement month, Date = YYYY-MM, Price = the
+   semiannual inflation rate, Fixed = the fixed rate for new bonds.        */
+
+var LIVE_TAB = 'Live';
+var LIVE_HEADERS = ['Kind', 'Account', 'Fund', 'Date', 'Price', 'Currency', 'Symbol', 'Name', 'Fixed', 'Fetched'];
+
+function readLive() {
+  var sh = book().getSheetByName(LIVE_TAB);
+  if (!sh) return [];
+  var v = sh.getDataRange().getValues();
+  if (v.length < 2) return [];
+  var h = v[0].map(String);
+  return v.slice(1).filter(function (r) { return r[0]; }).map(function (r) {
+    var o = {}; h.forEach(function (k, i) { o[k.toLowerCase()] = r[i]; });
+    o.date = o.date instanceof Date ? o.date.toISOString().slice(0, 10) : String(o.date || '');
+    if (o.kind === 'ibond') o.date = o.date.slice(0, 7);
+    return o;
+  });
+}
+function writeLive(rows) {
+  var ss = book();
+  var sh = ss.getSheetByName(LIVE_TAB) || ss.insertSheet(LIVE_TAB);
+  sh.clearContents();
+  var values = [LIVE_HEADERS].concat(rows.map(function (o) { return [o.kind, o.account || '', o.fund || '', o.date, o.price, o.currency || '', o.symbol || '', o.name || '', o.fixed == null ? '' : o.fixed, o.fetched || '']; }));
+  sh.getRange(1, 1, values.length, LIVE_HEADERS.length).setValues(values);
+  sh.setFrozenRows(1);
+}
+var liveKey = function (o) { return o.kind === 'ibond' ? 'ibond|' + o.date : 'price|' + o.account + '|' + o.fund + '|' + o.date; };
+
+/* The invested funds and their symbols, from Config's fund rows (Kind fund,
+   Name, Type invested|cash, Tags = the symbol, Account). */
+function fundSymbols() {
+  var sh = book().getSheetByName('Config');
+  if (!sh) return [];
+  var v = sh.getDataRange().getValues();
+  if (v.length < 2) return [];
+  var h = v[0].map(String);
+  var ix = function (n) { return h.indexOf(n); };
+  var out = [];
+  v.slice(1).forEach(function (r) {
+    if (String(r[ix('Kind')]) !== 'fund' || String(r[ix('Type')]) !== 'invested') return;
+    var sym = String(r[ix('Tags')] || '').trim();
+    if (sym) out.push({ account: String(r[ix('Account')]), fund: String(r[ix('Name')]), symbol: sym });
+  });
+  return out;
+}
+
+function quote(symbol) {
+  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=5d&interval=1d';
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+  if (res.getResponseCode() !== 200) return null;
+  var j = JSON.parse(res.getContentText());
+  var m = j && j.chart && j.chart.result && j.chart.result[0] && j.chart.result[0].meta;
+  if (!m || !m.regularMarketPrice) return null;
+  return { price: Math.round(m.regularMarketPrice * 10000) / 10000, currency: m.currency, name: m.longName || m.shortName || symbol,
+           date: new Date(m.regularMarketTime * 1000).toISOString().slice(0, 10) };
+}
+
+var TD_URL = 'https://treasurydirect.gov/savings-bonds/i-bonds/i-bonds-interest-rates/';
+var TD_MONTHS = { january: '01', february: '02', march: '03', april: '04', may: '05', june: '06', july: '07', august: '08', september: '09', october: '10', november: '11', december: '12' };
+function tdText(s) { return s.replace(/<[^>]+>/g, '').replace(/&nbsp;/g, ' ').replace(/\s+/g, ' ').trim(); }
+function tdRows(table) {
+  var rows = [], re = /<tr[\s\S]*?<\/tr>/g, m;
+  while ((m = re.exec(table))) {
+    var cells = [], ce = /<t[dh][^>]*>([\s\S]*?)<\/t[dh]>/g, c;
+    while ((c = ce.exec(m[0]))) cells.push(tdText(c[1]));
+    rows.push(cells);
+  }
+  return rows;
+}
+function tdMonth(s) { var m = /([A-Za-z]+)\.?\s+\d{1,2},\s+(\d{4})/.exec(s); return m && TD_MONTHS[m[1].toLowerCase()] ? m[2] + '-' + TD_MONTHS[m[1].toLowerCase()] : null; }
+function tdPct(s) { var m = /(-?\d+(?:\.\d+)?)\s*%/.exec(s); return m ? Number(m[1]) : null; }
+/* every announcement: [{ month, inflation, fixed }] */
+function ibondRates() {
+  var res = UrlFetchApp.fetch(TD_URL, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+  if (res.getResponseCode() !== 200) return [];
+  var html = res.getContentText();
+  var tables = [], re = /<table[\s\S]*?<\/table>/g, m;
+  while ((m = re.exec(html))) tables.push(tdRows(m[0]));
+  var find = function (word) { for (var i = 0; i < tables.length; i++) { var r0 = tables[i][0]; if (r0 && r0[0] && r0[0].toLowerCase().indexOf(word) >= 0) return tables[i].slice(1); } return null; };
+  var fixedRows = find('date the fixed rate was set'), inflRows = find('date the inflation rate was set');
+  if (!fixedRows || !inflRows) return [];
+  var fixed = {}, infl = {};
+  fixedRows.forEach(function (r) { var mo = tdMonth(r[0]), v = tdPct(r[1] || ''); if (mo && v != null) fixed[mo] = v; });
+  inflRows.forEach(function (r) { var mo = tdMonth(r[0]), v = tdPct(r[1] || ''); if (mo && v != null) infl[mo] = v; });
+  return Object.keys(infl).sort().map(function (mo) { return { month: mo, inflation: infl[mo], fixed: fixed[mo] == null ? 0 : fixed[mo] }; });
+}
+
+/* Fetch everything, write the Live tab, return its rows. Also makes sure the
+   daily trigger is installed. */
+function refreshLive() {
+  var now = new Date().toISOString().slice(0, 16).replace('T', ' ');
+  var have = {}, rows = readLive();
+  rows.forEach(function (o) { have[liveKey(o)] = o; });
+  fundSymbols().forEach(function (f) {
+    var q = quote(f.symbol); if (!q) return;
+    var o = { kind: 'price', account: f.account, fund: f.fund, date: q.date, price: q.price, currency: q.currency, symbol: f.symbol, name: q.name, fixed: '', fetched: now };
+    have[liveKey(o)] = o;
+  });
+  ibondRates().forEach(function (r) {
+    var o = { kind: 'ibond', account: '', fund: '', date: r.month, price: r.inflation, currency: '', symbol: '', name: 'TreasuryDirect', fixed: r.fixed, fetched: now };
+    var k = liveKey(o); if (!have[k] || have[k].price !== o.price || Number(have[k].fixed) !== o.fixed) have[k] = o;
+  });
+  var all = Object.keys(have).map(function (k) { return have[k]; }).sort(function (a, b) { return (a.kind + a.date + a.account + a.fund) < (b.kind + b.date + b.account + b.fund) ? -1 : 1; });
+  writeLive(all);
+  ensureLiveTrigger();
+  return all;
+}
+/* Every morning. */
+function dailyLive() { refreshLive(); }
+function ensureLiveTrigger() {
+  var has = ScriptApp.getProjectTriggers().some(function (t) { return t.getHandlerFunction() === 'dailyLive'; });
+  if (!has) ScriptApp.newTrigger('dailyLive').timeBased().everyDays(1).atHour(7).create();
 }

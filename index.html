@@ -272,9 +272,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=112"></script>
+<script src="backend.js?v=113"></script>
 <script>
-const APP_VERSION="112";
+const APP_VERSION="113";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -922,6 +922,58 @@ async function pushNow(everything){
   } catch (e) { state.sync={ msg:e.message, bad:true }; }
   render();
 }
+/* The sheet's Live tab (written by the script: fund prices, I bond rates)
+   as rows { kind, account, fund, date, price, currency, symbol, name, fixed }. */
+function readLive(tab){
+  const heads = ((tab && tab.headers) || []).map((h)=>String(h).trim().toLowerCase());
+  return ((tab && tab.rows) || []).map((r)=>{ const o = {}; heads.forEach((h,i)=>{ o[h] = r[i]; }); return o; })
+    .filter((o)=>o.kind==='price' || o.kind==='ibond')
+    .map((o)=>({ ...o, date: o.date instanceof Date ? o.date.toISOString().slice(0,10) : String(o.date||'').slice(0, o.kind==='ibond' ? 7 : 10), price:+o.price, fixed: o.fixed==='' || o.fixed==null ? 0 : +o.fixed }));
+}
+/* Each live row becomes the app's own: a Price mark on the fund (id live-…,
+   once per market day), a rate announcement (where new). What was taken is
+   marked for the sheet, so the record tabs hold it from then on. */
+function absorbLive(rows){
+  let prices = 0, rates = 0;
+  for (const o of rows || []) {
+    if (o.kind==='price') {
+      const a = store.accounts.find((x)=>same(x.key, o.account)); if (!a || !isFund(a)) continue;
+      const f = fundsOf(a).find((x)=>same(x.name, o.fund)); if (!f || !/^\d{4}-\d{2}-\d{2}$/.test(o.date) || !(o.price > 0)) continue;
+      if (o.currency && o.currency !== a.currency) continue;
+      const id = 'live-' + a.key + '-' + String(f.name).replace(/[^A-Za-z0-9]/g, '').slice(0,12) + '-' + o.date;
+      const list = opsOf(a.key); if (list.some((x)=>x.id===id)) continue;
+      list.push({ id, date:o.date, fund:f.name, kind:'Price', amount:null, price:Math.round(o.price*10000)/10000, name:'', note:'quoted ' + (o.symbol||''), tag:'', splits:[], budget:'', oneoff:false });
+      markDirty(a.key); prices++;
+    } else if (o.kind==='ibond') {
+      if (!/^\d{4}-\d{2}$/.test(o.date) || !isFinite(o.price)) continue;
+      const row = { month:o.date, inflation:r2(o.price), fixed:r2(o.fixed||0) };
+      const have = ibondTable().find((x)=>x[0]===row.month);
+      if (have && have[1]===row.inflation && have[2]===row.fixed) continue;
+      store.ibond = (store.ibond||[]).filter((x)=>x.month!==row.month).concat([row]); markDirty('Config'); rates++;
+    }
+  }
+  if (prices || rates) { warnMemo = null; save(); }
+  return { prices, rates };
+}
+/* Ask the script to fetch now, keep what comes back, send it on. Quiet: the
+   once-a-day call at start, which says nothing when it fails. */
+async function liveNow(quiet){
+  if (!connected()) { if (!quiet) { state.sync={ msg:'Not connected.', bad:true }; render(); } return; }
+  if (!quiet) { state.sync={ msg:'Fetching live rates…' }; render(); }
+  try {
+    const j = await BK.live(store.backend);
+    const got = absorbLive(j.rows||[]);
+    store.liveAt = TODAY(); store.backendVersion = j.backend; save();
+    if ((got.prices || got.rates) && !store.locked) pushSoon();
+    state.sync={ msg:'Live: ' + got.prices + ' price' + (got.prices===1?'':'s') + ', ' + got.rates + ' rate announcement' + (got.rates===1?'':'s') + ' · ' + new Date().toTimeString().slice(0,5) };
+  } catch (e) { if (quiet) return; state.sync={ msg:e.message, bad:true }; }
+  render();
+}
+/* the latest live mark of a fund: "live rate $17.36 · 22 Sep 2026", or none */
+function liveLine(a, f){
+  const m = fundOps(a, f.name).filter((o)=>o.kind==='Price' && /^live-/.test(o.id) && o.price > 0).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0];
+  return m ? `live rate <b>${money(m.price, a.currency)}</b> · ${dLabel(m.date)}` : '<span class="muted">no live rate</span>';
+}
 async function pullNow(keep){
   keep = keep || [];
   const j = await BK.pull(store.backend);
@@ -937,6 +989,9 @@ async function pullNow(keep){
   store.ops = ops;
   store.rates = rateRows(tab('Rates'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
+  /* what the script fetched since: taken in, and sent on to the record tabs */
+  const took = absorbLive(readLive(tab('Live')));
+  if ((took.prices || took.rates) && !store.locked) pushSoon();
   return got;
 }
 /* A change to the model: keep it, show it, send the tabs it touched. */
@@ -2103,6 +2158,7 @@ function fundAccountPage(a){
     <h2>${esc(f.name)} <span class="muted" style="text-transform:none;letter-spacing:0">${inv?'Invested'+(f.index?' · '+esc(f.index):''):'Cash'}</span></h2>
     <div class="hero ${at.value<0?'neg':''}" style="font-size:24px">${money(at.value, a.currency)}</div>
     <div class="herosub">${money(at.paid, a.currency)} paid in · <span style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</span> ${inv?'growth':'interest'}${inv&&at.shares!=null?' · '+at.shares.toLocaleString('en-US',{maximumFractionDigits:3})+' shares'+(at.price!=null?' at '+at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):''):''}</div>
+    ${inv?`<div class="herosub">${liveLine(a, f)}</div>`:''}
   </div>
   ${fundChartCard(a, f, Y)}
   ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
@@ -3503,6 +3559,7 @@ function settingsData(){
     <div class="btnrow">
       <button class="btn" data-bktest="1">Test</button>
       <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>Sync</button>
+      <button class="btn" data-bklive="1" ${connected()?'':'disabled'}>Live</button>
       <button class="btn lockbtn ${store.locked?'on':''}" data-lock="1" aria-pressed="${store.locked?'true':'false'}"><svg viewBox="0 0 24 24">${store.locked?ICON_LOCK:ICON_UNLOCK}</svg></button>
     </div>
     ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
@@ -3764,6 +3821,7 @@ function wire(){
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
   document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>store.locked ? syncLocked() : pushNow(true));
+  document.querySelectorAll('[data-bklive]').forEach((el)=>el.onclick=()=>liveNow(false));
   /* Locked: the app reads the sheet and never writes it. Edits stay here and
      go out when the lock comes off. */
   document.querySelectorAll('[data-lock]').forEach((el)=>el.onclick=()=>{ store.locked=!store.locked; if (store.locked) { state.page=null; state.sel=[]; state.bulk=null; } save(); state.sync=null; render(); if (!store.locked && dirty().length) pushSoon(); });
@@ -4385,6 +4443,8 @@ render();
 if (connected() && !store.categories.length && !store.people.length && !store.accounts.length && !store.budgets.length && !store.rates.length) {
   pullNow().then(()=>render()).catch(()=>{});
 }
+/* Once a day: the script fetches the live prices and rates, the app keeps them. */
+if (connected() && !store.locked && String(store.liveAt||'') < TODAY()) liveNow(true);
 /* Today's rate, every open; redraw if the Currency tab is showing. */
 refreshLive().then((ok)=>{ if (ok && state.tab==='settings' && state.settings==='fx') render(); });
 
