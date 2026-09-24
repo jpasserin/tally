@@ -261,6 +261,10 @@
   .subnav button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round}
   .subnav button.active{color:var(--accent)}
+  /* The situation report: the facts in two columns, a long one across. */
+  .sit .grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px;margin-top:8px}
+  .sit .grid .wide{grid-column:1/-1}
+  .sit .grid .k{font-size:13px}
   /* Print (Save as PDF): the situation report alone, on white. */
   @media print{
     header,nav,.subnav,.closebar,.gbtn,.chev{display:none !important}
@@ -281,9 +285,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=119"></script>
+<script src="backend.js?v=120"></script>
 <script>
-const APP_VERSION="119";
+const APP_VERSION="120";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1155,20 +1159,25 @@ function savingsCard(Y){
 /* A net worth card: the figure, the split by currency (native amounts in the
    legend), the split by account category (shown currency); ? opens the
    accounts behind it. Shared by Summary and by each child. */
-function nwCard(title, nw, explainAttr){
+/* the two bars under a net worth: by currency (native amounts in the legend), by account category */
+function nwBars(nw){
   const curBar = shareBar(CURRENCIES.map((c)=>[c, nw.by[c], CUR_COLORS[c]]));
   const catBar = shareBar(NW_CATS.map((c)=>[c, nw.cat[c], CAT_COLORS[c]]));
   const dot = (col) => `<i style="background:${col};width:9px;height:9px;border-radius:50%"></i>`;
+  if (!curBar) return '';
+  return `
+    ${curBar}
+    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span>${dot(CUR_COLORS[c])}${c} (${money(nw.native[c], c)})</span>`).join('')}</div>
+    ${catBar}
+    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${NW_CATS.map((c)=>`<span>${dot(CAT_COLORS[c])}${c} (${money(nw.cat[c], store.cur)})</span>`).join('')}</div>`;
+}
+function nwCard(title, nw, explainAttr){
+  const bars = nwBars(nw);
   return `
   <div class="card">
     <h2>${esc(title)} <button class="qbtn" style="position:static" ${explainAttr}>?</button></h2>
     <div class="hero ${nw.total<0?'neg':''}">${money(nw.total, store.cur)}</div>
-    ${curBar ? `
-    ${curBar}
-    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${CURRENCIES.map((c)=>`<span>${dot(CUR_COLORS[c])}${c} (${money(nw.native[c], c)})</span>`).join('')}</div>
-    ${catBar}
-    <div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${NW_CATS.map((c)=>`<span>${dot(CAT_COLORS[c])}${c} (${money(nw.cat[c], store.cur)})</span>`).join('')}</div>`
-    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+    ${bars || `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
 /* The ? on a net worth: every account behind the number, by currency, with
@@ -3645,13 +3654,15 @@ function deathDefault(a){
 function situationPage(){
   const day = TODAY(), ym = day.slice(0,7), cur = store.cur;
   const open = store.accounts.filter((a)=>!a.closed);
+  const family = open.filter((a)=>!isChilds(a)), children = open.filter((a)=>isChilds(a));
   /* by category (Cash, Savings, Property, Excluded), then by currency, then by key */
-  const groups = [];
-  for (const [cat] of ACCOUNT_CATEGORIES) for (const c of CURRENCIES) {
-    const list = open.filter((a)=>a.category===cat && a.currency===c).sort((x,y)=>String(x.key).localeCompare(y.key));
-    if (list.length) groups.push({ k: cat + ' · ' + c, cat, c, list, sum: r2(list.reduce((t,a)=>t+valueAt(a, day), 0)) });
-  }
-  const line = (k, v) => v ? `<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>` : '';
+  const groupsOf = (accs) => { const out = [];
+    for (const [cat] of ACCOUNT_CATEGORIES) for (const c of CURRENCIES) {
+      const list = accs.filter((a)=>a.category===cat && a.currency===c).sort((x,y)=>String(x.key).localeCompare(y.key));
+      if (list.length) out.push({ k: cat + ' · ' + c, cat, c, list, sum: r2(list.reduce((t,a)=>t+valueAt(a, day), 0)) });
+    } return out; };
+  /* an item of the grid: a label over its value; a long one takes the row */
+  const line = (k, v) => v ? `<div class="${String(v).length > 34 ? 'wide' : ''}"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>` : '';
   const extra = (a) => {
     if (isPel(a)) return [['Plan', [a.opened ? 'opened ' + dLabel(a.opened) : '', a.rate!=null ? pct(a.rate) + ' gross' : ''].filter(Boolean).join(' · ')]];
     if (isBond(a)) return [['Bonds', bondsHeld(a, day).map((b)=>ymLabel(b.issue) + ' · ' + money(b.face, a.currency) + ' at ' + pct(b.fixed) + ' fixed · worth ' + money(bondWorth(b, ym).shown, a.currency)).join('; ')]];
@@ -3664,9 +3675,9 @@ function situationPage(){
   const block = (a) => { const F = a.facts || {}; const v = valueAt(a, day); const c = a.currency!==cur ? conv(v, a.currency, cur, ym) : null;
     return `
     <div class="card sit">
-      <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b> <span class="muted" style="font-weight:400">${esc(a.type)} · ${esc(a.category)}</span></span>
-        <span class="v" style="text-transform:none;letter-spacing:0">${money(v, a.currency)}${c!=null?' <span class="muted">'+money(c, cur)+'</span>':''}</span></h2>
-      <div class="rows">
+      <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b> <span class="muted" style="font-weight:400">${esc(a.type)} · ${esc(a.category)}</span></span></h2>
+      <div class="hero ${v<0?'neg':''}" style="font-size:22px">${money(v, a.currency)}${c!=null?' <span class="muted" style="font-size:13px;font-weight:600">'+money(c, cur)+'</span>':''}</div>
+      <div class="grid">
         ${line('Institution', [F.institution, F.number ? 'account ' + F.number : ''].filter(Boolean).join(' · ') || (isLife(a) && a.policy && a.policy.insurer ? a.policy.insurer + (a.policy.number ? ' · policy ' + a.policy.number : '') : ''))}
         ${CONTACT_TYPES.map(([t,label])=>line(label, ((F.contacts||{})[t]||[]).join(' · '))).join('')}
         ${line('Contact', F.contact)}
@@ -3678,23 +3689,35 @@ function situationPage(){
         ${line('Info', F.notes)}
       </div>
     </div>`; };
-  const total = counted().filter((a)=>!a.closed).reduce((t,a)=>{ const c = conv(valueAt(a, day), a.currency, cur, ym); return c==null ? t : t + c; }, 0);
-  const kids = store.accounts.filter((a)=>!a.closed && isChilds(a) && a.category!=='Excluded').reduce((t,a)=>{ const c = conv(valueAt(a, day), a.currency, cur, ym); return c==null ? t : t + c; }, 0);
+  const nwFamily = netWorthAt(THIS_YEAR, counted().filter((a)=>!a.closed));
+  const nwKids = netWorthAt(THIS_YEAR, children.filter((a)=>a.category!=='Excluded'));
   const ins = store.insurance || [];
+  const section = (title, groups) => `
+  <div class="sub" style="margin:14px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(title)}</div>
+  ${groups.map((g)=>`
+  <div class="sub" style="display:flex;align-items:center;gap:7px;margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)"><span class="dot" style="background:${(ACCOUNT_CATEGORIES.find(([k])=>k===g.cat)||['','#5b6170'])[1]}"></span>${esc(g.k)}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">${money(g.sum, g.c)}</span></div>
+  ${g.list.map(block).join('')}`).join('')}`;
   return `
   <div class="card sit">
     <h2>Situation <span class="muted" style="text-transform:none;letter-spacing:0">${dLabel(day)}</span><button class="gbtn" data-sitprint="1">Print</button></h2>
-    <div class="hero">${money(total, cur)}</div>
-    <div class="herosub">net worth of the family · ${open.length} open account${open.length===1?'':'s'}${kids?' · the children hold '+money(kids, cur):''} · ${ins.length} insurance polic${ins.length===1?'y':'ies'}</div>
+    <div class="hero">${money(nwFamily.total, cur)}</div>
+    <div class="herosub">net worth of the family · ${family.length} open account${family.length===1?'':'s'} · ${ins.length} insurance polic${ins.length===1?'y':'ies'}</div>
+    ${nwBars(nwFamily)}
   </div>
-  ${groups.map((g)=>`
-  <div class="sub" style="display:flex;align-items:center;gap:7px;margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)"><span class="dot" style="background:${(ACCOUNT_CATEGORIES.find(([k])=>k===g.cat)||['','#5b6170'])[1]}"></span>${esc(g.k)}<span style="margin-left:auto;text-transform:none;letter-spacing:0;font-variant-numeric:tabular-nums">${money(g.sum, g.c)}</span></div>
-  ${g.list.map(block).join('')}`).join('')}
-  <div class="sub" style="margin:10px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">Insurance</div>
+  ${section('Family', groupsOf(family))}
+  ${children.length ? `
+  <div class="card sit" style="margin-top:14px">
+    <h2>Children</h2>
+    <div class="hero">${money(nwKids.total, cur)}</div>
+    <div class="herosub">${[...new Set(children.flatMap((a)=>a.owners))].join(', ')} · ${children.length} open account${children.length===1?'':'s'}</div>
+    ${nwBars(nwKids)}
+  </div>
+  ${section('Children', groupsOf(children))}` : ''}
+  <div class="sub" style="margin:14px 4px 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">Insurance</div>
   ${ins.length ? ins.map((x)=>`
   <div class="card sit">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(x.name)}</b> <span class="muted" style="font-weight:400">${esc(x.kind)}</span></span></h2>
-    <div class="rows">
+    <div class="grid">
       ${line('Insurer', [x.insurer, x.number ? 'policy ' + x.number : ''].filter(Boolean).join(' · '))}
       ${line('Contact', x.contact)}${line('Premium', x.premium)}${line('Covers', x.covers)}${line('Beneficiaries', x.beneficiaries)}${line('Renews', x.renewal ? dLabel(x.renewal) : '')}${line('Notes', x.notes)}
     </div>
