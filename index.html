@@ -294,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=125"></script>
+<script src="backend.js?v=126"></script>
 <script>
-const APP_VERSION="125";
+const APP_VERSION="126";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -465,7 +465,8 @@ const pelLine = (a) => !isPel(a) || !a.opened ? '' : `opened ${dLabel(a.opened)}
 /* A Fund account holds funds: Cash (uninvested, earns a little interest) or
    Invested (an index like FFFGX, valued by shares x unit price). */
 const FUND_KINDS = [['cash','Cash'],['invested','Invested']];
-const CASH_OP_KINDS = ['Paid in','Interest','Fee'];
+/* the cash side of a fund account: money paid in, interest, fees, and what went out to buy a fund (Buy, negative) or came back from a sale (Sell, positive) */
+const CASH_OP_KINDS = ['Paid in','Buy','Sell','Interest','Fee'];
 const INV_OP_KINDS = ['Buy','Sell','Dividend','Fee','Price'];
 const isFund = (a) => a && a.type==='Fund';
 const fundsOf = (a) => a.funds || (a.funds = []);
