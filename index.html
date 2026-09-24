@@ -261,6 +261,8 @@
   .subnav button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round}
   .subnav button.active{color:var(--accent)}
+  /* The tag picker's button: an input's shape, the chosen tag with its dot. */
+  .chip.tagpick{display:flex;align-items:center;gap:7px;width:100%;border-radius:10px;padding:8px 10px;background:var(--bg2);font-size:14px;text-align:left}
   /* A switch: a label with a sliding knob. */
   .switch{display:flex;align-items:center;gap:10px;margin-top:8px;cursor:pointer;font-size:13.5px}
   .switch input{display:none}
@@ -292,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=121"></script>
+<script src="backend.js?v=122"></script>
 <script>
-const APP_VERSION="121";
+const APP_VERSION="122";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3056,6 +3058,16 @@ function balanceHistoryCard(a){
   </div>`;
 }
 const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.splits]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.splits]);
+/* A tag picker in the app's own colours: the chosen tag with its category's
+   dot; a tap unfolds the categories (bold, dotted) and their tags, a tap on
+   one picks it and folds. The value sits in a hidden input under the id, so
+   the widget reads it like any field. */
+function tagPick(id, value, open){
+  const c = value ? catOfTag(value) : null;
+  return `<input type="hidden" id="${id}" value="${esc(value||'')}"><button class="chip tagpick ${open?'on':''}" data-tagpick="${id}">${c?`<span class="dot" style="background:${typeColor(c.type)}"></span>`:''}${value?esc(value):'<span class="muted">—</span>'}<span class="muted" style="margin-left:auto">▾</span></button>
+    ${open?`<div class="fpick" style="margin-top:6px">${store.categories.map((c)=>`<button class="cat" data-tagset="${id}|${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)};margin-right:7px"></span>${esc(c.name)}</button>`
+      + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-tagset="${id}|${esc(t)}">${esc(t)}</button>`).join('')).join('')}<button class="tag" data-tagset="${id}|">—</button></div>`:''}`;
+}
 const tagOptions = (sel) => `<option value="">—</option>` + store.categories.map((c)=>
   `<optgroup label="${esc(c.name)}">${c.tags.map((t)=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)}</option>`).join('')}</optgroup>`).join('');
 /* The other side of a transfer: operations in every OTHER account within 60
@@ -3107,14 +3119,14 @@ function opSheet(p, a){
       </div>
       <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
       <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
-      <div class="field"><label>Tag</label><select id="oTag">${tagOptions(p.tag)}</select>
+      <div class="field"><label>Tag</label>${tagPick('oTag', p.tag, p.tagpick==='oTag')}
         <div id="oKnown">${knownChips(p.name, p.tag)}</div>
         ${p.name.trim() && p.tag && !nameTags(p.name).some((t)=>same(t, p.tag)) ? `<button class="chip" style="margin-top:5px" data-oprule="1">Make it a tag rule: ${esc(p.name.trim())} → ${esc(p.tag)}</button>` : ''}</div>
       ${budgetsFor(p.budget).length?`<div class="field"><label>Budget</label>
         <div class="chips">${budgetsFor(p.budget).map((b)=>`<button class="chip ${same(p.budget||'', b.name)?'on':''}" data-opbudget="${esc(b.name)}"><span class="dot" style="background:${b.color}"></span>${esc(b.name)}</button>`).join('')}</div></div>`:''}
       <div class="field"><label>Secondary tags</label>
         ${p.splits.map((sp,i)=>`<div class="btnrow" style="margin-bottom:5px">
-          <select id="oSpTag${i}" style="flex:1;min-width:0">${tagOptions(sp.tag)}</select>
+          <div style="flex:1;min-width:0">${tagPick('oSpTag'+i, sp.tag, p.tagpick==='oSpTag'+i)}</div>
           <input id="oSpAmt${i}" inputmode="decimal" value="${esc(sp.amount)}" style="width:86px;text-align:right">
           <button class="chip" data-opspdel="${i}" style="flex:none">×</button>
         </div>`).join('')}
@@ -3435,9 +3447,9 @@ function settingsTags(){
     <div class="rows">${un.map((u)=>`
       <div class="row">
         <div class="k"><b>${esc(u.tag)}</b> <span class="muted" style="font-size:11.5px">${u.n}</span></div>
-        <select data-file="${esc(u.tag)}" style="width:auto;max-width:55%;padding:3px 8px;font-size:12.5px"${LK()}>
-          <option value="">—</option>${store.categories.map((c)=>`<option value="${esc(c.name)}">${esc(c.name)}</option>`).join('')}</select>
-      </div>`).join('')}</div>
+        <button class="chip" data-filepick="${esc(u.tag)}"${LK()}>File under <span class="muted">▾</span></button>
+      </div>
+      ${state.tagpick==='file|'+u.tag ? `<div class="fpick">${store.categories.map((c)=>`<button class="cat" data-fileset="${esc(u.tag)}|${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)};margin-right:7px"></span>${esc(c.name)}</button>`).join('')}</div>` : ''}`).join('')}</div>
   </div>`; })()}`;
 }
 /* The widget: name, type, and a tag field that turns each Enter into a
@@ -3565,8 +3577,8 @@ function nameSheet(p){
       <h3>${isNew?'New known name':esc(p.was.name)}</h3>
       <div class="field"><label>Name</label><input id="nmName" value="${esc(p.name)}"></div>
       <div class="field"><label>Tags</label>
-        <div class="tagbox">${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-nmtagdel="${i}">×</span></span>`).join('')}
-          <select id="nmTag" style="flex:1;min-width:120px;border:0;background:transparent">${tagOptions('')}</select></div></div>
+        <div class="tagbox">${p.tags.map((t,i)=>`<span class="cap">${esc(t)}<span class="x" data-nmtagdel="${i}">×</span></span>`).join('')}</div>
+        ${tagPick('nmTag', '', p.tagpick==='nmTag')}</div>
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-nmdelete="1">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-nmclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -3825,7 +3837,7 @@ function settingsData(){
   <div class="card">
     <h2>Years</h2>
     <div class="field"><label>Closing year</label>
-      <div class="chips"><button class="chip ${closedYear()==null?'on':''}" data-closeyear=""${LK()}>None</button>${allYears().filter((y)=>y <= THIS_YEAR).map((y)=>`<button class="chip ${closedYear()===y?'on':''}" data-closeyear="${y}"${LK()}>${y}</button>`).join('')}</div></div>
+      <select id="closeYear"${LK()}><option value="" ${closedYear()==null?'selected':''}>None</option>${allYears().filter((y)=>y <= THIS_YEAR).map((y)=>`<option value="${y}" ${closedYear()===y?'selected':''}>${y}</option>`).join('')}</select></div>
     <label class="switch"><input type="checkbox" id="hideOpen" ${store.hideOpen?'checked':''}><span class="track" data-hideopen="1"></span><span>Hide open years</span></label>
   </div>`;
 }
@@ -3920,11 +3932,22 @@ function wire(){
   document.querySelectorAll('[data-set]').forEach((el)=>el.onclick=()=>{ state.settings=el.dataset.set; state.page=null; render(); });
 
   /* an unfiled tag, filed from its row */
-  document.querySelectorAll('[data-file]').forEach((el)=>el.onchange=()=>{
+  document.querySelectorAll('[data-filepick]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const k = 'file|'+el.dataset.filepick; state.tagpick = state.tagpick===k ? null : k; render(); });
+  document.querySelectorAll('[data-fileset]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return;
-    const c = store.categories.find((x)=>x.name===el.value); if (!c) return;
-    if (!c.tags.some((t)=>same(t, el.dataset.file))) c.tags.push(el.dataset.file);
-    commit(); });
+    const i = el.dataset.fileset.indexOf('|'); const tag = el.dataset.fileset.slice(0,i), name = el.dataset.fileset.slice(i+1);
+    const c = store.categories.find((x)=>x.name===name); if (!c) return;
+    if (!c.tags.some((t)=>same(t, tag))) c.tags.push(tag);
+    state.tagpick = null; commit(); });
+  /* the tag pickers of the widgets: unfold, pick */
+  document.querySelectorAll('[data-tagpick]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
+    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm();
+    p.tagpick = p.tagpick===el.dataset.tagpick ? null : el.dataset.tagpick; render(); });
+  document.querySelectorAll('[data-tagset]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
+    const i = el.dataset.tagset.indexOf('|'); const id = el.dataset.tagset.slice(0,i), tag = el.dataset.tagset.slice(i+1);
+    const e = document.getElementById(id); if (e) { e.value = tag; if (typeof e.oninput==='function') e.oninput(); if (typeof e.onchange==='function') e.onchange(); }
+    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm();
+    p.tagpick = null; render(); });
 
   /* categories - drag a row by its handle to reorder; pointer events on the
      document, so redrawing the list mid-drag does not drop the drag. */
@@ -4374,7 +4397,7 @@ function wire(){
     store.insurance = (store.insurance||[]).filter((y)=>y.id!==el.dataset.insdelete); state.page=null; commit('Config'); });
   /* the situation report */
   document.querySelectorAll('[data-situation]').forEach((el)=>el.onclick=()=>{ state.situation=true; state.page=null; render(); });
-  document.querySelectorAll('[data-closeyear]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; store.closedYear = el.dataset.closeyear ? +el.dataset.closeyear : null; commit('Config'); });
+  { const cy = document.getElementById('closeYear'); if (cy) cy.onchange=()=>{ if (store.locked) return; store.closedYear = cy.value ? +cy.value : null; commit('Config'); }; }
   document.querySelectorAll('[data-hideopen]').forEach((el)=>el.onclick=()=>{ store.hideOpen = !store.hideOpen; save(); render(); });
   { const hb = document.getElementById('hideOpen'); if (hb) hb.onchange=()=>{ store.hideOpen = !!hb.checked; save(); render(); }; }
   document.querySelectorAll('[data-sitclose]').forEach((el)=>el.onclick=()=>{ state.situation=false; render(); });
