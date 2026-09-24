@@ -294,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=122"></script>
+<script src="backend.js?v=123"></script>
 <script>
-const APP_VERSION="122";
+const APP_VERSION="123";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1213,6 +1213,8 @@ function nwCard(title, nw, explainAttr){
    the same accounts by category. */
 function nwExplainSheet(Y, nw, accs, title, hint){
   const m = yearMonth(Y);
+  /* the totals count every account; the list leaves out the ones with nothing to say that year - closed at zero, or not open yet */
+  accs = accs.filter((a)=>!hiddenIn(a, Y));
   const groups = CURRENCIES.map((c)=>({ c, list: accs.filter((a)=>a.currency===c) })).filter((g)=>g.list.length);
   return `
   <div class="sheetwrap">
