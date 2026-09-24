@@ -294,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=124"></script>
+<script src="backend.js?v=125"></script>
 <script>
-const APP_VERSION="124";
+const APP_VERSION="125";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -591,7 +591,8 @@ function allYears(){
    operation added, changed or deleted there; the books are verified. With
    "hide open years" on, the app stops at the closing year altogether. */
 const closedYear = () => (+store.closedYear > 0 ? +store.closedYear : null);
-const isClosedYear = (y) => closedYear()!=null && +y <= closedYear();
+/* the closing year marks (and can hide) the verified years; the lock, a second switch, is what makes them read-only */
+const isClosedYear = (y) => !!store.lockClosed && closedYear()!=null && +y <= closedYear();
 const isClosedDate = (d) => isClosedYear(String(d||'').slice(0,4));
 const opDateById = (id) => { for (const k of Object.keys(store.ops)) { const o = store.ops[k].find((x)=>x.id===id); if (o) return o.date; } return ''; };
 const closedId = (id) => isClosedDate(opDateById(id));
@@ -689,7 +690,7 @@ function configTab(){
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
       .concat((store.insurance||[]).map((x)=>row({ Kind:'insurance', Name:x.name, Type:x.kind, Policy:JSON.stringify(insuranceFacts(x)) })))
-      .concat(closedYear()!=null ? [row({ Kind:'closed', Name:String(closedYear()) })] : [])
+      .concat(closedYear()!=null ? [row({ Kind:'closed', Name:String(closedYear()), Type: store.lockClosed ? 'locked' : 'open' })] : [])
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
@@ -757,7 +758,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[]; let closed = null;
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[]; let closed = null, closedLocked = false;
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -767,7 +768,7 @@ function readConfig(tab){
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
-    if (kind==='closed' && /^\d{4}$/.test(name)) closed = +name;
+    if (kind==='closed' && /^\d{4}$/.test(name)) { closed = +name; closedLocked = type==='locked'; }
     if (kind==='insurance' && name) { let f = {}; try { f = JSON.parse(col(r,'Policy')||'{}') || {}; } catch (e) { f = {}; }
       insurance.push({ id: String(f.id||uid()), name, kind: INSURANCE_KINDS.includes(type) ? type : 'Other', ...insuranceFacts(f) }); }
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
@@ -787,7 +788,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names, ibond, insurance, closed };
+  return { categories:cats, people, accounts, budgets, names, ibond, insurance, closed, closedLocked };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -1026,7 +1027,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.closedYear=got.closed||null;
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked;
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
@@ -3842,6 +3843,7 @@ function settingsData(){
     <div class="field"><label>Closing year</label>
       <select id="closeYear"${LK()}><option value="" ${closedYear()==null?'selected':''}>None</option>${allYears().filter((y)=>y <= THIS_YEAR).map((y)=>`<option value="${y}" ${closedYear()===y?'selected':''}>${y}</option>`).join('')}</select></div>
     <label class="switch"><input type="checkbox" id="hideOpen" ${store.hideOpen?'checked':''}><span class="track" data-hideopen="1"></span><span>Hide open years</span></label>
+    <label class="switch"><input type="checkbox" id="lockClosed" ${store.lockClosed?'checked':''}${LK()}><span class="track" data-lockclosed="1"></span><span>Lock closed years</span></label>
   </div>`;
 }
 /* Everything the app holds, as one JSON file, for a look from outside - the
@@ -4402,6 +4404,8 @@ function wire(){
   document.querySelectorAll('[data-situation]').forEach((el)=>el.onclick=()=>{ state.situation=true; state.page=null; render(); });
   { const cy = document.getElementById('closeYear'); if (cy) cy.onchange=()=>{ if (store.locked) return; store.closedYear = cy.value ? +cy.value : null; commit('Config'); }; }
   document.querySelectorAll('[data-hideopen]').forEach((el)=>el.onclick=()=>{ store.hideOpen = !store.hideOpen; save(); render(); });
+  document.querySelectorAll('[data-lockclosed]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; store.lockClosed = !store.lockClosed; commit('Config'); });
+  { const lc = document.getElementById('lockClosed'); if (lc) lc.onchange=()=>{ if (store.locked) return; store.lockClosed = !!lc.checked; commit('Config'); }; }
   { const hb = document.getElementById('hideOpen'); if (hb) hb.onchange=()=>{ store.hideOpen = !!hb.checked; save(); render(); }; }
   document.querySelectorAll('[data-sitclose]').forEach((el)=>el.onclick=()=>{ state.situation=false; render(); });
   document.querySelectorAll('[data-sitprint]').forEach((el)=>el.onclick=()=>{ if (typeof window.print==='function') window.print(); });
