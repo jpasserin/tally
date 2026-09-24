@@ -294,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=123"></script>
+<script src="backend.js?v=124"></script>
 <script>
-const APP_VERSION="123";
+const APP_VERSION="124";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1094,8 +1094,9 @@ const kidAccounts = (name) => store.accounts.filter((a)=>isChilds(a) && a.owners
    closed, or when it was not open yet - nothing in it at the year's end and
    its records all later. The line at the foot of the list shows them. */
 const hiddenIn = (a, Y) => { if (opsOf(a.key).some((o)=>o.date.slice(0,4)===String(Y))) return false;
-  if (a.closed) return true;
-  return valueAt(a, Y+'-12-31')===0 && opsOf(a.key).some((o)=>o.date > Y+'-12-31'); };
+  const v = valueAt(a, Y+'-12-31');
+  if (a.closed) return v===0;                                  /* closed, but still holding money that year: shown */
+  return v===0 && opsOf(a.key).some((o)=>o.date > Y+'-12-31'); };
 /* a property is not there at all before the year it was bought */
 const listedIn = (a, Y) => !(isProp(a) && a.bought && String(Y) < a.bought.slice(0,4)) && (state.showClosed || !hiddenIn(a, Y));
 const hiddenLine = (all, Y) => { const n = all.filter((a)=>hiddenIn(a, Y) && !(isProp(a) && a.bought && String(Y) < a.bought.slice(0,4))).length;
