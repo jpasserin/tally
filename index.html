@@ -261,6 +261,13 @@
   .subnav button svg{width:17px;height:17px;display:block;stroke:currentColor;fill:none;stroke-width:2;
     stroke-linecap:round;stroke-linejoin:round}
   .subnav button.active{color:var(--accent)}
+  /* A switch: a label with a sliding knob. */
+  .switch{display:flex;align-items:center;gap:10px;margin-top:8px;cursor:pointer;font-size:13.5px}
+  .switch input{display:none}
+  .switch .track{width:40px;height:22px;border-radius:11px;background:var(--line);position:relative;transition:background .15s;flex:none}
+  .switch .track::after{content:'';position:absolute;top:2px;left:2px;width:18px;height:18px;border-radius:50%;background:#fff;transition:left .15s}
+  .switch input:checked + .track{background:var(--accent)}
+  .switch input:checked + .track::after{left:20px}
   /* The situation report: the facts in two columns, a long one across. */
   .sit .grid{display:grid;grid-template-columns:1fr 1fr;gap:7px 12px;margin-top:8px}
   .sit .grid .wide{grid-column:1/-1}
@@ -285,9 +292,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=120"></script>
+<script src="backend.js?v=121"></script>
 <script>
-const APP_VERSION="120";
+const APP_VERSION="121";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -571,12 +578,27 @@ function checkOp(o){
 const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : isBond(a) ? bondValueAt(a, TODAY()).shown : isOpt(a) ? optValueAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
 /* The years the records span - first operation to last - or just this one. */
 const THIS_YEAR = new Date().getFullYear();
-function years(){
+function allYears(){
   let lo = null, hi = null;
   for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const y = +o.date.slice(0,4); if (!y) continue;
     lo = lo==null ? y : Math.min(lo, y); hi = hi==null ? y : Math.max(hi, y); }
   if (lo==null) return [THIS_YEAR];
   const out = []; for (let y = lo; y <= hi; y++) out.push(y); return out;
+}
+/* Closed years: every year up to the closing year is read-only - no
+   operation added, changed or deleted there; the books are verified. With
+   "hide open years" on, the app stops at the closing year altogether. */
+const closedYear = () => (+store.closedYear > 0 ? +store.closedYear : null);
+const isClosedYear = (y) => closedYear()!=null && +y <= closedYear();
+const isClosedDate = (d) => isClosedYear(String(d||'').slice(0,4));
+const opDateById = (id) => { for (const k of Object.keys(store.ops)) { const o = store.ops[k].find((x)=>x.id===id); if (o) return o.date; } return ''; };
+const closedId = (id) => isClosedDate(opDateById(id));
+const closedGuard = (...dates) => { const d = dates.find((x)=>x && isClosedDate(x)); if (!d) return false; alert(String(d).slice(0,4) + ' is closed.'); render(); return true; };
+const LKY = () => (store.locked || isClosedYear(theYear()) ? ' disabled' : '');
+function years(){
+  const all = allYears();
+  if (store.hideOpen && closedYear()!=null) { const kept = all.filter((y)=>y <= closedYear()); return kept.length ? kept : [Math.min(closedYear(), all[0])]; }
+  return all;
 }
 function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year = ys.includes(THIS_YEAR) ? THIS_YEAR : ys[ys.length-1]; return state.year; }
 /* The balance as it stood at the end of a year - every operation up to its
@@ -665,6 +687,7 @@ function configTab(){
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
       .concat((store.insurance||[]).map((x)=>row({ Kind:'insurance', Name:x.name, Type:x.kind, Policy:JSON.stringify(insuranceFacts(x)) })))
+      .concat(closedYear()!=null ? [row({ Kind:'closed', Name:String(closedYear()) })] : [])
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:a.closed?'yes':'',
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
@@ -732,7 +755,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[];
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[]; let closed = null;
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -742,6 +765,7 @@ function readConfig(tab){
     if (kind==='person') people.push({ name, type: PEOPLE_TYPES.includes(type)?type:'Parent' });
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
+    if (kind==='closed' && /^\d{4}$/.test(name)) closed = +name;
     if (kind==='insurance' && name) { let f = {}; try { f = JSON.parse(col(r,'Policy')||'{}') || {}; } catch (e) { f = {}; }
       insurance.push({ id: String(f.id||uid()), name, kind: INSURANCE_KINDS.includes(type) ? type : 'Other', ...insuranceFacts(f) }); }
     if (kind==='account') accounts.push({ key:name, type: ACCOUNT_TYPES.includes(type)?type:'Cash',
@@ -761,7 +785,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names, ibond, insurance };
+  return { categories:cats, people, accounts, budgets, names, ibond, insurance, closed };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -776,6 +800,7 @@ function previewImport(j){
 function importFile(j){
   if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
+  if (+j.year && isClosedYear(+j.year)) throw new Error(j.year + ' is closed: nothing imported.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
   let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
   const year = +j.year || null;
@@ -847,6 +872,7 @@ function importFile(j){
       fundsOf(acc).push({ name:String(f.name), kind: f.kind==='invested'?'invested':'cash', index:String(f.index||'') });
     const list = opsOf(key);
     for (const o of (j.ops && j.ops[a.key]) || []) {
+      if (isClosedDate(o.date)) continue;                          /* a closed year keeps what it has */
       const isPrice = o.kind==='Price' || o.kind==='Grant';      /* no money moves: a price mark, a grant of options */
       if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || (!isPrice && (!isFinite(+o.amount) || +o.amount===0))) continue;
       const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : Math.round(+o.amount*100)/100, note:String(o.note||''),
@@ -998,7 +1024,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[];
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.closedYear=got.closed||null;
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
@@ -1899,7 +1925,7 @@ function netWorthMonths(cat){
   let first = null;
   for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
   if (!first) return [];
-  const now = new Date().toISOString().slice(0,7);
+  const now = store.hideOpen && closedYear()!=null && closedYear() < THIS_YEAR ? closedYear()+'-12' : new Date().toISOString().slice(0,7);
   const out = [];
   for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
     const m = y+'-'+String(mo).padStart(2,'0');
@@ -2224,7 +2250,7 @@ function fundAccountPage(a){
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`; })()}
   <div class="card">
-    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-fopnew="1"${LK()}>+</button></span></h2>
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-fopnew="1"${LKY()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap ${o.kind==='Price'?'muted':''}" data-fopedit="${esc(o.id)}">
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.kind||'—')}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}${o.src && !(o.note||'').toLowerCase().includes(o.src.toLowerCase())?' <span class="muted" style="font-weight:400">· '+esc(o.src)+'</span>':''}</div>
@@ -2380,7 +2406,7 @@ function propSummary(a, Y){
     : MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now && m >= (a.bought||'').slice(0,7)).map((m)=>propCostsMonth(a, m));
   return `
   <div class="card">
-    <h2>Value <span class="fbar"><span class="muted">${vals.length}</span><button class="gbtn" data-pvalnew="1"${LK()}>+</button></span></h2>
+    <h2>Value <span class="fbar"><span class="muted">${vals.length}</span><button class="gbtn" data-pvalnew="1"${LKY()}>+</button></span></h2>
     ${vals.length ? `<div class="rows">${vals.map((o)=>`
       <div class="row tap" data-pvaledit="${esc(o.id)}"><div class="k"><b>${esc(dLabel(o.date))}</b>${o.note?' <span class="muted" style="font-size:11.5px">'+esc(o.note)+'</span>':''}</div>
         <span style="text-align:right"><span class="v">${money(o.amount, a.currency)}</span>${propShare(a)!==1?`<div class="muted" style="font-size:11px">${money(r2(o.amount*propShare(a)), a.currency)} yours</div>`:''}</span></div>`).join('')}</div>`
@@ -2430,7 +2456,7 @@ function propExpenses(a, Y){
   const box = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${money(v, a.currency)}</div></div>`;
   return `
   <div class="card">
-    <h2>Expenses <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-pexpnew="1"${LK()}>+</button></span></h2>
+    <h2>Expenses <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-pexpnew="1"${LKY()}>+</button></span></h2>
     <div class="kpis">${box('Interest', c.interest)}${box('Fees, taxes, works', r2(c.total-c.interest))}${box(propShare(a)!==1?'Yours in '+Y:'Total '+Y, propShare(a)!==1?c.mine:c.total)}</div>
     ${ops.length ? `<div class="rows" style="margin-top:8px">${ops.map((o)=>`
       <div class="row tap" data-pexpedit="${esc(o.id)}">
@@ -2561,7 +2587,7 @@ function lifeOps(a, Y){
   const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
   return `
   <div class="card">
-    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-lopnew="1"${LK()}>+</button></span></h2>
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-lopnew="1"${LKY()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap ${o.kind==='Value'||o.kind==='Benefit'?'muted':''}" data-lopedit="${esc(o.id)}">
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(lifeKindLabel(o.kind))}${o.name && canonName(o.name)!==canonName(lifeKindLabel(o.kind)) && o.name!==o.kind?' <span class="muted" style="font-weight:400">· '+esc(o.name)+'</span>':''}</div>
@@ -2733,7 +2759,7 @@ function bondOps(a, Y){
   const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
   return `
   <div class="card">
-    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-bopnew="1"${LK()}>+</button></span></h2>
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-bopnew="1"${LKY()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap" data-bopedit="${esc(o.id)}">
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${o.kind==='Sell'?'Cashed':'Bought'}${o.name && o.name!==o.kind?' <span class="muted" style="font-weight:400">· '+esc(o.name)+'</span>':''}</div>
@@ -2890,7 +2916,7 @@ function optOps(a, Y){
     : o.kind==='Price' ? money(o.price||0, a.currency)+' a share' : qty(o.shares||0)+' at '+money(o.price||0, a.currency);
   return `
   <div class="card">
-    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-oopnew="1"${LK()}>+</button></span></h2>
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-oopnew="1"${LKY()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap ${o.kind==='Price'?'muted':''}" data-oopedit="${esc(o.id)}">
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(optKindLabel(o.kind))} <span class="muted" style="font-weight:400">· ${esc(line(o))}</span></div>
@@ -2953,7 +2979,7 @@ function accountPage(a){
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
-        <button class="gbtn" data-opnew="1"${LK()}>+</button></span></h2>
+        <button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
   </div>`}
@@ -3795,6 +3821,12 @@ function settingsData(){
     </div>`
     : `<div class="btnrow"><button class="btn" data-import="1"${LK()}>Import a file</button><button class="btn" data-export="1">Export</button><button class="btn" data-situation="1">Situation</button></div>`}
     ${state.imp?`<div class="status ${state.imp.bad?'bad':'ok'}">${esc(state.imp.msg)}</div>`:''}
+  </div>
+  <div class="card">
+    <h2>Years</h2>
+    <div class="field"><label>Closing year</label>
+      <div class="chips"><button class="chip ${closedYear()==null?'on':''}" data-closeyear=""${LK()}>None</button>${allYears().filter((y)=>y <= THIS_YEAR).map((y)=>`<button class="chip ${closedYear()===y?'on':''}" data-closeyear="${y}"${LK()}>${y}</button>`).join('')}</div></div>
+    <label class="switch"><input type="checkbox" id="hideOpen" ${store.hideOpen?'checked':''}><span class="track" data-hideopen="1"></span><span>Hide open years</span></label>
   </div>`;
 }
 /* Everything the app holds, as one JSON file, for a look from outside - the
@@ -4136,7 +4168,7 @@ function wire(){
       if (l) l.innerHTML = (state.tab==='account' && !filterActive(F)) ? `<div class="hint" style="margin-top:0">Search or filter.</div>` : opRowsMixed(shown);
       if (c) c.textContent = filterActive(F) ? shown.length+' · '+money(sum, store.cur) : (state.tab==='account' ? '' : String(shown.length));
     }
-    document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOpById(el.dataset.opedit); });
+    document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.opedit)) openOpById(el.dataset.opedit); });
     document.querySelectorAll('[data-selop]').forEach((el)=>el.onclick=(e)=>{ if (e && e.stopPropagation) e.stopPropagation();
       const id=el.dataset.selop; state.sel = state.sel.includes(id) ? state.sel.filter((x)=>x!==id) : [...state.sel, id]; render(); }); };
   document.querySelectorAll('[data-fopen]').forEach((el)=>el.onclick=()=>{ F.open=!F.open; F.picking=null; render(); });
@@ -4227,12 +4259,13 @@ function wire(){
     state.page={ kind:'fop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true };
     render(); state.page.fresh=false; };
   document.querySelectorAll('[data-fopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFop(null); });
-  document.querySelectorAll('[data-fopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFop(el.dataset.fopedit); });
+  document.querySelectorAll('[data-fopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.fopedit)) openFop(el.dataset.fopedit); });
   document.querySelectorAll('[data-fopkind]').forEach((el)=>el.onclick=()=>{ readFop(); state.page.fkind=el.dataset.fopkind; render(); });
   document.querySelectorAll('[data-fopsrc]').forEach((el)=>el.onclick=()=>{ readFop(); state.page.fsrc=el.dataset.fopsrc; render(); });
   if (state.page && state.page.kind==='fop') for (const id of ['fDate','fAmount','fShares','fPrice','fNote']) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   document.querySelectorAll('[data-fopsave]').forEach((el)=>el.onclick=()=>{
     readFop(); const p=state.page, a=acct(), f=fundNow(); if (!a || !f) return;
+    if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const inv = f.kind==='invested';
     const o = { id:p.id||uid(), date:p.date, fund:f.name, kind:p.fkind, amount: p.fkind==='Price' ? null : num(p.amount),
       shares: inv && String(p.shares).trim()!=='' ? num3(p.shares) : undefined, price: inv && String(p.price).trim()!=='' ? num4(p.price) : undefined,
@@ -4249,6 +4282,7 @@ function wire(){
     state.page=null; render(); });
   document.querySelectorAll('[data-fopdelete]').forEach((el)=>el.onclick=()=>{
     const p=state.page, a=acct(); if (!a) return;
+    if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.fopdelete);
     state.page=null; commit(a.key); });
@@ -4262,10 +4296,10 @@ function wire(){
   const PV = [['pvDate','date'],['pvAmount','amount'],['pvNote','note']], PE = [['peDate','date'],['peAmount','amount'],['peName','name'],['peNote','note']], PM = [['pmPrincipal','principal'],['pmRate','rate'],['pmYears','years'],['pmStart','start']];
   const openP = (kind, cur, id) => { state.page={ kind, id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   const dflt = () => theYear()===THIS_YEAR ? TODAY() : theYear()+'-12-31';
-  document.querySelectorAll('[data-pvalnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && prop()) openP('pval', { date:dflt(), amount:'', note:'' }, null); });
-  document.querySelectorAll('[data-pvaledit]').forEach((el)=>el.onclick=()=>{ const a=prop(); const o = a && opsOf(a.key).find((x)=>x.id===el.dataset.pvaledit); if (!store.locked && o) openP('pval', { date:o.date, amount:String(o.amount), note:o.note||'' }, o.id); });
-  document.querySelectorAll('[data-pexpnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && prop()) openP('pexp', { date:dflt(), pkind:'HOA', amount:'', name:'', note:'' }, null); });
-  document.querySelectorAll('[data-pexpedit]').forEach((el)=>el.onclick=()=>{ const a=prop(); const o = a && opsOf(a.key).find((x)=>x.id===el.dataset.pexpedit); if (!store.locked && o) openP('pexp', { date:o.date, pkind:o.kind, amount:String(Math.abs(o.amount)), name:o.name||'', note:o.note||'' }, o.id); });
+  document.querySelectorAll('[data-pvalnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear()) && prop()) openP('pval', { date:dflt(), amount:'', note:'' }, null); });
+  document.querySelectorAll('[data-pvaledit]').forEach((el)=>el.onclick=()=>{ if (closedId(el.dataset.pvaledit)) return; const a=prop(); const o = a && opsOf(a.key).find((x)=>x.id===el.dataset.pvaledit); if (!store.locked && o) openP('pval', { date:o.date, amount:String(o.amount), note:o.note||'' }, o.id); });
+  document.querySelectorAll('[data-pexpnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear()) && prop()) openP('pexp', { date:dflt(), pkind:'HOA', amount:'', name:'', note:'' }, null); });
+  document.querySelectorAll('[data-pexpedit]').forEach((el)=>el.onclick=()=>{ if (closedId(el.dataset.pexpedit)) return; const a=prop(); const o = a && opsOf(a.key).find((x)=>x.id===el.dataset.pexpedit); if (!store.locked && o) openP('pexp', { date:o.date, pkind:o.kind, amount:String(Math.abs(o.amount)), name:o.name||'', note:o.note||'' }, o.id); });
   document.querySelectorAll('[data-pexpkind]').forEach((el)=>el.onclick=()=>{ readP(PE); state.page.pkind=el.dataset.pexpkind; render(); });
   document.querySelectorAll('[data-pmortedit]').forEach((el)=>el.onclick=()=>{ const a=prop(); if (!a || store.locked) return; const m=a.mortgage||{};
     openP('pmort', { principal:m.principal!=null?String(m.principal):'', rate:m.rate!=null?String(m.rate):'', years:m.years!=null?String(m.years):'', start:m.start||'' }, null); });
@@ -4273,12 +4307,12 @@ function wire(){
   const closeP = (ids, keys, attr) => document.querySelectorAll('['+attr+']').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const [id,k] of ids) { const e=document.getElementById(id); if (e) p[k]=e.value; }
     if (pDirty(p, keys) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; } state.page=null; render(); });
   closeP(PV, ['date','amount','note'], 'data-pvalclose'); closeP(PE, ['date','pkind','amount','name','note'], 'data-pexpclose'); closeP(PM, ['principal','rate','years','start'], 'data-pmortclose');
-  document.querySelectorAll('[data-pvalsave]').forEach((el)=>el.onclick=()=>{ readP(PV); const p=state.page, a=prop(); if (!a) return;
+  document.querySelectorAll('[data-pvalsave]').forEach((el)=>el.onclick=()=>{ readP(PV); const p=state.page, a=prop(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id:p.id||uid(), date:p.date, name:'Valuation', kind:'Value', amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('What it is worth.'); render(); return; }
     const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) Object.assign(list[i], o); else list.push(o);
     state.page=null; commit(a.key); });
-  document.querySelectorAll('[data-pexpsave]').forEach((el)=>el.onclick=()=>{ readP(PE); const p=state.page, a=prop(); if (!a) return;
+  document.querySelectorAll('[data-pexpsave]').forEach((el)=>el.onclick=()=>{ readP(PE); const p=state.page, a=prop(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const amt = num(p.amount);
     const o = { id:p.id||uid(), date:p.date, name:p.name.trim(), kind:p.pkind, amount: isFinite(amt) ? -Math.abs(amt) : NaN, note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!isFinite(o.amount) || o.amount===0) { alert('An amount.'); render(); return; }
@@ -4305,17 +4339,17 @@ function wire(){
     const cur = { date:d, bkind:o ? (o.kind==='Sell'?'Sell':'Buy') : 'Buy', amount:o?String(Math.abs(o.amount)):'', rate:o && o.price!=null ? String(o.price) : String(ibondFixed(d.slice(0,7))), note:o?(o.note||''):'' };
     state.page={ kind:'bop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-bopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBo(null); });
-  document.querySelectorAll('[data-bopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBo(el.dataset.bopedit); });
+  document.querySelectorAll('[data-bopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.bopedit)) openBo(el.dataset.bopedit); });
   document.querySelectorAll('[data-bopkind]').forEach((el)=>el.onclick=()=>{ readP(BO); state.page.bkind=el.dataset.bopkind; render(); });
   if (state.page && state.page.kind==='bop') for (const [id] of BO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   closeP(BO, ['date','bkind','amount','rate','note'], 'data-bopclose');
-  document.querySelectorAll('[data-bopsave]').forEach((el)=>el.onclick=()=>{ readP(BO); const p=state.page, a=bondAcc(); if (!a) return;
+  document.querySelectorAll('[data-bopsave]').forEach((el)=>el.onclick=()=>{ readP(BO); const p=state.page, a=bondAcc(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id:p.id||uid(), date:p.date, name:p.bkind==='Sell'?'Cashed':'I bond', kind:p.bkind, amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (p.bkind!=='Sell') o.price = num(p.rate);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('A face value.'); render(); return; } if (p.bkind!=='Sell' && !(o.price >= 0)) { alert('A fixed rate.'); render(); return; }
     const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) { const keep = list[i]; for (const k of Object.keys(keep)) if (!(k in o)) delete keep[k]; Object.assign(keep, o); } else list.push(o);
     state.page=null; commit(a.key); });
-  document.querySelectorAll('[data-bopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=bondAcc(); if (!a) return;
+  document.querySelectorAll('[data-bopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=bondAcc(); if (!a) return; if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.bopdelete); state.page=null; commit(a.key); });
 
@@ -4340,6 +4374,9 @@ function wire(){
     store.insurance = (store.insurance||[]).filter((y)=>y.id!==el.dataset.insdelete); state.page=null; commit('Config'); });
   /* the situation report */
   document.querySelectorAll('[data-situation]').forEach((el)=>el.onclick=()=>{ state.situation=true; state.page=null; render(); });
+  document.querySelectorAll('[data-closeyear]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; store.closedYear = el.dataset.closeyear ? +el.dataset.closeyear : null; commit('Config'); });
+  document.querySelectorAll('[data-hideopen]').forEach((el)=>el.onclick=()=>{ store.hideOpen = !store.hideOpen; save(); render(); });
+  { const hb = document.getElementById('hideOpen'); if (hb) hb.onchange=()=>{ store.hideOpen = !!hb.checked; save(); render(); }; }
   document.querySelectorAll('[data-sitclose]').forEach((el)=>el.onclick=()=>{ state.situation=false; render(); });
   document.querySelectorAll('[data-sitprint]').forEach((el)=>el.onclick=()=>{ if (typeof window.print==='function') window.print(); });
 
@@ -4379,11 +4416,11 @@ function wire(){
     const cur = { date:o?o.date:dflt(), okind:o?(o.kind||'Price'):'Price', price:o && o.price!=null ? String(o.price) : '', qty:o && o.shares!=null ? String(o.shares) : '', amount:o && o.amount!=null ? String(Math.abs(o.amount)) : '', vest:o?(o.vest||''):'', until:o?(o.until||''):'', note:o?(o.note||''):'' };
     state.page={ kind:'oop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-oopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOo(null); });
-  document.querySelectorAll('[data-oopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOo(el.dataset.oopedit); });
+  document.querySelectorAll('[data-oopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.oopedit)) openOo(el.dataset.oopedit); });
   document.querySelectorAll('[data-oopkind]').forEach((el)=>el.onclick=()=>{ readP(OO); state.page.okind=el.dataset.oopkind; render(); });
   if (state.page && state.page.kind==='oop') for (const [id] of OO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   closeP(OO, ['date','okind','price','qty','amount','vest','until','note'], 'data-oopclose');
-  document.querySelectorAll('[data-oopsave]').forEach((el)=>el.onclick=()=>{ readP(OO); const p=state.page, a=optAcc(); if (!a) return;
+  document.querySelectorAll('[data-oopsave]').forEach((el)=>el.onclick=()=>{ readP(OO); const p=state.page, a=optAcc(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const k = p.okind, price = parseFloat(String(p.price).replace(',', '.')), n = Math.round(parseFloat(p.qty));
     const o = { id:p.id||uid(), date:p.date, name:optKindLabel(k), kind:k, amount:null, note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; }
@@ -4393,7 +4430,7 @@ function wire(){
     if (k==='Grant') { if (/^\d{4}-\d{2}-\d{2}$/.test(p.vest)) o.vest = p.vest; if (/^\d{4}-\d{2}-\d{2}$/.test(p.until)) o.until = p.until; }
     const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) { const keep = list[i]; for (const kk of Object.keys(keep)) if (!(kk in o)) delete keep[kk]; Object.assign(keep, o); } else list.push(o);
     state.page=null; commit(a.key); });
-  document.querySelectorAll('[data-oopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=optAcc(); if (!a) return;
+  document.querySelectorAll('[data-oopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=optAcc(); if (!a) return; if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.oopdelete); state.page=null; commit(a.key); });
 
@@ -4405,16 +4442,16 @@ function wire(){
     const cur = { date:o?o.date:dflt(), lkind:o?o.kind:'Premium', amount:o?String(o.amount):'', note:o?(o.note||''):'' };
     state.page={ kind:'lop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-lopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openLo(null); });
-  document.querySelectorAll('[data-lopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openLo(el.dataset.lopedit); });
+  document.querySelectorAll('[data-lopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.lopedit)) openLo(el.dataset.lopedit); });
   document.querySelectorAll('[data-lopkind]').forEach((el)=>el.onclick=()=>{ readP(LO); state.page.lkind=el.dataset.lopkind; render(); });
   if (state.page && state.page.kind==='lop') for (const [id] of LO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   closeP(LO, ['date','lkind','amount','note'], 'data-lopclose');
-  document.querySelectorAll('[data-lopsave]').forEach((el)=>el.onclick=()=>{ readP(LO); const p=state.page, a=lifeAcc(); if (!a) return;
+  document.querySelectorAll('[data-lopsave]').forEach((el)=>el.onclick=()=>{ readP(LO); const p=state.page, a=lifeAcc(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id:p.id||uid(), date:p.date, name:lifeKindLabel(p.lkind), kind:p.lkind, amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('An amount.'); render(); return; }
     const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) Object.assign(list[i], o); else list.push(o);
     state.page=null; commit(a.key); });
-  document.querySelectorAll('[data-lopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=lifeAcc(); if (!a) return;
+  document.querySelectorAll('[data-lopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=lifeAcc(); if (!a) return; if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.lopdelete); state.page=null; commit(a.key); });
 
@@ -4438,7 +4475,7 @@ function wire(){
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true, match:fromTransfer, view:fromTransfer?'match':'edit' };
     render(); state.page.fresh=false; }
   document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOp(null); });
-  document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOp(el.dataset.opedit); });
+  document.querySelectorAll('[data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.opedit)) openOp(el.dataset.opedit); });
   document.querySelectorAll('[data-opview]').forEach((el)=>el.onclick=()=>{ if (state.page.view==='edit') readOp(); state.page.view=el.dataset.opview; render(); });
   /* Matched: both sides are what they are - a transfer - and leave the warnings. */
   document.querySelectorAll('[data-opmatch]').forEach((el)=>el.onclick=()=>{
@@ -4462,6 +4499,7 @@ function wire(){
   }
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
+    if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id: p.id || uid(), date:p.date, name:p.name.trim(), amount:num(p.amount), note:p.note.trim(), tag:p.tag,
       splits: p.splits.map((sp)=>({ tag:sp.tag, amount:num(sp.amount) })), budget:p.budget||'', oneoff:false };
     try { checkOp(o); } catch (e) { alert(e.message); render(); return; }
@@ -4475,6 +4513,7 @@ function wire(){
     state.page=null; state.opAccount=null; render(); });
   document.querySelectorAll('[data-opdelete]').forEach((el)=>el.onclick=()=>{
     const p=state.page, a=acct(); if (!a) return;
+    if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.opdelete);
     state.page=null; state.opAccount=null; commit(a.key); });
@@ -4549,7 +4588,7 @@ function wire(){
   if (wq) wq.oninput = () => { state.warnQ = wq.value; const g = warnings().find((x)=>x.kind===state.warnKind); const l = document.getElementById('warnList'); if (!g || !l) return;
     const shown = warnShown(g); l.innerHTML = warnRows(g, shown); const c = document.getElementById('warnCount'); if (c) c.textContent = String(shown.length);
     wireWarnRows();
-    document.querySelectorAll('#warnList [data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOpById(el.dataset.opedit); });
+    document.querySelectorAll('#warnList [data-opedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.opedit)) openOpById(el.dataset.opedit); });
     document.querySelectorAll('#warnList [data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); }); };
   document.querySelectorAll('[data-warnall]').forEach((el)=>el.onclick=()=>{ const w = warnings(); const g = w.find((x)=>x.kind===state.warnKind);
     const all = state.warnKind==='__aside' ? w.aside.map((x)=>dismissKey(x.kind, x.o, x.a)) : (g ? warnShown(g) : []).map(({o,a})=> o ? o.id : a.key);
@@ -4557,6 +4596,7 @@ function wire(){
   const warnItems = () => { const g = warnings().find((x)=>x.kind===state.warnKind); return g ? g.items.filter(({o,a})=>state.sel.includes(o ? o.id : a.key)) : []; };
   document.querySelectorAll('[data-warnfix]').forEach((el)=>el.onclick=()=>{
     const fix = el.dataset.warnfix, items = warnItems(), touched = new Set();
+    if (fix!=='ok' && items.some(({o})=>o && isClosedDate(o.date))) { alert('A closed year cannot be changed.'); return; }
     if (fix==='delete' && state.bulk!=='delete') { state.bulk='delete'; render(); return; }
     for (const {o,a,group} of items) {
       if (fix==='ok') { for (const x of (group||[o])) { const k = dismissKey(state.warnKind, x, a); if (!store.dismissed.includes(k)) store.dismissed.push(k); } touched.add('Dismissed'); }
@@ -4609,6 +4649,7 @@ function wire(){
   document.querySelectorAll('[data-bulkpick]').forEach((el)=>el.onclick=()=>{
     const i = el.dataset.bulkpick.indexOf('|'); const what = el.dataset.bulkpick.slice(0,i), val = el.dataset.bulkpick.slice(i+1);
     const touched = new Set();
+    if (state.sel.some((id)=>closedId(id))) { alert('A closed year cannot be changed.'); return; }
     for (const id of state.sel) { const a=accountOfOp(id); if (!a) continue; const o=opsOf(a.key).find((x)=>x.id===id); if (!o) continue;
       if (what==='tag') { o.tag=val; o.splits=o.splits.filter((sp)=>sp.tag!==val); } else o.budget=val;
       touched.add(a.key); }
