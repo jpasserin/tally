@@ -294,9 +294,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=126"></script>
+<script src="backend.js?v=127"></script>
 <script>
-const APP_VERSION="126";
+const APP_VERSION="127";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2253,7 +2253,12 @@ function fundAccountPage(a){
       <thead><tr><th>${hist?'Year':'Month'}</th><th>Paid in</th><th>${inv?'Growth':'Interest'}</th><th>Balance</th>${inv?'<th>Shares</th><th>Price</th>':''}</tr></thead>
       <tbody>${periods.map((pr)=>{ const x = fundAt(a, f, pr.end); const empty = !x.value && !x.paid && !fundOps(a, f.name).some((o)=>o.date <= pr.end);
         return `<tr${empty?' class="muted"':''}><td>${pr.label}</td><td>${cell(x.paid)}</td><td style="color:${x.interest<0?'var(--bad)':'var(--good)'}">${cell(x.interest)}</td><td><b>${cell(x.value)}</b></td>${
-          inv?`<td>${x.shares!=null?x.shares.toLocaleString('en-US',{maximumFractionDigits:3}):'—'}</td><td>${x.price!=null?x.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'}</td>`:''}</tr>`; }).join('')}</tbody>
+          inv?`<td>${x.shares!=null?x.shares.toLocaleString('en-US',{maximumFractionDigits:3}):'—'}</td><td>${x.price!=null?x.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}):'—'}</td>`:''}</tr>`; }).join('')}
+      ${!hist && periods.length ? (function(){ const s0 = fundAt(a, f, (Y-1)+'-12-31'), s1 = fundAt(a, f, periods[periods.length-1].end);
+        const d = (v0, v1) => (v0==null || v1==null) ? null : v1 - v0; const dm = (v) => v==null ? '—' : (v>0?'+':'') + money(r2(v), a.currency);
+        const dsh = d(s0.shares, s1.shares), dpr = d(s0.price, s1.price);
+        return `<tr class="sum"><td>Change</td><td>${dm(d(s0.paid, s1.paid))}</td><td style="color:${d(s0.interest, s1.interest)<0?'var(--bad)':'var(--good)'}">${dm(d(s0.interest, s1.interest))}</td><td>${dm(d(s0.value, s1.value))}</td>${
+          inv?`<td>${dsh==null?'—':(dsh>0?'+':'')+dsh.toLocaleString('en-US',{maximumFractionDigits:3})}</td><td style="color:${dpr<0?'var(--bad)':dpr>0?'var(--good)':'inherit'}">${dpr==null?'—':(dpr>0?'+':'')+dpr.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4})}</td>`:''}</tr>`; })() : ''}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`; })()}
   <div class="card">
