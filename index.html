@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=129"></script>
+<script src="backend.js?v=130"></script>
 <script>
-const APP_VERSION="129";
+const APP_VERSION="130";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -516,6 +516,17 @@ function fundSources(a, f, end){
     const value = f.kind==='invested' ? (price!=null ? r2(shares*price) : r2(b.paid)) : r2(b.paid + b.amount);
     return { src:b.src, shares, value, paid:r2(b.paid), growth:r2(value - b.paid) }; })
     .filter((b)=>b.shares || b.value || b.paid).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src));
+}
+/* The whole account by tax status: Roth, or Pretax (Traditional, the
+   employer's Match and Profit sharing, and everything in the cash sweep). */
+function accountBySource(a, end){
+  if (!fundsOf(a).some((f)=>fundOps(a, f.name).some((o)=>o.src))) return [];
+  const tot = { Roth:0, Pretax:0, '—':0 };
+  for (const f of fundsOf(a)) {
+    if (f.kind!=='invested') { tot.Pretax += fundAt(a, f, end).value; continue; }
+    for (const b of fundSources(a, f, end)) tot[b.src==='Roth' ? 'Roth' : b.src==='—' ? '—' : 'Pretax'] += b.value;
+  }
+  return [['Roth', tot.Roth], ['Pretax', tot.Pretax], ['—', tot['—']]].filter(([k,v])=>Math.abs(v) >= 0.005 || k!=='—').map(([src,value])=>({ src, value:r2(value) }));
 }
 /* The fund a fund account opens on: the one worth most at the year's end. */
 const mainFund = (a, end) => fundsOf(a).slice().sort((x,y)=>fundAt(a, y, end).value - fundAt(a, x, end).value)[0] || null;
@@ -2220,6 +2231,9 @@ function fundAccountPage(a){
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
     ${listed.map((x)=>`<div class="herosub">${esc(x.name)} <b style="color:var(--txt)">${money(fundAt(a, x, end).value, a.currency)}</b></div>`).join('')}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${a.closed?'closed · ':''}${Y}</div>
+    ${(function(){ const rows = accountBySource(a, end); if (!rows.length) return ''; const total = rows.reduce((t,r)=>t+r.value, 0); return `
+    <table class="fx" style="margin-top:8px"><thead><tr><th>Source</th><th>Value</th><th>%</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${esc(r.src)}</td><td><b>${money(r.value, a.currency)}</b></td><td>${total?Math.round(r.value/total*100)+'%':'—'}</td></tr>`).join('')}</tbody></table>`; })()}
     <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-fundsel="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div>
   </div>
   <div class="card">
@@ -2231,20 +2245,14 @@ function fundAccountPage(a){
   </div>
   ${fundChartCard(a, f, Y)}
   ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
-    const all = fundsOf(a).flatMap((x)=>fundSources(a, x, end)); const tot = {}; for (const b of all) { const t = tot[b.src] = tot[b.src] || { src:b.src, value:0, paid:0 }; t.value += b.value; t.paid += b.paid; }
-    const total = Object.values(tot).reduce((t,b)=>t+b.value, 0);
+    const priceTxt = at.price!=null ? at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}) : '—';
     return `
   <div class="card">
     <h2>By source <span class="muted" style="text-transform:none;letter-spacing:0">${esc(f.name)}</span></h2>
     <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Source</th>${inv?'<th>Shares</th>':''}<th>Paid in</th><th>Growth</th><th>Value</th></tr></thead>
-      <tbody>${rows.map((b)=>`<tr><td>${esc(b.src)}</td>${inv?`<td>${b.shares.toLocaleString('en-US',{maximumFractionDigits:3})}</td>`:''}<td>${money(b.paid, a.currency)}</td><td style="color:${b.growth<0?'var(--bad)':'var(--good)'}">${money(b.growth, a.currency)}</td><td><b>${money(b.value, a.currency)}</b></td></tr>`).join('')}</tbody>
+      <thead><tr><th>Source</th><th>Paid in</th>${inv?'<th>Shares</th><th>Price</th>':''}<th>Value</th></tr></thead>
+      <tbody>${rows.map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(b.paid, a.currency)}</td>${inv?`<td>${b.shares.toLocaleString('en-US',{maximumFractionDigits:3})}</td><td>${priceTxt}</td>`:''}<td><b>${money(b.value, a.currency)}</b></td></tr>`).join('')}</tbody>
     </table></div>
-    ${fundsOf(a).length > 1 ? `<h2 style="margin-top:10px">Whole account</h2>
-    <table class="fx">
-      <thead><tr><th>Source</th><th>Paid in</th><th>Growth</th><th>Value</th><th>%</th></tr></thead>
-      <tbody>${Object.values(tot).sort((x,y)=>SOURCES.indexOf(x.src)-SOURCES.indexOf(y.src)).map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(r2(b.paid), a.currency)}</td><td style="color:${b.value-b.paid<0?'var(--bad)':'var(--good)'}">${money(r2(b.value-b.paid), a.currency)}</td><td><b>${money(r2(b.value), a.currency)}</b></td><td>${total?(b.value/total*100).toFixed(1)+'%':'—'}</td></tr>`).join('')}</tbody>
-    </table>` : ''}
   </div>`; })()}
   ${(function(){
     const periods = hist
@@ -3864,7 +3872,7 @@ function exportText(){
 }
 function exportFile(){
   const blob = new Blob([exportText()], { type:'application/json' });
-  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tally-export-'+TODAY()+'.json';
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'tally-export-'+TODAY()+'-'+new Date().toTimeString().slice(0,8).replace(/:/g, '-')+'.json';
   document.body.appendChild(a); a.click(); setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 1000);
 }
 
