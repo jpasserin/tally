@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=130"></script>
+<script src="backend.js?v=131"></script>
 <script>
-const APP_VERSION="130";
+const APP_VERSION="131";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -520,13 +520,17 @@ function fundSources(a, f, end){
 /* The whole account by tax status: Roth, or Pretax (Traditional, the
    employer's Match and Profit sharing, and everything in the cash sweep). */
 function accountBySource(a, end){
-  if (!fundsOf(a).some((f)=>fundOps(a, f.name).some((o)=>o.src))) return [];
-  const tot = { Roth:0, Pretax:0, '—':0 };
-  for (const f of fundsOf(a)) {
-    if (f.kind!=='invested') { tot.Pretax += fundAt(a, f, end).value; continue; }
-    for (const b of fundSources(a, f, end)) tot[b.src==='Roth' ? 'Roth' : b.src==='—' ? '—' : 'Pretax'] += b.value;
+  if (!fundsOf(a).some((f)=>fundOps(a, f.name).some((o)=>o.src))) return { funds:[], rows:[] };
+  /* the funds with money, as columns; each source's value in each */
+  const funds = fundsOf(a).filter((f)=>Math.abs(fundAt(a, f, end).value) >= 0.005);
+  const tot = { Roth:{}, Pretax:{}, '—':{} };
+  for (const f of funds) {
+    if (f.kind!=='invested') { tot.Pretax[f.name] = (tot.Pretax[f.name]||0) + fundAt(a, f, end).value; continue; }
+    for (const b of fundSources(a, f, end)) { const k = b.src==='Roth' ? 'Roth' : b.src==='—' ? '—' : 'Pretax'; tot[k][f.name] = (tot[k][f.name]||0) + b.value; }
   }
-  return [['Roth', tot.Roth], ['Pretax', tot.Pretax], ['—', tot['—']]].filter(([k,v])=>Math.abs(v) >= 0.005 || k!=='—').map(([src,value])=>({ src, value:r2(value) }));
+  const rows = ['Roth','Pretax','—'].map((src)=>({ src, by: funds.map((f)=>r2(tot[src][f.name]||0)), value: r2(funds.reduce((t,f)=>t+(tot[src][f.name]||0), 0)) }))
+    .filter((r)=>Math.abs(r.value) >= 0.005 || r.src!=='—');
+  return { funds, rows };
 }
 /* The fund a fund account opens on: the one worth most at the year's end. */
 const mainFund = (a, end) => fundsOf(a).slice().sort((x,y)=>fundAt(a, y, end).value - fundAt(a, x, end).value)[0] || null;
@@ -2231,9 +2235,9 @@ function fundAccountPage(a){
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
     ${listed.map((x)=>`<div class="herosub">${esc(x.name)} <b style="color:var(--txt)">${money(fundAt(a, x, end).value, a.currency)}</b></div>`).join('')}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${a.closed?'closed · ':''}${Y}</div>
-    ${(function(){ const rows = accountBySource(a, end); if (!rows.length) return ''; const total = rows.reduce((t,r)=>t+r.value, 0); return `
-    <table class="fx" style="margin-top:8px"><thead><tr><th>Source</th><th>Value</th><th>%</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${esc(r.src)}</td><td><b>${money(r.value, a.currency)}</b></td><td>${total?Math.round(r.value/total*100)+'%':'—'}</td></tr>`).join('')}</tbody></table>`; })()}
+    ${(function(){ const { funds: cols, rows } = accountBySource(a, end); if (!rows.length) return ''; const total = rows.reduce((t,r)=>t+r.value, 0); return `
+    <div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Source</th>${cols.map((f)=>`<th>${esc(f.name)}</th>`).join('')}<th>Value</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${esc(r.src)}</td>${r.by.map((v)=>`<td>${v?money(v, a.currency):'—'}</td>`).join('')}<td><b>${money(r.value, a.currency)}</b>${total?' <span class="muted">'+Math.round(r.value/total*100)+'%</span>':''}</td></tr>`).join('')}</tbody></table></div>`; })()}
     <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-fundsel="${esc(x.name)}">${esc(x.name)}</button>`).join('')}</div>
   </div>
   <div class="card">
@@ -2242,18 +2246,16 @@ function fundAccountPage(a){
     <div class="herosub">Paid in ${inv&&at.shares!=null?fmtSh(at.shares)+' shares ':''}<b style="color:var(--txt)">${money(at.paid, a.currency)}</b></div>
     <div class="herosub">${inv?'Growth':'Interest'} <b style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</b>${growthPct!=null?' ('+(growthPct>=0?'+':'')+growthPct+'%)':''}</div>
     ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}
+    ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
+      const priceTxt = at.price!=null ? at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}) : '—';
+      return `
+    <div style="overflow-x:auto"><table class="fx" style="margin-top:8px">
+      <thead><tr><th>Source</th><th>Paid in</th>${inv?'<th>Shares</th><th>Price*</th>':''}<th>Growth</th><th>Value</th></tr></thead>
+      <tbody>${rows.map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(b.paid, a.currency)}</td>${inv?`<td>${b.shares.toLocaleString('en-US',{maximumFractionDigits:3})}</td><td>${priceTxt}</td>`:''}<td style="color:${b.growth<0?'var(--bad)':'var(--good)'}">${money(b.growth, a.currency)}${b.paid>0?' ('+(b.growth>=0?'+':'')+Math.round(b.growth/b.paid*1000)/10+'%)':''}</td><td><b>${money(b.value, a.currency)}</b></td></tr>`).join('')}</tbody>
+    </table></div>
+    ${inv?`<div class="hint" style="margin:4px 0 0">* Price as of ${mark?dLabel(mark.date)+(/^live-/.test(mark.id)?' (live)':''):'—'}</div>`:''}`; })()}
   </div>
   ${fundChartCard(a, f, Y)}
-  ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
-    const priceTxt = at.price!=null ? at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}) : '—';
-    return `
-  <div class="card">
-    <h2>By source <span class="muted" style="text-transform:none;letter-spacing:0">${esc(f.name)}</span></h2>
-    <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Source</th><th>Paid in</th>${inv?'<th>Shares</th><th>Price</th>':''}<th>Value</th></tr></thead>
-      <tbody>${rows.map((b)=>`<tr><td>${esc(b.src)}</td><td>${money(b.paid, a.currency)}</td>${inv?`<td>${b.shares.toLocaleString('en-US',{maximumFractionDigits:3})}</td><td>${priceTxt}</td>`:''}<td><b>${money(b.value, a.currency)}</b></td></tr>`).join('')}</tbody>
-    </table></div>
-  </div>`; })()}
   ${(function(){
     const periods = hist
       ? (function(){ const first = fundOps(a, f.name).map((o)=>+o.date.slice(0,4)).sort()[0]; if (!first) return []; const out = []; for (let y = Math.min(THIS_YEAR, Y); y >= first; y--) out.push({ label:String(y), end: y >= THIS_YEAR ? '9999-12-31' : y+'-12-31' }); return out; })()
