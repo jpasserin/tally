@@ -25,9 +25,9 @@
 
   header{position:sticky;top:0;z-index:20;display:flex;align-items:center;justify-content:space-between;
     margin:0 -16px 14px;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);}
-  header h1{font-size:20px;margin:0;letter-spacing:.3px;}
+  /* The name is a button: it opens the About widget. */
+  header h1{font-size:20px;margin:0;letter-spacing:.3px;cursor:pointer;user-select:none;-webkit-user-select:none}
   header h1 .dot{color:var(--accent)}
-  header h1 .ver{font-size:11px;font-weight:600;color:var(--muted);margin-left:4px;letter-spacing:0}
   /* The year: first operation to last, stepped from the top bar. */
   .ystep{display:flex;align-items:center;gap:2px}
   .ystep button{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:26px;height:26px;
@@ -43,6 +43,8 @@
     cursor:pointer;display:inline-flex;align-items:center;justify-content:center;padding:0}
   .hdrbtn svg{width:15px;height:15px;stroke:currentColor;fill:none;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
   .hdrbtn:active{color:var(--accent)}
+  /* Settings lives up here now; lit when that is the page you are on. */
+  .hdrbtn.on{color:var(--accent);border-color:var(--accent)}
 
   .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:10px;}
   .card h2{font-size:12px;text-transform:uppercase;letter-spacing:.8px;color:var(--muted);
@@ -287,16 +289,16 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1>Tally<span class="dot">.</span> <span id="hdrRight" class="ver"></span></h1>
+  <header><h1 id="appTitle"></h1>
     <div class="ystep" id="yearStep"></div>
-    <div class="hdrright"><span class="curtog" id="curTog"></span></div></header>
+    <div class="hdrright"><span class="curtog" id="curTog"></span><span id="setBtn"></span></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=127"></script>
+<script src="backend.js?v=128"></script>
 <script>
-const APP_VERSION="127";
+const APP_VERSION="128";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -307,7 +309,7 @@ const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null,
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'summary', settings:'data', sync:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
+const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
 /* The operations filter, per visit of an account page. */
 const blankFilter = () => ({ q:'', min:'', max:'', from:'', to:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
 const opFilter = () => state.opf || (state.opf = blankFilter());
@@ -930,6 +932,7 @@ const connected = () => !!(store.backend.url && store.backend.token);
 const LK = () => (store.locked ? ' disabled' : '');
 const ICON_LOCK = '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/>';
 const ICON_UNLOCK = '<rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 7.5-2"/>';
+const ICON_GEAR = '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>';
 let pushTimer = null;
 /* Which tabs have changed since the last push: 'Config', or an account key.
    Kept in the store, so a change made offline still goes when back. */
@@ -1045,13 +1048,14 @@ async function pullNow(keep){
 function commit(...tabs){ for (const t of tabs.length?tabs:['Config']) markDirty(t); save(); render(); pushSoon(); }
 const esc = (s) => String(s==null?'':s).replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-/* ------------------------------------------------------------------- tabs --*/
+/* ------------------------------------------------------------------- tabs --
+   Four along the bottom. Settings is not one of them: it sits in the top bar,
+   next to the currency, and is reached with data-tab like any other. */
 const TABS = [
   ['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
   ['report','Report','<path d="M4 20V10"/><path d="M10 20V4"/><path d="M16 20v-7"/><path d="M22 20H2"/>'],
   ['account','Account','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
   ['kids','Kids','<circle cx="12" cy="8" r="4"/><path d="M5 21a7 7 0 0 1 14 0"/>'],
-  ['settings','Settings','<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/>'],
 ];
 
 const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
@@ -1289,6 +1293,31 @@ function tidyCategories(){
   if (named) { named.type = 'Transfer'; named.tags.push('x'); }
   else store.categories.push({ name:'Transfer', type:'Transfer', tags:['Transfer','x'] });
   return true;
+}
+/* Once, at boot: the retirement money that was filed as Roth and is not.
+   Every IRA contribution is pre-tax, and in the 401k the two early funds -
+   FFFGX and RFHTX - and the rollover that came out of RFHTX are pre-tax too.
+   A fund position cannot be part Roth and part pre-tax, so the fund's
+   dividends, fees and sales move with its purchases. What stays Roth: the
+   JRLVX contributions, FFB 2045 C, and the cash sweep.
+   Returns the account keys it touched, so the push carries them. */
+function fixPretaxSources(){
+  if (store.taxSrcFix) return [];
+  const PRETAX_FUNDS = ['FFFGX','RFHTX'];
+  const touched = new Set();
+  for (const a of store.accounts) {
+    const ira = /IRA/i.test(a.key);
+    for (const o of opsOf(a.key)) {
+      if (o.src !== 'Roth') continue;
+      const pretax = ira
+        || (same(a.key, '401K') && (PRETAX_FUNDS.some((f)=>same(f, o.fund||'')) || /rollover/i.test(o.note||'')));
+      if (!pretax) continue;
+      o.src = 'Traditional';
+      touched.add(a.key);
+    }
+  }
+  store.taxSrcFix = 1;
+  return [...touched];
 }
 const cashAccounts = () => store.accounts.filter((a)=>!ownValue(a));
 /* Every category's total over a year ("2013") or a month ("2013-04"), in
@@ -3886,11 +3915,36 @@ function settingsAbout(){
   </div>`}`;
 }
 
+/* The app name in the top bar opens this: which version is running here and
+   which one the sheet answers with, and the two buttons that matter when a
+   phone is stuck on an old deploy or an edit has not gone out yet. */
+function aboutSheet(){
+  const st = state.sync;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-aboutclose="1"></div>
+    <div class="sheet${state.about.fresh?' enter':''}">
+      <h3>Tally<span class="dot" style="color:var(--accent)">.</span></h3>
+      <div class="rows">
+        <div class="row"><span class="k">App</span><span class="v">v${esc(APP_VERSION)}</span></div>
+        <div class="row"><span class="k">Backend</span><span class="v">${store.backendVersion?'v'+esc(store.backendVersion):'—'}</span></div>
+      </div>
+      <div class="btnrow" style="margin-top:10px">
+        <button class="btn" data-reload="1">Hard reload</button>
+        <button class="btn primary" data-bksync="1" ${connected()?'':'disabled'}>${store.locked?'Pull':'Sync'}</button>
+      </div>
+      ${st?`<div class="status ${st.bad?'bad':'ok'}">${esc(st.msg)}</div>`:''}
+      ${store.locked&&dirty().length?`<div class="status bad" style="margin-top:6px">${dirty().length} tab${dirty().length===1?'':'s'} waiting</div>`:''}
+      <div class="foot"><button class="btn close" style="flex:1" data-aboutclose="1">Close</button></div>
+    </div>
+  </div>`;
+}
+
 /* ----------------------------------------------------------------- render --*/
 function renderNav(){
   const nWarn = warnings().reduce((t,g)=>t+g.items.length, 0);
   document.getElementById('nav').innerHTML = TABS.map(([id,label,icon]) =>
-    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><span class="ico"><svg viewBox="0 0 24 24">${id==='settings'&&store.locked?ICON_LOCK:icon}</svg>${
+    `<button class="${state.tab===id?'active':''}" data-tab="${id}"><span class="ico"><svg viewBox="0 0 24 24">${icon}</svg>${
       id==='account'&&nWarn?`<span class="navwarn" title="${nWarn} warning${nWarn===1?'':'s'}"><svg viewBox="0 0 24 24"><path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/></svg></span>`:''}</span>${label}</button>`).join('');
 }
 /* Nothing animates on a tap. The page scrolls to the top only when the
@@ -3907,9 +3961,13 @@ function render(){
   if (where !== lastWhere) { state.sel=[]; state.bulk=null; }
   lastWhere = where;
   renderNav();
-  /* The version in the top bar, so a phone that has not picked up a deploy is
-     obvious at a glance. */
-  document.getElementById('hdrRight').textContent = 'v' + APP_VERSION;
+  /* The name, which is the way into About. No version beside it any more:
+     it is one tap away instead. */
+  document.getElementById('appTitle').innerHTML = `<span data-about="1">Tally<span class="dot">.</span></span>`;
+  /* Settings, in the corner beside the currency; the padlock in its place
+     while the app is locked, as the bottom bar used to show. */
+  document.getElementById('setBtn').innerHTML =
+    `<button class="hdrbtn${state.tab==='settings'?' on':''}" data-tab="settings" title="Settings" aria-label="Settings"><svg viewBox="0 0 24 24">${store.locked?ICON_LOCK:ICON_GEAR}</svg></button>`;
   const ct = document.getElementById('curTog');
   ct.innerHTML = ['USD','EUR'].map((c)=>`<button class="${store.cur===c?'on':''}" data-cur="${c}">${SYM[c]}</button>`).join('');
   const ys = years(), Y = theYear();
@@ -3917,7 +3975,7 @@ function render(){
     `<button data-yearstep="-1" ${Y<=ys[0]?'disabled':''}>‹</button><b>${Y}</b><button data-yearstep="1" ${Y>=ys[ys.length-1]?'disabled':''}>›</button>`;
   const tabs = document.getElementById('tabs');
   if (!moved && tabs.offsetHeight) tabs.style.minHeight = tabs.offsetHeight + 'px';
-  tabs.innerHTML = `<div class="tab${store.locked?' locked':''}">${SCREENS[state.tab]()}</div>`;
+  tabs.innerHTML = `<div class="tab${store.locked?' locked':''}">${state.about?aboutSheet():''}${SCREENS[state.tab]()}</div>`;
   wire();
   if (moved) scrollTo({ top:0 });
   if (typeof requestAnimationFrame === 'function') requestAnimationFrame(()=>{ tabs.style.minHeight=''; });
@@ -3936,7 +3994,11 @@ async function hardReload(){
 
 function wire(){
   document.querySelectorAll('[data-reload]').forEach((el)=>el.onclick=hardReload);
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.page=null; state.account=null; state.budget=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
+  /* The About widget: opened from the name, closed from the scrim or Close.
+     fresh plays the slide-up once - a redraw from Sync inside must not. */
+  document.querySelectorAll('[data-about]').forEach((el)=>el.onclick=()=>{ state.about={ fresh:true }; state.sync=null; render(); state.about.fresh=false; });
+  document.querySelectorAll('[data-aboutclose]').forEach((el)=>el.onclick=()=>{ state.about=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.about=null; state.page=null; state.account=null; state.budget=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
     if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
@@ -4761,6 +4823,9 @@ function wire(){
 }
 
 if (!store.locked && tidyCategories()) { markDirty('Config'); save(); pushSoon(); }
+/* Locked stores wait: the flag is not set, so the fix runs when the lock
+   comes off and can go out with everything else. */
+if (!store.locked) { const fixed = fixPretaxSources(); if (fixed.length) { for (const k of fixed) markDirty(k); save(); pushSoon(); } else save(); }
 render();
 
 /* A fresh install with a connected sheet takes its config from the sheet, so
