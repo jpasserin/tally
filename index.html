@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=133"></script>
+<script src="backend.js?v=134"></script>
 <script>
-const APP_VERSION="133";
+const APP_VERSION="134";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2359,7 +2359,8 @@ function checkFop(o, inv){
   if (!o.kind) throw new Error('A kind.');
   if (o.kind==='Price') { if (!(o.shares>0) || !(o.price>0)) throw new Error('Shares and a unit price.'); return; }
   if (!isFinite(o.amount) || o.amount===0) throw new Error('An amount.');
-  if (inv && o.kind!=='Fee' && o.kind!=='Dividend' && !(o.shares>0)) throw new Error('The shares.');
+  /* a sale's shares are kept negative, as the converters write them; either sign will do, zero will not */
+  if (inv && (o.kind==='Buy' || o.kind==='Sell') && !(Math.abs(o.shares)>0)) throw new Error('How many shares.');
 }
 
 /* ---------------------------------------------------------------- property --*/
