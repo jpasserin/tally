@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=131"></script>
+<script src="backend.js?v=132"></script>
 <script>
-const APP_VERSION="131";
+const APP_VERSION="132";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2243,9 +2243,10 @@ function fundAccountPage(a){
   <div class="card">
     <h2>${esc(f.name)}${viewChipsF}</h2>
     <div class="hero ${at.value<0?'neg':''}" style="font-size:24px">${money(at.value, a.currency)}</div>
+    ${fundSources(a, f, end).some((b)=>b.src!=='—') ? '' : `
     <div class="herosub">Paid in ${inv&&at.shares!=null?fmtSh(at.shares)+' shares ':''}<b style="color:var(--txt)">${money(at.paid, a.currency)}</b></div>
     <div class="herosub">${inv?'Growth':'Interest'} <b style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</b>${growthPct!=null?' ('+(growthPct>=0?'+':'')+growthPct+'%)':''}</div>
-    ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}
+    ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}`}
     ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
       const priceTxt = at.price!=null ? at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}) : '—';
       return `
