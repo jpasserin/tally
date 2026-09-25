@@ -15,7 +15,7 @@
  * Tally never requires redeploying this.
  */
 
-var BACKEND_VERSION = 5;
+var BACKEND_VERSION = 6;
 
 /* ── configure ─────────────────────────────────────────────────────────── */
 var SHEET_ID = 'PUT_YOUR_SPREADSHEET_ID_HERE';
@@ -226,7 +226,44 @@ function writeLive(rows) {
   sh.getRange(1, 1, values.length, LIVE_HEADERS.length).setValues(values);
   sh.setFrozenRows(1);
 }
-var liveKey = function (o) { return o.kind === 'ibond' ? 'ibond|' + o.date : 'price|' + o.account + '|' + o.fund + '|' + o.date; };
+var liveKey = function (o) { return o.kind === 'ibond' ? 'ibond|' + o.date : o.kind === 'index' ? 'index|' + o.symbol + '|' + o.date : 'price|' + o.account + '|' + o.fund + '|' + o.date; };
+
+/* The indices the notes follow: Config's fund rows of Type note carry their
+   terms as JSON in the Policy column, each with its indices and their
+   symbols (^GSPC, ^NDX, ^RUT, ^DJI...). */
+function indexSymbols() {
+  var sh = book().getSheetByName('Config');
+  if (!sh) return [];
+  var v = sh.getDataRange().getValues();
+  if (v.length < 2) return [];
+  var h = v[0].map(String);
+  var ix = function (n) { return h.indexOf(n); };
+  var out = {};
+  v.slice(1).forEach(function (r) {
+    if (String(r[ix('Kind')]) !== 'fund' || String(r[ix('Type')]) !== 'note') return;
+    var t = null; try { t = JSON.parse(String(r[ix('Policy')] || 'null')); } catch (e) { t = null; }
+    ((t && t.indices) || []).forEach(function (i) { if (i && i.symbol) out[String(i.symbol)] = String(i.name || i.symbol); });
+  });
+  return Object.keys(out).map(function (s) { return { symbol: s, name: out[s] }; });
+}
+/* three years of daily closes: the last trading day of each month, and the latest day */
+function indexHistory(symbol) {
+  var url = 'https://query1.finance.yahoo.com/v8/finance/chart/' + encodeURIComponent(symbol) + '?range=3y&interval=1d';
+  var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+  if (res.getResponseCode() !== 200) return [];
+  var j = JSON.parse(res.getContentText());
+  var r = j && j.chart && j.chart.result && j.chart.result[0]; if (!r) return [];
+  var ts = r.timestamp || [], cl = ((r.indicators || {}).quote || [{}])[0].close || [];
+  var byMonth = {}, last = null;
+  for (var i = 0; i < ts.length; i++) {
+    if (cl[i] == null) continue;
+    var d = new Date(ts[i] * 1000).toISOString().slice(0, 10);
+    byMonth[d.slice(0, 7)] = [d, cl[i]]; last = [d, cl[i]];
+  }
+  var out = Object.keys(byMonth).sort().map(function (m) { return { date: byMonth[m][0], close: Math.round(byMonth[m][1] * 100) / 100 }; });
+  if (last && !out.some(function (x) { return x.date === last[0]; })) out.push({ date: last[0], close: Math.round(last[1] * 100) / 100 });
+  return out;
+}
 
 /* The invested funds and their symbols, from Config's fund rows (Kind fund,
    Name, Type invested|cash, Tags = the symbol, Account). */
@@ -298,6 +335,19 @@ function refreshLive() {
     var o = { kind: 'price', account: f.account, fund: f.fund, date: q.date, price: q.price, currency: q.currency, symbol: f.symbol, name: q.name, fixed: '', fetched: now };
     have[liveKey(o)] = o;
   });
+  /* the indices: each symbol's rows are rewritten whole, so a day that was the latest gives way to the month's end */
+  var idx = indexSymbols();
+  if (idx.length) {
+    var fetched = {};
+    idx.forEach(function (s) { var h = indexHistory(s.symbol); if (h.length) fetched[s.symbol] = { name: s.name, rows: h }; });
+    Object.keys(have).forEach(function (k) { if (have[k].kind === 'index' && fetched[have[k].symbol]) delete have[k]; });
+    Object.keys(fetched).forEach(function (sym) {
+      fetched[sym].rows.forEach(function (r) {
+        var o = { kind: 'index', account: '', fund: '', date: r.date, price: r.close, currency: '', symbol: sym, name: fetched[sym].name, fixed: '', fetched: now };
+        have[liveKey(o)] = o;
+      });
+    });
+  }
   ibondRates().forEach(function (r) {
     var o = { kind: 'ibond', account: '', fund: '', date: r.month, price: r.inflation, currency: '', symbol: '', name: 'TreasuryDirect', fixed: r.fixed, fetched: now };
     var k = liveKey(o); if (!have[k] || have[k].price !== o.price || Number(have[k].fixed) !== o.fixed) have[k] = o;

@@ -296,16 +296,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=136"></script>
+<script src="backend.js?v=137"></script>
 <script>
-const APP_VERSION="136";
+const APP_VERSION="137";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -330,7 +330,7 @@ const CURRENCIES = ['USD','EUR','AUD'];
    will bring their own settings later. */
 const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
 const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
-const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life','Bond','Options'];
+const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life','Bond','Options','Notes'];
 /* A property: what it is worth (valuations, one every so often), what is
    still owed on it (a mortgage, worked out month by month), and what it
    costs (fees, taxes, insurance, works - kept for the record, not in the
@@ -348,7 +348,44 @@ const lifePaidAt = (a, end) => r2(opsOf(a.key).filter((o)=>(o.kind==='Premium' |
 /* Accounts whose worth the app works out itself, not a sum of operations. */
 const isBond = (a) => a && a.type==='Bond';
 const isOpt = (a) => a && a.type==='Options';
-const ownValue = (a) => isFund(a) || isProp(a) || isLife(a) || isBond(a) || isOpt(a);
+const isNotes = (a) => a && a.type==='Notes';
+const ownValue = (a) => isFund(a) || isProp(a) || isLife(a) || isBond(a) || isOpt(a) || isNotes(a);
+
+/* ---- market-linked notes ----
+   A Notes account holds notes (in `funds`, kind note, each with its terms):
+   a bank's paper whose payment at maturity follows the worst of a few stock
+   indices - an upside leverage (participation), maybe a cap, and a barrier
+   under which the loss follows the index one for one. Nothing is paid until
+   maturity; in between the note is worth what the indices say: face x the
+   payoff at today's levels (the levels kept in the Indices tab), or a Price
+   mark's amount when a statement gave one. Operations: Buy (face), Fee,
+   Sell (redemption, negative), Price (a market value, the amount). */
+const indexAt = (symbol, end) => { let best = null; for (const r of (store.indices||[])) if (r.symbol===symbol && r.date <= end && (!best || r.date > best.date)) best = r; return best; };
+function notePayoff(t, worst){
+  const lev = +t.participation || 1, cap = t.cap!=null && t.cap!=='' ? +t.cap/100 : null, bar = t.barrier!=null && t.barrier!=='' ? +t.barrier/100 : 0;
+  if (worst >= 0) { const g = worst*lev; return 1 + (cap!=null ? Math.min(g, cap) : g); }
+  if (worst >= -(1-bar)) return 1;
+  return 1 + worst;
+}
+function noteAt(a, f, end){
+  const t = f.terms || {}; const ops = fundOps(a, f.name).filter((o)=>o.date <= end);
+  const face = r2(ops.reduce((s,o)=> o.kind==='Buy' ? s+(o.amount||0) : o.kind==='Sell' ? s-Math.abs(o.amount||0) : s, 0));
+  const fees = r2(ops.reduce((s,o)=> o.kind==='Fee' ? s+Math.abs(o.amount||0) : s, 0));
+  const paid = r2(face + fees);
+  const out = { paid, face, fees, value:0, interest:r2(-paid), worst:null, levels:[], asOf:end, priced:false, unpriced:false, matured: !!(t.matures && end >= t.matures) };
+  if (face <= 0) return out;
+  const mark = ops.filter((o)=>o.kind==='Price' && o.amount > 0).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0];
+  if (mark) { out.value = r2(mark.amount); out.priced = true; out.asOf = mark.date; out.interest = r2(out.value - paid); return out; }
+  const asOf = t.valuation && end > t.valuation ? t.valuation : end;
+  out.asOf = asOf;
+  out.levels = (t.indices||[]).map((i)=>{ const at = indexAt(i.symbol, asOf); return { ...i, at, ret: at && +i.initial > 0 ? at.close / +i.initial - 1 : null }; });
+  if (!out.levels.length || out.levels.some((l)=>l.ret==null)) { out.value = face; out.unpriced = true; out.interest = r2(face - paid); return out; }
+  out.worst = Math.min(...out.levels.map((l)=>l.ret));
+  out.value = r2(face * notePayoff(t, out.worst)); out.interest = r2(out.value - paid);
+  return out;
+}
+const notesValueAt = (a, end) => r2(fundsOf(a).reduce((s,f)=>s + noteAt(a, f, end).value, 0));
+const notesPaidAt = (a, end) => r2(fundsOf(a).reduce((s,f)=>s + noteAt(a, f, end).paid, 0));
 
 /* ---- Series I savings bonds (TreasuryDirect) ----
    Each row: the month a rate was announced (May, November), the semiannual
@@ -595,7 +632,7 @@ function checkOp(o){
   }
   if (used >= Math.abs(o.amount)) throw new Error('Secondary tags must add up to less than the amount.');
 }
-const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : isBond(a) ? bondValueAt(a, TODAY()).shown : isOpt(a) ? optValueAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
+const balanceOf = (a) => isFund(a) ? fundValueAt(a, '9999-12-31') : isProp(a) ? propEquityAt(a, '9999-12-31') : isLife(a) ? lifeCashAt(a, '9999-12-31') : isBond(a) ? bondValueAt(a, TODAY()).shown : isOpt(a) ? optValueAt(a, '9999-12-31') : isNotes(a) ? notesValueAt(a, '9999-12-31') : Math.round(((+a.opening||0) + opsOf(a.key).reduce((t,o)=>t+o.amount, 0))*100)/100;
 /* The years the records span - first operation to last - or just this one. */
 const THIS_YEAR = new Date().getFullYear();
 function allYears(){
@@ -626,7 +663,7 @@ function theYear(){ const ys = years(); if (!ys.includes(state.year)) state.year
    last day. The current year is simply everything. */
 const balanceAt = (a, year) => year >= THIS_YEAR ? balanceOf(a) : valueAt(a, year+'-12-31');
 /* Any account at the end of any day. */
-const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : isLife(a) ? lifeCashAt(a, end) : isBond(a) ? bondValueAt(a, end).shown : isOpt(a) ? optValueAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
+const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEquityAt(a, end) : isLife(a) ? lifeCashAt(a, end) : isBond(a) ? bondValueAt(a, end).shown : isOpt(a) ? optValueAt(a, end) : isNotes(a) ? notesValueAt(a, end) : r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end).reduce((t,o)=>t+o.amount, 0));
 /* The rate for a month: that month's end from the sheet; failing that the
    latest month before it; for the current month, or when the sheet has
    nothing yet, today's live rate. Null when there is nothing at all. */
@@ -713,11 +750,34 @@ function configTab(){
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
         Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'', Facts:a.facts&&Object.keys(a.facts).length?JSON.stringify(a.facts):'' })))
-      .concat(store.accounts.filter(isFund).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key }))))
+      .concat(store.accounts.filter((a)=>isFund(a) || isNotes(a)).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key, Policy: f.kind==='note' && f.terms ? JSON.stringify(f.terms) : '' }))))
       .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
 }
 /* The findings marked correct, in a tab of their own - there may be many.
    The key (kind|id) is what counts; the rest says what it was, for reading. */
+/* The Indices tab: the market indices the notes follow, a row per symbol and
+   day - the last trading day of each month, and the latest. Written by the
+   app from what the script fetched (the Live tab) or an indices.js file. */
+const INDICES_HEADERS = ['Symbol','Date','Close'];
+function indicesTab(){
+  return { name:'Indices', headers:INDICES_HEADERS, rows:(store.indices||[]).slice().sort((x,y)=>(x.symbol+x.date)<(y.symbol+y.date)?-1:1).map((r)=>[r.symbol, r.date, r.close]) };
+}
+function readIndices(tab){
+  const heads = ((tab && tab.headers) || INDICES_HEADERS).map((h)=>String(h).trim());
+  const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : r[i]; };
+  const out = [];
+  for (const r of (tab && tab.rows) || []) { let d = col(r,'Date'); d = d instanceof Date ? d.toISOString().slice(0,10) : String(d||'').slice(0,10);
+    const s = String(col(r,'Symbol')||'').trim(), c = +col(r,'Close'); if (s && /^\d{4}-\d{2}-\d{2}$/.test(d) && isFinite(c) && c > 0) out.push({ symbol:s, date:d, close:c }); }
+  return out;
+}
+/* a level in: replaces the day's, counts when new or changed */
+function takeIndex(symbol, date, close){
+  if (!symbol || !/^\d{4}-\d{2}-\d{2}$/.test(date||'') || !(close > 0)) return false;
+  const list = store.indices = store.indices || []; const i = list.findIndex((r)=>r.symbol===symbol && r.date===date);
+  const c = Math.round(close*100)/100;
+  if (i >= 0) { if (list[i].close === c) return false; list[i].close = c; return true; }
+  list.push({ symbol, date, close:c }); return true;
+}
 const DISMISSED_HEADERS = ['Key','Kind','Account','Name','Date','Amount'];
 function dismissedTab(){
   const rows = (store.dismissed||[]).map((k)=>{ const i = k.indexOf('|'); const kind = k.slice(0,i), id = k.slice(i+1);
@@ -800,7 +860,8 @@ function readConfig(tab){
       ...(type==='Life' || type==='Options' ? { policy: (()=>{ try { const p = JSON.parse(col(r,'Policy')||'null'); return p && typeof p==='object' ? p : null; } catch (e) { return null; } })() } : {}),
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
-    if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) fundsOf(acc).push({ name, kind: col(r,'Type')==='invested'?'invested':'cash', index: col(r,'Tags') }); }
+    if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) { const fk = col(r,'Type')==='invested' ? 'invested' : col(r,'Type')==='note' ? 'note' : 'cash';
+      const f = { name, kind: fk, index: col(r,'Tags') }; if (fk==='note') { try { const t = JSON.parse(col(r,'Policy')||'null'); if (t && typeof t==='object') f.terms = t; } catch (e) {} } fundsOf(acc).push(f); } }
     if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
@@ -814,12 +875,12 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices))) throw new Error('Not a Tally import file.');
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   if (+j.year && isClosedYear(+j.year)) throw new Error(j.year + ' is closed: nothing imported.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
@@ -831,6 +892,9 @@ function importFile(j){
   /* known names, a list to merge */
   let names = 0;
   for (const n of (Array.isArray(j.names) ? j.names : [])) if (n && n.name && Array.isArray(n.tags)) for (const t of n.tags) if (t && !nameTags(n.name).some((x)=>same(x, t))) { learnName(String(n.name), String(t)); names++; }
+  /* the indices' levels (indices.js): a row per symbol and day, new or changed */
+  let levels = 0;
+  for (const r of (Array.isArray(j.indices) ? j.indices : [])) if (r && takeIndex(String(r.symbol||'').trim(), String(r.date||'').slice(0,10), +r.close)) { levels++; touched.add('Indices'); }
   /* I bond rate announcements (rates.js): kept only where they add to or change what the app knows */
   let rates = 0;
   for (const r of (Array.isArray(j.ibond) ? j.ibond : [])) {
@@ -861,14 +925,15 @@ function importFile(j){
        through in order and, where a book opens at something other than what
        the earlier ones left, one adjustment on 1 January makes the balances
        follow the books. The oldest book sets the account's own opening. */
-    if (known && !ownValue(known) && year && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length) {
+    /* (an account the book closes with nothing in it has no operation, yet its opening - nothing - still counts) */
+    if (known && !ownValue(known) && year && isFinite(+a.opening) && (((j.ops && j.ops[a.key]) || []).length || a.closed)) {
       known.openings = known.openings || {}; known.openings[year] = r2(+a.opening); touched.add('Config');
     }
     if (!known) {
       store.accounts.push({ key:a.key, currency:CURRENCIES.includes(a.currency)?a.currency:'USD', owners:Array.isArray(a.owners)?a.owners:[],
         category:ACCOUNT_CATEGORIES.some(([k])=>k===a.category)?a.category:'Cash', type:ACCOUNT_TYPES.includes(a.type)?a.type:'Cash',
         opening:isFinite(+a.opening)?+a.opening:0, closed:!!a.closed, funds:[],
-        ...(year && !['Fund','Property','Life','Bond','Options'].includes(a.type) && isFinite(+a.opening) && ((j.ops && j.ops[a.key]) || []).length ? { openings: { [year]: r2(+a.opening) } } : {}),
+        ...(year && !['Fund','Property','Life','Bond','Options','Notes'].includes(a.type) && isFinite(+a.opening) && (((j.ops && j.ops[a.key]) || []).length || a.closed) ? { openings: { [year]: r2(+a.opening) } } : {}),
         ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}),
         ...(a.type==='Life' || a.type==='Options' ? { policy: a.policy && typeof a.policy==='object' ? a.policy : null } : {}),
         ...(a.type==='Property' ? { share: isFinite(+a.share) && +a.share > 0 ? +a.share : 100, bought: /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '',
@@ -889,8 +954,10 @@ function importFile(j){
     /* a later year can close an account; nothing reopens one */
     if (a.closed && !acc.closed) { acc.closed = true; }
     /* a fund account brings its funds; ones already there are left as they are */
-    if (isFund(acc)) for (const f of (a.funds||[])) if (f && f.name && !fundsOf(acc).some((x)=>same(x.name, f.name)))
-      fundsOf(acc).push({ name:String(f.name), kind: f.kind==='invested'?'invested':'cash', index:String(f.index||'') });
+    if (isFund(acc) || isNotes(acc)) for (const f of (a.funds||[])) { if (!f || !f.name) continue;
+      const fk = f.kind==='invested' ? 'invested' : f.kind==='note' ? 'note' : 'cash', have = fundsOf(acc).find((x)=>same(x.name, f.name));
+      if (!have) fundsOf(acc).push({ name:String(f.name), kind:fk, index:String(f.index||''), ...(fk==='note' && f.terms && typeof f.terms==='object' ? { terms:f.terms } : {}) });
+      else if (fk==='note' && f.terms && typeof f.terms==='object') { have.kind = 'note'; have.terms = f.terms; if (f.index) have.index = String(f.index); } }
     const list = opsOf(key);
     for (const o of (j.ops && j.ops[a.key]) || []) {
       if (isClosedDate(o.date)) continue;                          /* a closed year keeps what it has */
@@ -918,7 +985,7 @@ function importFile(j){
   /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
-  return { accounts, ops, adjusted, names, rates, touched:[...touched] };
+  return { accounts, ops, adjusted, names, rates, levels, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
    account's opening; every later book gets an adjustment where it opens at
@@ -975,9 +1042,9 @@ async function syncLocked(){
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
-  const names = everything ? ['Config','Dismissed'].concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const names = everything ? ['Config','Dismissed'].concat((store.indices||[]).length ? ['Indices'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
-  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
   if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetsTab());
   state.sync={ msg:'Syncing…' }; render();
@@ -994,15 +1061,16 @@ async function pushNow(everything){
 function readLive(tab){
   const heads = ((tab && tab.headers) || []).map((h)=>String(h).trim().toLowerCase());
   return ((tab && tab.rows) || []).map((r)=>{ const o = {}; heads.forEach((h,i)=>{ o[h] = r[i]; }); return o; })
-    .filter((o)=>o.kind==='price' || o.kind==='ibond')
+    .filter((o)=>o.kind==='price' || o.kind==='ibond' || o.kind==='index')
     .map((o)=>({ ...o, date: o.date instanceof Date ? o.date.toISOString().slice(0,10) : String(o.date||'').slice(0, o.kind==='ibond' ? 7 : 10), price:+o.price, fixed: o.fixed==='' || o.fixed==null ? 0 : +o.fixed }));
 }
 /* Each live row becomes the app's own: a Price mark on the fund (id live-…,
    once per market day), a rate announcement (where new). What was taken is
    marked for the sheet, so the record tabs hold it from then on. */
 function absorbLive(rows){
-  let prices = 0, rates = 0;
+  let prices = 0, rates = 0, levels = 0;
   for (const o of rows || []) {
+    if (o.kind==='index') { if (takeIndex(String(o.symbol||'').trim(), o.date, o.price)) { levels++; markDirty('Indices'); } continue; }
     if (o.kind==='price') {
       const a = store.accounts.find((x)=>same(x.key, o.account)); if (!a || !isFund(a)) continue;
       const f = fundsOf(a).find((x)=>same(x.name, o.fund)); if (!f || !/^\d{4}-\d{2}-\d{2}$/.test(o.date) || !(o.price > 0)) continue;
@@ -1019,8 +1087,8 @@ function absorbLive(rows){
       store.ibond = (store.ibond||[]).filter((x)=>x.month!==row.month).concat([row]); markDirty('Config'); rates++;
     }
   }
-  if (prices || rates) { warnMemo = null; save(); }
-  return { prices, rates };
+  if (prices || rates || levels) { warnMemo = null; save(); }
+  return { prices, rates, levels };
 }
 /* Ask the script to fetch now, keep what comes back, send it on. Quiet: the
    once-a-day call at start, which says nothing when it fails. */
@@ -1031,8 +1099,8 @@ async function liveNow(quiet){
     const j = await BK.live(store.backend);
     const got = absorbLive(j.rows||[]);
     store.liveAt = TODAY(); store.backendVersion = j.backend; save();
-    if ((got.prices || got.rates) && !store.locked) pushSoon();
-    state.sync={ msg:'Live: ' + got.prices + ' price' + (got.prices===1?'':'s') + ', ' + got.rates + ' rate announcement' + (got.rates===1?'':'s') + ' · ' + new Date().toTimeString().slice(0,5) };
+    if ((got.prices || got.rates || got.levels) && !store.locked) pushSoon();
+    state.sync={ msg:'Live: ' + got.prices + ' price' + (got.prices===1?'':'s') + ', ' + got.levels + ' index level' + (got.levels===1?'':'s') + ', ' + got.rates + ' rate announcement' + (got.rates===1?'':'s') + ' · ' + new Date().toTimeString().slice(0,5) };
   } catch (e) { if (quiet) return; state.sync={ msg:e.message, bad:true }; }
   render();
 }
@@ -1055,10 +1123,11 @@ async function pullNow(keep){
   for (const a of store.accounts) ops[a.key] = keep.includes(a.key) && store.ops[a.key] ? store.ops[a.key] : readOps(tab(a.key));
   store.ops = ops;
   store.rates = rateRows(tab('Rates'));
+  if (tab('Indices')) store.indices = readIndices(tab('Indices'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   /* what the script fetched since: taken in, and sent on to the record tabs */
   const took = absorbLive(readLive(tab('Live')));
-  if ((took.prices || took.rates) && !store.locked) pushSoon();
+  if ((took.prices || took.rates || took.levels) && !store.locked) pushSoon();
   return got;
 }
 /* A change to the model: keep it, show it, send the tabs it touched. */
@@ -1181,6 +1250,7 @@ function paidAt(a, end){
   if (isLife(a)) return lifePaidAt(a, end);
   if (isBond(a)) return bondPaidAt(a, end);
   if (isOpt(a)) return optPaidAt(a, end);
+  if (isNotes(a)) return notesPaidAt(a, end);
   return r2((+a.opening||0) + opsOf(a.key).filter((o)=>o.date <= end && !isGrowthOp(o)).reduce((t,o)=>t+(o.amount||0), 0));
 }
 /* Summary ▸ Savings: the family's Savings accounts month by month - paid in,
@@ -2987,12 +3057,103 @@ function oopSheet(p, a){
   </div>`;
 }
 
+/* ------------------------------------------------------------------- notes --*/
+const NOTE_VIEWS = [['summary','Summary'],['ops','Operations']];
+const NOTE_KINDS = [['Buy','Bought'],['Fee','Fee'],['Sell','Redeemed'],['Price','Market value']];
+const pctS = (r) => (r>=0?'+':'') + (Math.round(r*1000)/10).toFixed(1) + '%';
+function notesPage(a){
+  const p = state.page;
+  const Y = theYear();
+  const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
+  const view = NOTE_VIEWS.some(([k])=>k===state.nview) ? state.nview : 'summary';
+  const value = notesValueAt(a, end), paid = notesPaidAt(a, end);
+  const conv1 = a.currency!==store.cur ? conv(value, a.currency, store.cur, yearMonth(Y)) : null;
+  const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='nop' ? nopSheet(p, a) : '';
+  return widget + `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
+      <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
+    <div class="hero">${money(value, a.currency)}</div>
+    ${conv1!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(conv1, store.cur)}</div>`:''}
+    <div class="herosub">Paid in <b style="color:var(--txt)">${money(paid, a.currency)}</b> · Growth <b style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}</b>${paid>0?' ('+pctS((value-paid)/paid)+')':''}</div>
+    <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
+    <div class="chips" style="margin-top:10px">${NOTE_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-nview="${k}">${l}</button>`).join('')}</div>
+  </div>
+  ${view==='summary' ? fundsOf(a).map((f)=>noteCard(a, f, end)).join('') + notesMonths(a, Y, end) : notesOps(a, Y)}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
+}
+function noteCard(a, f, end){
+  const t = f.terms || {}, n = noteAt(a, f, end);
+  const terms = [ (+t.participation||1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap'), t.barrier!=null && t.barrier!=='' ? 'barrier at ' + t.barrier + '% of the start' : '', t.priced ? 'priced ' + dLabel(t.priced) : '', t.matures ? 'matures ' + dLabel(t.matures) : '' ].filter(Boolean).join(' · ');
+  return `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">${esc(f.name)}</span> <span class="muted" style="text-transform:none;letter-spacing:0">${esc(f.index||'')}</span></h2>
+    <div class="hero ${n.value<n.paid?'neg':''}" style="font-size:24px">${money(n.value, a.currency)}</div>
+    <div class="herosub">Paid in <b style="color:var(--txt)">${money(n.paid, a.currency)}</b>${n.fees?' <span class="muted">(' + money(n.fees, a.currency) + ' fees)</span>':''} · Growth <b style="color:${n.interest<0?'var(--bad)':'var(--good)'}">${money(n.interest, a.currency)}</b>${n.paid>0?' ('+pctS(n.interest/n.paid)+')':''}</div>
+    <div class="herosub">${esc(terms)}</div>
+    ${n.levels.length ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px">
+      <thead><tr><th>Index</th><th>Start</th><th>Now</th><th>Change</th></tr></thead>
+      <tbody>${n.levels.map((l)=>`<tr${n.worst!=null && l.ret===n.worst?' class="sum"':''}><td>${esc(l.name||l.symbol)}</td><td>${(+l.initial).toLocaleString('en-US',{maximumFractionDigits:2})}</td><td>${l.at?l.at.close.toLocaleString('en-US',{maximumFractionDigits:2}):'—'}</td><td style="color:${l.ret==null?'var(--muted)':l.ret<0?'var(--bad)':'var(--good)'}">${l.ret==null?'—':pctS(l.ret)}</td></tr>`).join('')}</tbody>
+    </table></div>
+    <div class="hint" style="margin:4px 0 0">${n.unpriced ? 'No level yet for every index: Settings › Data › Live, or an indices file.' : `Levels as of ${dLabel(n.levels.map((l)=>l.at.date).sort()[0])} · worst ${pctS(n.worst)} → ${pctS(notePayoff(t, n.worst)-1)} on the face${n.matured?' · matured':''}`}</div>` : n.priced ? `<div class="hint" style="margin:4px 0 0">Market value of ${dLabel(n.asOf)}</div>` : ''}
+    ${t.plan ? `<div class="hint" style="margin:6px 0 0">${esc(t.plan)}</div>` : ''}
+  </div>`;
+}
+function notesMonths(a, Y, end){
+  const now = new Date().toISOString().slice(0,7);
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now && m <= end.slice(0,7));
+  const funds = fundsOf(a); if (!funds.length || !months.length) return '';
+  return `
+  <div class="card">
+    <h2>By month</h2>
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Month</th>${funds.map((f)=>`<th>${esc(f.name.split(' ')[0])}</th>`).join('')}<th>Worst</th><th>Value</th></tr></thead>
+      <tbody>${months.map((m)=>{ const vs = funds.map((f)=>noteAt(a, f, m+'-31')); const tot = vs.reduce((s,n)=>s+n.value, 0); const empty = !tot; const ws = vs.map((n)=>n.worst).filter((w)=>w!=null);
+        return `<tr${empty?' class="muted"':''}><td>${MON[+m.slice(5,7)-1]}</td>${vs.map((n)=>`<td>${n.value?money(n.value, a.currency):'—'}</td>`).join('')}<td style="color:${ws.length && Math.min(...ws)<0?'var(--bad)':'var(--good)'}">${ws.length?pctS(Math.min(...ws)):'—'}</td><td><b>${tot?money(r2(tot), a.currency):'—'}</b></td></tr>`; }).join('')}</tbody>
+    </table></div>
+  </div>`;
+}
+function notesOps(a, Y){
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const label = (k) => (NOTE_KINDS.find(([x])=>x===k)||[k,k])[1];
+  return `
+  <div class="card">
+    <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-nopnew="1"${LKY()}>+</button></span></h2>
+    ${ops.length ? `<div class="rows">${ops.map((o)=>`
+      <div class="row tap ${o.kind==='Price'?'muted':''}" data-nopedit="${esc(o.id)}">
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(label(o.kind))} <span class="muted" style="font-weight:400">· ${esc(o.fund||'')}</span></div>
+          <div class="sub">${esc(o.date)}${o.note?' · '+esc(o.note):''}</div></div>
+        <span class="v ${o.kind==='Price'?'':(o.amount<0?'neg':'pos')}">${money(o.amount, a.currency)}</span>
+      </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
+function nopSheet(p, a){
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-nopclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${p.id==null?'New operation':esc((NOTE_KINDS.find(([x])=>x===p.was.nkind)||['',''])[1])}</h3>
+      <div class="field"><label>Note</label><div class="chips">${fundsOf(a).map((f)=>`<button class="chip ${p.nfund===f.name?'on':''}" data-nopfund="${esc(f.name)}">${esc(f.name)}</button>`).join('')}</div></div>
+      <div class="field"><label>Kind</label><div class="chips">${NOTE_KINDS.map(([k,l])=>`<button class="chip ${p.nkind===k?'on':''}" data-nopkind="${k}">${l}</button>`).join('')}</div></div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="noDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>${p.nkind==='Price'?'Market value':p.nkind==='Buy'?'Face':'Amount'} ${esc(SYM[a.currency]||a.currency)}</label><input id="noAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+      </div>
+      <div class="field"><label>Note</label><input id="noNote" value="${esc(p.note)}"></div>
+      ${p.id==null?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-nopdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-nopclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-nopsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+
 function accountPage(a){
   if (isFund(a)) return fundAccountPage(a);
   if (isProp(a)) return propertyPage(a);
   if (isLife(a)) return lifePage(a);
   if (isBond(a)) return bondPage(a);
   if (isOpt(a)) return optPage(a);
+  if (isNotes(a)) return notesPage(a);
   const p = state.page;
   const Y = theYear();
   const f = opFilter();
@@ -3703,6 +3864,7 @@ function accessDefault(a){
   if (isPel(a)) return a.opened ? 'Withdrawable from ' + dLabel(String(+a.opened.slice(0,4)+4) + a.opened.slice(4)) + ' (four years); the plan ends ' + dLabel(String(+a.opened.slice(0,4)+15) + a.opened.slice(4)) : 'Withdrawable four years after opening; the plan ends after fifteen';
   if (isBond(a)) { const b = bondsHeld(a, TODAY()); return b.length ? b.map((x)=>'cashable from ' + ymLabel(ymAdd(x.issue, 12)) + ', full value from ' + ymLabel(ymAdd(x.issue, 60)) + ', stops earning ' + ymLabel(ymAdd(x.issue, 360))).filter((v,i,l)=>l.indexOf(v)===i).join('; ') : 'Cashable after one year, full value after five, earns for thirty'; }
   if (isLife(a)) return 'Cash value by surrender or policy loan; the death benefit on death';
+  if (isNotes(a)) { const m = fundsOf(a).map((f)=>(f.terms||{}).matures).filter(Boolean).sort(); return m.length ? 'Paid at maturity (' + m.map(dLabel).filter((v,i,l)=>l.indexOf(v)===i).join(', ') + '); sold before, at the market\'s price through the broker' : 'Paid at maturity; sold before, at the market\'s price'; }
   if (isProp(a)) return 'Real estate: a sale takes months; the mortgage is repaid from the price';
   if (isOpt(a)) return 'Vested options can be exercised until they expire; 60 days after leaving the company';
   if (isFund(a)) return /IRA|401/i.test(a.key) ? 'Retirement account: withdrawals before age 59½ carry a 10% penalty' : 'Sold on request, settled in days';
@@ -3711,6 +3873,7 @@ function accessDefault(a){
 function taxDefault(a){
   if (isPel(a)) return 'Interest taxed in France (flat tax and social charges)';
   if (isBond(a)) return 'US federal income tax on the interest when cashed; no state tax';
+  if (isNotes(a)) return 'The gain taxed when the note pays or is sold';
   if (isLife(a)) return 'Growth tax-deferred; the death benefit paid income-tax free';
   if (isOpt(a)) return 'The gain at exercise taxed as pay; a later gain as capital gain';
   if (isFund(a)) return /IRA|401/i.test(a.key) ? 'Roth: withdrawals tax-free after 59½; Traditional: taxed as income' : 'Gains taxed when sold';
@@ -3859,7 +4022,7 @@ function settingsData(){
     ${state.pending.files.length>1?`<div class="sub" style="margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(f.name)}</div>`:''}
     <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
-        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
+        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
@@ -4195,9 +4358,9 @@ function wire(){
     const pend=state.pending; if (!pend) return;
     try {
       const got = { accounts:0, ops:0, adjusted:0, names:0, touched:new Set() };
-      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; for (const t of r.touched) got.touched.add(t); }
+      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
@@ -4225,7 +4388,7 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.fview='year'; state.whatif=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.fview='year'; state.nview='summary'; state.whatif=null; render(); });
   document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
@@ -4418,6 +4581,29 @@ function wire(){
     if (kind==='mortgage') { a.mortgage=null; state.page=null; commit('Config'); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset[kind]); state.page=null; commit(a.key); });
   delP('data-pvaldelete', 'pvaldelete'); delP('data-pexpdelete', 'pexpdelete'); delP('data-pmortdelete', 'mortgage');
+
+  /* market-linked notes: views and operations */
+  const notesAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isNotes(a) ? a : null; };
+  document.querySelectorAll('[data-nview]').forEach((el)=>el.onclick=()=>{ state.nview=el.dataset.nview; state.page=null; render(); });
+  const NO = [['noDate','date'],['noAmount','amount'],['noNote','note']];
+  const openNo = (id) => { const a = notesAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
+    const cur = { date:o?o.date:dflt(), nfund:o?(o.fund||''):(fundsOf(a)[0]||{}).name||'', nkind:o?(o.kind||'Price'):'Price', amount:o&&o.amount!=null?String(o.amount):'', note:o?(o.note||''):'' };
+    state.page={ kind:'nop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-nopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear())) openNo(null); });
+  document.querySelectorAll('[data-nopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.nopedit)) openNo(el.dataset.nopedit); });
+  document.querySelectorAll('[data-nopkind]').forEach((el)=>el.onclick=()=>{ readP(NO); state.page.nkind=el.dataset.nopkind; render(); });
+  document.querySelectorAll('[data-nopfund]').forEach((el)=>el.onclick=()=>{ readP(NO); state.page.nfund=el.dataset.nopfund; render(); });
+  if (state.page && state.page.kind==='nop') for (const [id] of NO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
+  closeP(NO, ['date','nfund','nkind','amount','note'], 'data-nopclose');
+  document.querySelectorAll('[data-nopsave]').forEach((el)=>el.onclick=()=>{ readP(NO); const p=state.page, a=notesAcc(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
+    const amt = num(p.amount);
+    const o = { id:p.id||uid(), date:p.date, fund:p.nfund, kind:p.nkind, amount: p.nkind==='Fee' || p.nkind==='Sell' ? -Math.abs(amt) : Math.abs(amt), name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!fundsOf(a).some((f)=>f.name===o.fund)) { alert('Which note.'); render(); return; } if (!(Math.abs(o.amount) > 0)) { alert('An amount.'); render(); return; }
+    const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) Object.assign(list[i], o); else list.push(o);
+    state.page=null; commit(a.key); });
+  document.querySelectorAll('[data-nopdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page, a=notesAcc(); if (!a) return; if (p.id && closedGuard(opDateById(p.id))) return;
+    if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.nopdelete); state.page=null; commit(a.key); });
 
   /* savings bonds: views and operations */
   const bondAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isBond(a) ? a : null; };

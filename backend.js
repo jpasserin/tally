@@ -57,8 +57,8 @@
   /* Month-end exchange rates for the years from..to, fetched by the script
      from the ECB and kept in the sheet's Rates tab. */
   const rates = (cfg, from, to) => call(cfg, 'rates', { from, to });
-  /* Fund prices and I bond rates, fetched by the script now and written to
-     the sheet's Live tab; the rows come back for the app to keep. */
+  /* Fund prices, index levels and I bond rates, fetched by the script now and
+     written to the sheet's Live tab; the rows come back for the app to keep. */
   const live = (cfg) => call(cfg, 'live');
 
   return { call, ping, pull, push, rates, live };
