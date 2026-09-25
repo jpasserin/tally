@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=138"></script>
+<script src="backend.js?v=139"></script>
 <script>
-const APP_VERSION="138";
+const APP_VERSION="139";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2496,7 +2496,8 @@ const viewChips = (attr, cur) => `<span class="chips" style="margin-left:auto"><
 /* The costs table, by year or by month; a column with nothing in it is left out. */
 function costsTable(a, rows, labelOf){
   const kinds = PROP_KINDS.filter(([k])=>rows.some((r)=>r.by[k]));
-  const hasInt = rows.some((r)=>r.interest), yours = propShare(a)!==1;
+  /* the costs are his alone, whatever his share of the house: no 'yours' column */
+  const hasInt = rows.some((r)=>r.interest), yours = false;
   const cell = (v) => `<td>${v ? money(v, a.currency) : '—'}</td>`;
   return `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>${labelOf.head}</th>${hasInt?'<th>Interest</th>':''}${kinds.map(([k,l])=>`<th>${k==='Tax'?'Tax':l}</th>`).join('')}<th>Total</th>${yours?'<th>Yours</th>':''}</tr></thead>
@@ -2514,7 +2515,7 @@ function propSummary(a, Y){
     <h2>Value <span class="fbar"><span class="muted">${vals.length}</span><button class="gbtn" data-pvalnew="1"${LKY()}>+</button></span></h2>
     ${vals.length ? `<div class="rows">${vals.map((o)=>`
       <div class="row tap" data-pvaledit="${esc(o.id)}"><div class="k"><b>${esc(dLabel(o.date))}</b>${o.note?' <span class="muted" style="font-size:11.5px">'+esc(o.note)+'</span>':''}</div>
-        <span style="text-align:right"><span class="v">${money(o.amount, a.currency)}</span>${propShare(a)!==1?`<div class="muted" style="font-size:11px">${money(r2(o.amount*propShare(a)), a.currency)} yours</div>`:''}</span></div>`).join('')}</div>`
+        <span style="text-align:right"><span class="v">${money(o.amount, a.currency)}</span></span></div>`).join('')}</div>`
     : `<div class="hint" style="margin-top:0">No valuation yet.</div>`}
   </div>
   <div class="card">
@@ -2562,12 +2563,12 @@ function propExpenses(a, Y){
   return `
   <div class="card">
     <h2>Expenses <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-pexpnew="1"${LKY()}>+</button></span></h2>
-    <div class="kpis">${box('Interest', c.interest)}${box('Fees, taxes, works', r2(c.total-c.interest))}${box(propShare(a)!==1?'Yours in '+Y:'Total '+Y, propShare(a)!==1?c.mine:c.total)}</div>
+    <div class="kpis">${box('Interest', c.interest)}${box('Fees, taxes, works', r2(c.total-c.interest))}${box('Total '+Y, c.total)}</div>
     ${ops.length ? `<div class="rows" style="margin-top:8px">${ops.map((o)=>`
       <div class="row tap" data-pexpedit="${esc(o.id)}">
         <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(o.name||propKindLabel(o.kind))}</div>
           <div class="sub">${esc(o.date)} · ${esc(propKindLabel(o.kind))}${o.note?' · '+esc(o.note):''}</div></div>
-        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${propShare(a)!==1?`<div class="muted" style="font-size:11px">${money(r2(o.amount*propShare(a)), a.currency)} yours</div>`:''}</span>
+        <span style="text-align:right"><span class="v ${o.amount<0?'neg':'pos'}">${money(o.amount, a.currency)}</span>${''?`<div class="muted" style="font-size:11px">${money(r2(o.amount*propShare(a)), a.currency)} yours</div>`:''}</span>
       </div>`).join('')}</div>` : `<div class="hint" style="margin-top:8px">Nothing in ${Y}.</div>`}
   </div>`;
 }
@@ -3064,9 +3065,11 @@ const pctS = (r) => (r>=0?'+':'') + (Math.round(r*1000)/10).toFixed(1) + '%';
 const noteShort = (f) => (f.terms||{}).short || (f.name.split(/\s+/).filter((w)=>!/^\d/.test(w)).map((w)=>w[0]).join('').toUpperCase().slice(0,4) + String((f.terms||{}).matures||'').slice(2,4));
 const noteNowOf = (a) => fundsOf(a).find((f)=>f.name===state.nfund) || fundsOf(a)[0] || null;
 /* the note's value at each month's end: this year, or from the month before its issue to now */
-function notePoints(a, f, Y, hist){
+const NOTE_METRICS = [['value','Balance'],['worst','Worst']];
+const noteMetric = () => NOTE_METRICS.some(([k])=>k===state.nmet) ? state.nmet : 'value';
+function notePoints(a, f, Y, hist, key){
   const now = new Date().toISOString().slice(0,7);
-  const at = (end) => noteAt(a, f, end).value;
+  const at = (end) => { const n = noteAt(a, f, end); return key==='worst' ? (n.worst==null ? 0 : Math.round(n.worst*1000)/10) : n.value; };
   if (hist) {
     const first = ((f.terms||{}).issued || (fundOps(a, f.name).map((o)=>o.date).sort()[0] || '')).slice(0,7);
     if (!first) return [];
@@ -3076,7 +3079,8 @@ function notePoints(a, f, Y, hist){
   const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
   return [{ label:'1 Jan', values:{ v: at((Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ v: at(m+'-31') } })));
 }
-const noteSeries = () => [{ key:'v', label:'Value', color:'#3b82f6', money:true }];
+const fmtPct1 = (v) => (v>=0?'+':'') + v.toFixed(1) + '%';
+const noteSeries = (key) => key==='worst' ? [{ key:'v', label:'Worst index', color:'#3b82f6', money:false, fmt:fmtPct1 }] : [{ key:'v', label:'Value', color:'#3b82f6', money:true }];
 function notesPage(a){
   const p = state.page;
   const Y = theYear();
@@ -3123,15 +3127,16 @@ function noteCard(a, f, Y, end, hist){
   </div>`;
 }
 function noteChartCard(a, f, Y, hist){
-  const pts = notePoints(a, f, Y, hist);
+  const key = noteMetric();
+  const pts = notePoints(a, f, Y, hist, key);
   const n = pts.length;
   if (n < 2) return '';
   if (state.nbHi==null || state.nbHi > n-1 || state.nbHi < 1) state.nbHi = n-1;
   if (state.nbLo==null || state.nbLo >= state.nbHi) state.nbLo = 0;
   return `
   <div class="card">
-    <h2>${esc(noteShort(f))} <span class="muted" style="text-transform:none;letter-spacing:0">${hist?'since issue':Y}</span></h2>
-    ${rangeChart('nb', pts, noteSeries(), state.nbLo, state.nbHi)}
+    <h2>${esc(noteShort(f))} <span class="chips" style="margin-left:auto">${NOTE_METRICS.map(([k,l])=>`<button class="chip ${key===k?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nmet="${k}">${l}</button>`).join('')}</span></h2>
+    ${rangeChart('nb', pts, noteSeries(key), state.nbLo, state.nbHi)}
   </div>`;
 }
 function noteTable(a, f, Y, end, hist){
@@ -4623,7 +4628,8 @@ function wire(){
   document.querySelectorAll('[data-nsel]').forEach((el)=>el.onclick=()=>{ state.nfund=el.dataset.nsel; state.page=null; state.nbLo=state.nbHi=null; render(); });
   document.querySelectorAll('[data-nhist]').forEach((el)=>el.onclick=()=>{ state.nview=el.dataset.nhist; state.nbLo=state.nbHi=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account) { const na = store.accounts.find((x)=>x.key===state.account); const nf = na && isNotes(na) ? noteNowOf(na) : null;
-    if (nf) wireRangeChart('nb', notePoints(na, nf, theYear(), state.nview==='history'), noteSeries(), ()=>({ lo:state.nbLo, hi:state.nbHi }), (lo,hi)=>{ state.nbLo=lo; state.nbHi=hi; }); }
+    if (nf) wireRangeChart('nb', notePoints(na, nf, theYear(), state.nview==='history', noteMetric()), noteSeries(noteMetric()), ()=>({ lo:state.nbLo, hi:state.nbHi }), (lo,hi)=>{ state.nbLo=lo; state.nbHi=hi; }); }
+  document.querySelectorAll('[data-nmet]').forEach((el)=>el.onclick=()=>{ state.nmet=el.dataset.nmet; render(); });
   const NO = [['noDate','date'],['noAmount','amount'],['noNote','note']];
   const openNo = (id) => { const a = notesAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
     const cur = { date:o?o.date:dflt(), nfund:o?(o.fund||''):(noteNowOf(a)||{}).name||'', nkind:o?(o.kind||'Price'):'Price', amount:o&&o.amount!=null?String(o.amount):'', note:o?(o.note||''):'' };
