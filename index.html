@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=128"></script>
+<script src="backend.js?v=129"></script>
 <script>
-const APP_VERSION="128";
+const APP_VERSION="129";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1293,31 +1293,6 @@ function tidyCategories(){
   if (named) { named.type = 'Transfer'; named.tags.push('x'); }
   else store.categories.push({ name:'Transfer', type:'Transfer', tags:['Transfer','x'] });
   return true;
-}
-/* Once, at boot: the retirement money that was filed as Roth and is not.
-   Every IRA contribution is pre-tax, and in the 401k the two early funds -
-   FFFGX and RFHTX - and the rollover that came out of RFHTX are pre-tax too.
-   A fund position cannot be part Roth and part pre-tax, so the fund's
-   dividends, fees and sales move with its purchases. What stays Roth: the
-   JRLVX contributions, FFB 2045 C, and the cash sweep.
-   Returns the account keys it touched, so the push carries them. */
-function fixPretaxSources(){
-  if (store.taxSrcFix) return [];
-  const PRETAX_FUNDS = ['FFFGX','RFHTX'];
-  const touched = new Set();
-  for (const a of store.accounts) {
-    const ira = /IRA/i.test(a.key);
-    for (const o of opsOf(a.key)) {
-      if (o.src !== 'Roth') continue;
-      const pretax = ira
-        || (same(a.key, '401K') && (PRETAX_FUNDS.some((f)=>same(f, o.fund||'')) || /rollover/i.test(o.note||'')));
-      if (!pretax) continue;
-      o.src = 'Traditional';
-      touched.add(a.key);
-    }
-  }
-  store.taxSrcFix = 1;
-  return [...touched];
 }
 const cashAccounts = () => store.accounts.filter((a)=>!ownValue(a));
 /* Every category's total over a year ("2013") or a month ("2013-04"), in
@@ -4823,9 +4798,6 @@ function wire(){
 }
 
 if (!store.locked && tidyCategories()) { markDirty('Config'); save(); pushSoon(); }
-/* Locked stores wait: the flag is not set, so the fix runs when the lock
-   comes off and can go out with everything else. */
-if (!store.locked) { const fixed = fixPretaxSources(); if (fixed.length) { for (const k of fixed) markDirty(k); save(); pushSoon(); } else save(); }
 render();
 
 /* A fresh install with a connected sheet takes its config from the sheet, so
