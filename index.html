@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=132"></script>
+<script src="backend.js?v=133"></script>
 <script>
-const APP_VERSION="132";
+const APP_VERSION="133";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2233,7 +2233,7 @@ function fundAccountPage(a){
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero ${bal<0?'neg':''}">${money(bal, a.currency)}</div>
     ${balConv!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(balConv, store.cur)}</div>`:''}
-    ${listed.map((x)=>`<div class="herosub">${esc(x.name)} <b style="color:var(--txt)">${money(fundAt(a, x, end).value, a.currency)}</b></div>`).join('')}
+    ${accountBySource(a, end).rows.length ? '' : listed.map((x)=>`<div class="herosub">${esc(x.name)} <b style="color:var(--txt)">${money(fundAt(a, x, end).value, a.currency)}</b></div>`).join('')}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${a.closed?'closed · ':''}${Y}</div>
     ${(function(){ const { funds: cols, rows } = accountBySource(a, end); if (!rows.length) return ''; const total = rows.reduce((t,r)=>t+r.value, 0); return `
     <div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Source</th>${cols.map((f)=>`<th>${esc(f.name)}</th>`).join('')}<th>Value</th></tr></thead>
