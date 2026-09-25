@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=134"></script>
+<script src="backend.js?v=135"></script>
 <script>
-const APP_VERSION="134";
+const APP_VERSION="135";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -895,8 +895,10 @@ function importFile(j){
     for (const o of (j.ops && j.ops[a.key]) || []) {
       if (isClosedDate(o.date)) continue;                          /* a closed year keeps what it has */
       const isPrice = o.kind==='Price' || o.kind==='Grant';      /* no money moves: a price mark, a grant of options */
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || (!isPrice && (!isFinite(+o.amount) || +o.amount===0))) continue;
-      const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : Math.round(+o.amount*100)/100, note:String(o.note||''),
+      /* a row with no money: a price mark, a grant - or a move of shares between sources (shares, no amount) */
+      const sharesOnly = !isPrice && isFinite(+o.shares) && +o.shares!==0 && o.fund;
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || (!isPrice && !sharesOnly && (!isFinite(+o.amount) || +o.amount===0))) continue;
+      const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : (isFinite(+o.amount) ? Math.round(+o.amount*100)/100 : 0), note:String(o.note||''),
         tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount })),
         budget:String(o.budget||''), oneoff:!!o.oneoff };
       if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
