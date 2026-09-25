@@ -296,9 +296,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=137"></script>
+<script src="backend.js?v=138"></script>
 <script>
-const APP_VERSION="137";
+const APP_VERSION="138";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3058,72 +3058,108 @@ function oopSheet(p, a){
 }
 
 /* ------------------------------------------------------------------- notes --*/
-const NOTE_VIEWS = [['summary','Summary'],['ops','Operations']];
 const NOTE_KINDS = [['Buy','Bought'],['Fee','Fee'],['Sell','Redeemed'],['Price','Market value']];
 const pctS = (r) => (r>=0?'+':'') + (Math.round(r*1000)/10).toFixed(1) + '%';
+/* a note's short code for chips: the terms' `short`, else its initials and the maturity year */
+const noteShort = (f) => (f.terms||{}).short || (f.name.split(/\s+/).filter((w)=>!/^\d/.test(w)).map((w)=>w[0]).join('').toUpperCase().slice(0,4) + String((f.terms||{}).matures||'').slice(2,4));
+const noteNowOf = (a) => fundsOf(a).find((f)=>f.name===state.nfund) || fundsOf(a)[0] || null;
+/* the note's value at each month's end: this year, or from the month before its issue to now */
+function notePoints(a, f, Y, hist){
+  const now = new Date().toISOString().slice(0,7);
+  const at = (end) => noteAt(a, f, end).value;
+  if (hist) {
+    const first = ((f.terms||{}).issued || (fundOps(a, f.name).map((o)=>o.date).sort()[0] || '')).slice(0,7);
+    if (!first) return [];
+    const months = []; for (let m = first; m <= now; m = ymAdd(m, 1)) months.push(m);
+    return [{ label:mLabel(ymAdd(first, -1)), values:{ v: at(ymAdd(first, -1)+'-31') } }].concat(months.map((m)=>({ label:mLabel(m), values:{ v: at(m+'-31') } })));
+  }
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
+  return [{ label:'1 Jan', values:{ v: at((Y-1)+'-12-31') } }].concat(months.map((m)=>({ label:MON[+m.slice(5,7)-1], values:{ v: at(m+'-31') } })));
+}
+const noteSeries = () => [{ key:'v', label:'Value', color:'#3b82f6', money:true }];
 function notesPage(a){
   const p = state.page;
   const Y = theYear();
   const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
-  const view = NOTE_VIEWS.some(([k])=>k===state.nview) ? state.nview : 'summary';
+  const hist = state.nview==='history';
+  const funds = fundsOf(a), f = noteNowOf(a);
   const value = notesValueAt(a, end), paid = notesPaidAt(a, end);
   const conv1 = a.currency!==store.cur ? conv(value, a.currency, store.cur, yearMonth(Y)) : null;
   const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='nop' ? nopSheet(p, a) : '';
+  const rows = funds.map((x)=>({ f:x, n:noteAt(a, x, end) })).filter((r)=>r.n.paid || r.n.value);
   return widget + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
     <div class="hero">${money(value, a.currency)}</div>
     ${conv1!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(conv1, store.cur)}</div>`:''}
-    <div class="herosub">Paid in <b style="color:var(--txt)">${money(paid, a.currency)}</b> · Growth <b style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}</b>${paid>0?' ('+pctS((value-paid)/paid)+')':''}</div>
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
-    <div class="chips" style="margin-top:10px">${NOTE_VIEWS.map(([k,l])=>`<button class="chip ${view===k?'on':''}" data-nview="${k}">${l}</button>`).join('')}</div>
+    ${rows.length ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${esc(r.f.index||noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
+      <tr class="sum"><td>Total</td><td>${money(paid, a.currency)}</td><td>${money(value, a.currency)}</td><td style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}${paid>0?'<div class="muted" style="font-size:11px">'+pctS((value-paid)/paid)+'</div>':''}</td></tr></tbody></table></div>` : ''}
+    <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-nsel="${esc(x.name)}">${esc(noteShort(x))}</button>`).join('')}</div>
   </div>
-  ${view==='summary' ? fundsOf(a).map((f)=>noteCard(a, f, end)).join('') + notesMonths(a, Y, end) : notesOps(a, Y)}
+  ${f ? noteCard(a, f, Y, end, hist) + noteChartCard(a, f, Y, hist) + noteTable(a, f, Y, end, hist) : `<div class="card"><h2>Notes</h2><div class="hint" style="margin-top:0">No note yet.</div></div>`}
+  ${notesOps(a, f, Y)}
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
 }
-function noteCard(a, f, end){
+function noteCard(a, f, Y, end, hist){
   const t = f.terms || {}, n = noteAt(a, f, end);
-  const terms = [ (+t.participation||1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap'), t.barrier!=null && t.barrier!=='' ? 'barrier at ' + t.barrier + '% of the start' : '', t.priced ? 'priced ' + dLabel(t.priced) : '', t.matures ? 'matures ' + dLabel(t.matures) : '' ].filter(Boolean).join(' · ');
+  const chips = `<span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-nhist="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-nhist="history">History</button></span>`;
+  const line = (k, v) => v ? `<div class="herosub">${k} <b style="color:var(--txt)">${esc(v)}</b></div>` : '';
   return `
   <div class="card">
-    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">${esc(f.name)}</span> <span class="muted" style="text-transform:none;letter-spacing:0">${esc(f.index||'')}</span></h2>
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">${esc(f.name)}</span>${chips}</h2>
     <div class="hero ${n.value<n.paid?'neg':''}" style="font-size:24px">${money(n.value, a.currency)}</div>
-    <div class="herosub">Paid in <b style="color:var(--txt)">${money(n.paid, a.currency)}</b>${n.fees?' <span class="muted">(' + money(n.fees, a.currency) + ' fees)</span>':''} · Growth <b style="color:${n.interest<0?'var(--bad)':'var(--good)'}">${money(n.interest, a.currency)}</b>${n.paid>0?' ('+pctS(n.interest/n.paid)+')':''}</div>
-    <div class="herosub">${esc(terms)}</div>
+    ${line('Pay off:', (+t.participation||1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap'))}
+    ${line('Protection:', t.barrier!=null && t.barrier!=='' ? (100 - +t.barrier) + '% fall, one for one beyond' : '')}
+    ${line('Dates:', [t.priced ? dLabel(t.priced) : '', t.matures ? dLabel(t.matures) : ''].filter(Boolean).join(' to '))}
     ${n.levels.length ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px">
       <thead><tr><th>Index</th><th>Start</th><th>Now</th><th>Change</th></tr></thead>
       <tbody>${n.levels.map((l)=>`<tr${n.worst!=null && l.ret===n.worst?' class="sum"':''}><td>${esc(l.name||l.symbol)}</td><td>${(+l.initial).toLocaleString('en-US',{maximumFractionDigits:2})}</td><td>${l.at?l.at.close.toLocaleString('en-US',{maximumFractionDigits:2}):'—'}</td><td style="color:${l.ret==null?'var(--muted)':l.ret<0?'var(--bad)':'var(--good)'}">${l.ret==null?'—':pctS(l.ret)}</td></tr>`).join('')}</tbody>
     </table></div>
     <div class="hint" style="margin:4px 0 0">${n.unpriced ? 'No level yet for every index: Settings › Data › Live, or an indices file.' : `Levels as of ${dLabel(n.levels.map((l)=>l.at.date).sort()[0])} · worst ${pctS(n.worst)} → ${pctS(notePayoff(t, n.worst)-1)} on the face${n.matured?' · matured':''}`}</div>` : n.priced ? `<div class="hint" style="margin:4px 0 0">Market value of ${dLabel(n.asOf)}</div>` : ''}
-    ${t.plan ? `<div class="hint" style="margin:6px 0 0">${esc(t.plan)}</div>` : ''}
   </div>`;
 }
-function notesMonths(a, Y, end){
-  const now = new Date().toISOString().slice(0,7);
-  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now && m <= end.slice(0,7));
-  const funds = fundsOf(a); if (!funds.length || !months.length) return '';
+function noteChartCard(a, f, Y, hist){
+  const pts = notePoints(a, f, Y, hist);
+  const n = pts.length;
+  if (n < 2) return '';
+  if (state.nbHi==null || state.nbHi > n-1 || state.nbHi < 1) state.nbHi = n-1;
+  if (state.nbLo==null || state.nbLo >= state.nbHi) state.nbLo = 0;
   return `
   <div class="card">
-    <h2>By month</h2>
-    <div style="overflow-x:auto"><table class="fx">
-      <thead><tr><th>Month</th>${funds.map((f)=>`<th>${esc(f.name.split(' ')[0])}</th>`).join('')}<th>Worst</th><th>Value</th></tr></thead>
-      <tbody>${months.map((m)=>{ const vs = funds.map((f)=>noteAt(a, f, m+'-31')); const tot = vs.reduce((s,n)=>s+n.value, 0); const empty = !tot; const ws = vs.map((n)=>n.worst).filter((w)=>w!=null);
-        return `<tr${empty?' class="muted"':''}><td>${MON[+m.slice(5,7)-1]}</td>${vs.map((n)=>`<td>${n.value?money(n.value, a.currency):'—'}</td>`).join('')}<td style="color:${ws.length && Math.min(...ws)<0?'var(--bad)':'var(--good)'}">${ws.length?pctS(Math.min(...ws)):'—'}</td><td><b>${tot?money(r2(tot), a.currency):'—'}</b></td></tr>`; }).join('')}</tbody>
-    </table></div>
+    <h2>${esc(noteShort(f))} <span class="muted" style="text-transform:none;letter-spacing:0">${hist?'since issue':Y}</span></h2>
+    ${rangeChart('nb', pts, noteSeries(), state.nbLo, state.nbHi)}
   </div>`;
 }
-function notesOps(a, Y){
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+function noteTable(a, f, Y, end, hist){
+  const now = new Date().toISOString().slice(0,7);
+  let periods;
+  if (hist) { const first = +((f.terms||{}).issued || (fundOps(a, f.name).map((o)=>o.date).sort()[0] || String(Y))).slice(0,4); periods = []; for (let y = Math.min(THIS_YEAR, Y); y >= first; y--) periods.push({ label:String(y), end: y >= THIS_YEAR ? TODAY() : y+'-12-31' }); }
+  else periods = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now && m <= end.slice(0,7)).map((m)=>({ label:MON[+m.slice(5,7)-1], end:m+'-31' }));
+  const cell = (v) => v==null ? '—' : money(v, a.currency);
+  return `
+  <div class="card">
+    <h2>${hist?'By year':'By month'}</h2>
+    ${periods.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>${hist?'Year':'Month'}</th><th>Paid in</th><th>Worst</th><th>Growth</th><th>Value</th></tr></thead>
+      <tbody>${periods.map((pr)=>{ const n = noteAt(a, f, pr.end); const empty = !n.paid && !n.value;
+        return `<tr${empty?' class="muted"':''}><td>${pr.label}</td><td>${n.paid?cell(n.paid):'—'}</td><td style="color:${n.worst==null?'var(--muted)':n.worst<0?'var(--bad)':'var(--good)'}">${n.worst==null?'—':pctS(n.worst)}</td><td style="color:${n.interest<0?'var(--bad)':'var(--good)'}">${n.paid?cell(n.interest):'—'}</td><td><b>${n.value?cell(n.value):'—'}</b></td></tr>`; }).join('')}</tbody>
+    </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+function notesOps(a, f, Y){
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y) && (!f || o.fund===f.name)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
   const label = (k) => (NOTE_KINDS.find(([x])=>x===k)||[k,k])[1];
   return `
   <div class="card">
     <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-nopnew="1"${LKY()}>+</button></span></h2>
     ${ops.length ? `<div class="rows">${ops.map((o)=>`
       <div class="row tap ${o.kind==='Price'?'muted':''}" data-nopedit="${esc(o.id)}">
-        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(label(o.kind))} <span class="muted" style="font-weight:400">· ${esc(o.fund||'')}</span></div>
-          <div class="sub">${esc(o.date)}${o.note?' · '+esc(o.note):''}</div></div>
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(label(o.kind))}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}</div>
+          <div class="sub">${esc(o.date)}</div></div>
         <span class="v ${o.kind==='Price'?'':(o.amount<0?'neg':'pos')}">${money(o.amount, a.currency)}</span>
       </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
@@ -4388,7 +4424,7 @@ function wire(){
   /* a child's +: the account is hers from the start, a euro savings one until said otherwise */
   document.querySelectorAll('[data-accnewkid]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(null, { owners:[el.dataset.accnewkid], category:'Savings', currency:'EUR' }); });
   document.querySelectorAll('[data-accedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openAcc(+el.dataset.accedit); });
-  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.fview='year'; state.nview='summary'; state.whatif=null; render(); });
+  document.querySelectorAll('[data-accopen]').forEach((el)=>el.onclick=()=>{ state.account=el.dataset.accopen; state.page=null; state.opf=null; state.fund=null; state.abLo=state.abHi=null; state.fbLo=state.fbHi=null; state.abView='year'; state.ahLo=state.ahHi=null; state.pview='summary'; state.lview='summary'; state.bview='summary'; state.oview='summary'; state.fview='year'; state.nview='year'; state.nfund=null; state.nbLo=state.nbHi=null; state.whatif=null; render(); });
   document.querySelectorAll('[data-abview]').forEach((el)=>el.onclick=()=>{ state.abView=el.dataset.abview; state.page=null; render(); });
   if ((state.tab==='account' || state.tab==='kids') && state.account && state.abView==='history') { const a = store.accounts.find((x)=>x.key===state.account);
     if (a && !isFund(a)) wireRangeChart('ah', balanceHistory(a), AB_SERIES, ()=>({ lo:state.ahLo, hi:state.ahHi }), (lo,hi)=>{ state.ahLo=lo; state.ahHi=hi; }); }
@@ -4584,10 +4620,13 @@ function wire(){
 
   /* market-linked notes: views and operations */
   const notesAcc = () => { const a = store.accounts.find((x)=>x.key===state.account); return a && isNotes(a) ? a : null; };
-  document.querySelectorAll('[data-nview]').forEach((el)=>el.onclick=()=>{ state.nview=el.dataset.nview; state.page=null; render(); });
+  document.querySelectorAll('[data-nsel]').forEach((el)=>el.onclick=()=>{ state.nfund=el.dataset.nsel; state.page=null; state.nbLo=state.nbHi=null; render(); });
+  document.querySelectorAll('[data-nhist]').forEach((el)=>el.onclick=()=>{ state.nview=el.dataset.nhist; state.nbLo=state.nbHi=null; render(); });
+  if ((state.tab==='account' || state.tab==='kids') && state.account) { const na = store.accounts.find((x)=>x.key===state.account); const nf = na && isNotes(na) ? noteNowOf(na) : null;
+    if (nf) wireRangeChart('nb', notePoints(na, nf, theYear(), state.nview==='history'), noteSeries(), ()=>({ lo:state.nbLo, hi:state.nbHi }), (lo,hi)=>{ state.nbLo=lo; state.nbHi=hi; }); }
   const NO = [['noDate','date'],['noAmount','amount'],['noNote','note']];
   const openNo = (id) => { const a = notesAcc(); if (!a) return; const o = id==null ? null : opsOf(a.key).find((x)=>x.id===id);
-    const cur = { date:o?o.date:dflt(), nfund:o?(o.fund||''):(fundsOf(a)[0]||{}).name||'', nkind:o?(o.kind||'Price'):'Price', amount:o&&o.amount!=null?String(o.amount):'', note:o?(o.note||''):'' };
+    const cur = { date:o?o.date:dflt(), nfund:o?(o.fund||''):(noteNowOf(a)||{}).name||'', nkind:o?(o.kind||'Price'):'Price', amount:o&&o.amount!=null?String(o.amount):'', note:o?(o.note||''):'' };
     state.page={ kind:'nop', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-nopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear())) openNo(null); });
   document.querySelectorAll('[data-nopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.nopedit)) openNo(el.dataset.nopedit); });
