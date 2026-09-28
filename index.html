@@ -302,9 +302,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=142"></script>
+<script src="backend.js?v=143"></script>
 <script>
-const APP_VERSION="142";
+const APP_VERSION="143";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2020,10 +2020,14 @@ function prevSourceFor(year){
   return list.find((p)=>p.year===year) || list.find((p)=>p.year===year-1) || list[0] || null;
 }
 function prevFrom(year){ return year > THIS_YEAR ? year+'-01' : new Date().toISOString().slice(0,7); }
-function newPrevision(year){
+/* a new prevision in a currency: its lines from the source, converted at today's rate when the source was in another */
+function newPrevision(year, cur){
   const from = prevFrom(year), src = prevSourceFor(year);
-  const p = { id: uid(), year, created: TODAY(), from, cur: store.cur, tax: src ? (src.tax||0) : 0, lines: [] };
-  if (src) p.lines = src.lines.map((l)=>({ cat:l.cat, month: year+'-'+l.month.slice(5,7), amount:l.amount, note:l.note||'' })).filter((l)=>l.month >= from && store.categories.some((c)=>c.name===l.cat));
+  cur = CURRENCIES.includes(cur) ? cur : store.cur;
+  const p = { id: uid(), year, created: TODAY(), from, cur, tax: src ? (src.tax||0) : 0, lines: [] };
+  const now = new Date().toISOString().slice(0,7);
+  const amt = (v) => { if (!src || (src.cur||store.cur)===cur) return v; const c = conv(v, src.cur||store.cur, cur, now); return c==null ? v : r2(c); };
+  if (src) p.lines = src.lines.map((l)=>({ cat:l.cat, month: year+'-'+l.month.slice(5,7), amount:amt(l.amount), note:l.note||'' })).filter((l)=>l.month >= from && l.amount && store.categories.some((c)=>c.name===l.cat));
   return p;
 }
 /* the average a month a category ran at: this year so far, and the two before */
@@ -2082,8 +2086,11 @@ function pvNewSheet(pg){
     <div class="scrim" data-pvnewclose="1"></div>
     <div class="sheet${pg.fresh?' enter':''}">
       <h3>New prevision</h3>
-      <div class="field"><label>Year</label><div class="chips">${[THIS_YEAR, THIS_YEAR+1].map((y)=>`<button class="chip ${pg.year===y?'on':''}" data-pvyear="${y}">${y}</button>`).join('')}</div></div>
-      <div class="hint" style="margin:0 0 6px">${mLabel(from)} to Dec ${pg.year} · ${src ? 'pre-filled from the prevision of ' + dLabel(src.created) + ' (' + src.year + ')' : 'nothing to pre-fill'}</div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Year</label><div class="chips">${[THIS_YEAR, THIS_YEAR+1].map((y)=>`<button class="chip ${pg.year===y?'on':''}" data-pvyear="${y}">${y}</button>`).join('')}</div></div>
+        <div class="field" style="flex:1"><label>Currency</label><div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${pg.cur===c?'on':''}" data-pvcur="${c}">${c}</button>`).join('')}</div></div>
+      </div>
+      <div class="hint" style="margin:0 0 6px">${mLabel(from)} to Dec ${pg.year} in ${pg.cur} · ${src ? 'pre-filled from the prevision of ' + dLabel(src.created) + ' (' + src.year + (src.cur && src.cur!==pg.cur ? ', ' + src.cur + ' converted at today\'s rate' : '') + ')' : 'nothing to pre-fill'}</div>
       <div class="foot"><button class="btn close" data-pvnewclose="1">Close</button><button class="btn primary" data-pvcreate="1">Create</button></div>
     </div>
   </div>`;
@@ -2106,7 +2113,7 @@ function pvTaxSheet(pg){
 function pvCatSheet(pg){
   const p = prevById(pg.pid), c = store.categories.find((x)=>x.name===pg.cat); if (!p || !c) return '';
   const cur = p.cur || store.cur, sign = prevSign(c);
-  const avg = (Y) => money(prevAvg(c.name, Y), store.cur);
+  const avg = (Y) => { const v = prevAvg(c.name, Y), w = cur===store.cur ? v : conv(v, store.cur, cur, yearMonth(Y)); return money(w==null ? v : r2(w), w==null ? store.cur : cur); };
   const total = (mb) => r2(mb.lines.reduce((t,l)=>{ const v = num(l.amount); return t + (isFinite(v) ? Math.abs(v) : 0); }, 0)) * sign;
   return `
   <div class="sheetwrap">
@@ -5115,10 +5122,11 @@ function wire(){
   /* budgets */
   /* previsions */
   const pvCur = () => state.prev && prevById(state.prev);
-  document.querySelectorAll('[data-pvnew]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; state.page={ kind:'pvnew', year:THIS_YEAR, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-pvnew]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; state.page={ kind:'pvnew', year:THIS_YEAR, cur:store.cur, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-pvcur]').forEach((el)=>el.onclick=()=>{ state.page.cur=el.dataset.pvcur; render(); });
   document.querySelectorAll('[data-pvyear]').forEach((el)=>el.onclick=()=>{ state.page.year=+el.dataset.pvyear; render(); });
   document.querySelectorAll('[data-pvnewclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
-  document.querySelectorAll('[data-pvcreate]').forEach((el)=>el.onclick=()=>{ const p = newPrevision(state.page.year); previsions().push(p); state.prev=p.id; state.pvArm=false; state.page=null; commit('Prevision'); });
+  document.querySelectorAll('[data-pvcreate]').forEach((el)=>el.onclick=()=>{ const p = newPrevision(state.page.year, state.page.cur); previsions().push(p); state.prev=p.id; state.pvArm=false; state.page=null; commit('Prevision'); });
   document.querySelectorAll('[data-pvopen]').forEach((el)=>el.onclick=()=>{ state.prev=el.dataset.pvopen; state.pvArm=false; state.page=null; render(); });
   document.querySelectorAll('[data-pvback]').forEach((el)=>el.onclick=()=>{ state.prev=null; state.pvArm=false; state.page=null; render(); });
   document.querySelectorAll('[data-pvdelete]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; if (!state.pvArm) { state.pvArm=true; render(); return; }
