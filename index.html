@@ -302,20 +302,20 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=141"></script>
+<script src="backend.js?v=142"></script>
 <script>
-const APP_VERSION="141";
+const APP_VERSION="142";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
+const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, prev:null, pvArm:false, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
 /* The operations filter, per visit of an account page. */
 const blankFilter = () => ({ q:'', min:'', max:'', from:'', to:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
 const opFilter = () => state.opf || (state.opf = blankFilter());
@@ -1073,9 +1073,9 @@ async function syncLocked(){
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
-  const names = everything ? ['Config','Dismissed'].concat((store.indices||[]).length ? ['Indices'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const names = everything ? ['Config','Dismissed'].concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
-  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
   if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetsTab());
   state.sync={ msg:'Syncing…' }; render();
@@ -1155,6 +1155,7 @@ async function pullNow(keep){
   store.ops = ops;
   store.rates = rateRows(tab('Rates'));
   if (tab('Indices')) store.indices = readIndices(tab('Indices'));
+  if (tab('Prevision') && !keep.includes('Prevision')) store.previsions = readPrevision(tab('Prevision'));
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   /* what the script fetched since: taken in, and sent on to the record tabs */
   const took = absorbLive(readLive(tab('Live')));
@@ -1179,7 +1180,7 @@ const TABS = [
 const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
 const SCREENS = {
   summary: () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '') + subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
-  report:  () => subnav('report') + (sub('report')==='prevision' ? empty('Prevision') : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? empty('Bills') : tabReport()),
+  report:  () => subnav('report') + (sub('report')==='prevision' ? tabPrevision() : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? empty('Bills') : tabReport()),
   account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   kids: () => subnav('kids') + (sub('kids')==='accounts' ? tabKidsAccounts() : tabKidsSummary()),
   protection: () => subnav('protection') + (sub('protection')==='insurance' ? settingsInsurance() : tabRetirement()),
@@ -1962,6 +1963,174 @@ function warnBar(g){
 }
 
 /* ---------------------------------------------------------------- budgets --*/
+/* -------------------------------------------------------------- prevision --
+   A forecast of the year, made in January and made again when the year turns
+   out otherwise: each is kept with the day it was made; the latest is the one
+   a projection will read, the earlier ones say how far off it was. Per
+   category, per month, lines of an amount and a word (Gymnastic -400, Piano
+   -200); Taxes a rate on each month's income. Spendings and Taxes are
+   negative, Income and Savings positive, whichever way they are typed. Kept
+   in the sheet's Prevision tab, one row per line. */
+const PREV_HEADERS = ['Id','Year','Created','From','Currency','Tax','Category','Month','Amount','Description'];
+const PREV_TYPES = ['Necessity','Optional','Misc','Income','Savings'];
+const previsions = () => store.previsions || (store.previsions = []);
+const prevSorted = () => previsions().slice().sort((x,y)=> x.created<y.created ? 1 : x.created>y.created ? -1 : (x.year<y.year ? 1 : -1));
+const prevById = (id) => previsions().find((p)=>p.id===id) || null;
+const prevMonths = (p) => { const out = []; for (let m = p.from; m <= p.year+'-12'; m = ymAdd(m, 1)) out.push(m); return out; };
+const prevCats = () => store.categories.filter((c)=>PREV_TYPES.includes(c.type)).slice().sort((x,y)=>PREV_TYPES.indexOf(x.type)-PREV_TYPES.indexOf(y.type));
+const prevSign = (c) => c && (c.type==='Income' || c.type==='Savings') ? 1 : -1;
+const prevCatMonth = (p, cat, m) => r2(p.lines.filter((l)=>l.cat===cat && l.month===m).reduce((t,l)=>t+(l.amount||0), 0));
+const prevCatTotal = (p, cat) => r2(p.lines.filter((l)=>l.cat===cat).reduce((t,l)=>t+(l.amount||0), 0));
+const prevIncome = (p, m) => r2(store.categories.filter((c)=>c.type==='Income').reduce((t,c)=>t+prevCatMonth(p, c.name, m), 0));
+const prevTax = (p, m) => r2(-(+p.tax||0)/100 * prevIncome(p, m));
+function prevTotals(p){
+  const months = prevMonths(p);
+  const byType = (types) => r2(store.categories.filter((c)=>types.includes(c.type)).reduce((t,c)=>t+prevCatTotal(p, c.name), 0));
+  const income = byType(['Income']), spend = byType(['Necessity','Optional','Misc']), savings = byType(['Savings']);
+  const taxes = r2(months.reduce((t,m)=>t+prevTax(p, m), 0));
+  return { months, income, spend, savings, taxes, cash: r2(income + spend + taxes - savings) };
+}
+function previsionTab(){
+  const rows = [];
+  for (const p of prevSorted().reverse()) {
+    if (!p.lines.length) rows.push([p.id, p.year, p.created, p.from, p.cur||store.cur, p.tax||0, '', '', '', '']);
+    for (const l of p.lines.slice().sort((x,y)=>x.month<y.month?-1:x.month>y.month?1:0)) rows.push([p.id, p.year, p.created, p.from, p.cur||store.cur, p.tax||0, l.cat, l.month, l.amount, l.note||'']);
+  }
+  return { name:'Prevision', headers:PREV_HEADERS, rows };
+}
+function readPrevision(tab){
+  const heads = ((tab && tab.headers) || PREV_HEADERS).map((h)=>String(h).trim());
+  const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : r[i]; };
+  const day = (v) => v instanceof Date ? v.toISOString().slice(0,10) : String(v==null?'':v).trim().slice(0,10);
+  const ym = (v) => v instanceof Date ? v.toISOString().slice(0,7) : String(v==null?'':v).trim().slice(0,7);
+  const out = [];
+  for (const r of (tab && tab.rows) || []) {
+    const id = String(col(r,'Id')||'').trim(), year = +col(r,'Year'), created = day(col(r,'Created')), from = ym(col(r,'From'));
+    if (!id || !(year > 2000 && year < 2100) || !/^\d{4}-\d{2}-\d{2}$/.test(created) || !/^\d{4}-\d{2}$/.test(from)) continue;
+    let p = out.find((x)=>x.id===id);
+    if (!p) { p = { id, year, created, from, cur: CURRENCIES.includes(String(col(r,'Currency'))) ? String(col(r,'Currency')) : store.cur, tax: isFinite(+col(r,'Tax')) ? +col(r,'Tax') : 0, lines:[] }; out.push(p); }
+    const cat = String(col(r,'Category')||'').trim(), month = ym(col(r,'Month')), amount = +col(r,'Amount');
+    if (cat && /^\d{4}-\d{2}$/.test(month) && isFinite(amount) && amount) p.lines.push({ cat, month, amount: r2(amount), note: String(col(r,'Description')||'').trim() });
+  }
+  return out;
+}
+/* what a new prevision of a year starts from: the latest of that year, else the latest of the year before, else the latest of all */
+function prevSourceFor(year){
+  const list = prevSorted();
+  return list.find((p)=>p.year===year) || list.find((p)=>p.year===year-1) || list[0] || null;
+}
+function prevFrom(year){ return year > THIS_YEAR ? year+'-01' : new Date().toISOString().slice(0,7); }
+function newPrevision(year){
+  const from = prevFrom(year), src = prevSourceFor(year);
+  const p = { id: uid(), year, created: TODAY(), from, cur: store.cur, tax: src ? (src.tax||0) : 0, lines: [] };
+  if (src) p.lines = src.lines.map((l)=>({ cat:l.cat, month: year+'-'+l.month.slice(5,7), amount:l.amount, note:l.note||'' })).filter((l)=>l.month >= from && store.categories.some((c)=>c.name===l.cat));
+  return p;
+}
+/* the average a month a category ran at: this year so far, and the two before */
+const prevAvg = (cat, Y) => { const v = sumsByCategory(Y).out[cat] || 0; return r2(v / monthsIn(Y)); };
+function tabPrevision(){
+  const pg = state.page;
+  const widget = pg && pg.kind==='pvnew' ? pvNewSheet(pg) : pg && pg.kind==='pvcat' ? pvCatSheet(pg) : pg && pg.kind==='pvtax' ? pvTaxSheet(pg) : '';
+  const cur = state.prev && prevById(state.prev);
+  if (cur) return widget + previsionPage(cur);
+  state.prev = null;
+  const list = prevSorted();
+  return widget + `
+  <div class="card">
+    <h2>Prevision <button class="gbtn" data-pvnew="1"${LK()}>+</button></h2>
+    ${list.length ? `<div class="rows">${list.map((p, i)=>{ const t = prevTotals(p); return `
+      <div class="row tap" data-pvopen="${esc(p.id)}">
+        <div style="flex:1;min-width:0"><div class="k"><b>${p.year}</b> <span class="muted" style="font-size:11.5px">${mLabel(p.from)} to Dec · made ${dLabel(p.created)}${i===0?' · latest':''}</span></div>
+          <div class="sub">In ${money(t.income, p.cur||store.cur)} · Out ${money(-t.spend, p.cur||store.cur)} · Taxes ${money(-t.taxes, p.cur||store.cur)} · Savings ${money(t.savings, p.cur||store.cur)}</div></div>
+        <span class="v ${t.cash<0?'neg':'pos'}">${money(t.cash, p.cur||store.cur)}</span>
+      </div>`; }).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+function previsionPage(p){
+  const t = prevTotals(p), cur = p.cur || store.cur, n = t.months.length;
+  const perMo = (v) => money(r2(v / n), cur) + '/mo';
+  const row = (c) => { const v = prevCatTotal(p, c.name); return `
+      <div class="rrow tap" data-pvcat="${esc(c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}
+        <span class="muted" style="font-size:11.5px">${esc(c.type)}</span></span>
+        <span class="mo">${perMo(v)}</span><span class="v ${v<0?'neg':v>0?'pos':''}">${money(v, cur)}</span></div>`; };
+  const group = (title, types) => `
+  <div class="card">
+    <h2>${title}</h2>
+    ${prevCats().filter((c)=>types.includes(c.type)).map(row).join('') || '<div class="hint" style="margin-top:0">No category.</div>'}
+    ${types.includes('Taxes') ? `
+      <div class="rrow tap" data-pvtax="1"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor('Taxes')}"></span>Taxes
+        <span class="muted" style="font-size:11.5px">${+p.tax||0}% of the income</span></span>
+        <span class="mo">${perMo(t.taxes)}</span><span class="v ${t.taxes<0?'neg':''}">${money(t.taxes, cur)}</span></div>` : ''}
+  </div>`;
+  return `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${p.year}</b></span>
+      <span class="muted" style="text-transform:none;letter-spacing:0">${mLabel(p.from)} to Dec · made ${dLabel(p.created)}</span></h2>
+    <div class="hero ${t.cash<0?'neg':''}">${money(t.cash, cur)}</div>
+    <div class="herosub">left in cash over the ${n} month${n===1?'':'s'} · In ${money(t.income, cur)} · Out ${money(-t.spend, cur)} · Taxes ${money(-t.taxes, cur)} · Savings ${money(t.savings, cur)}</div>
+    <button class="btn danger ${state.pvArm?'arm':''}" style="width:100%;margin-top:10px" data-pvdelete="${esc(p.id)}"${LK()}>${state.pvArm?'Delete this prevision?':'Delete'}</button>
+  </div>
+  ${group('Spendings', ['Necessity','Optional','Misc'])}
+  ${group('Income, tax and savings', ['Income','Taxes','Savings'])}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-pvback="1">Close</button></div>`;
+}
+function pvNewSheet(pg){
+  const src = prevSourceFor(pg.year), from = prevFrom(pg.year);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-pvnewclose="1"></div>
+    <div class="sheet${pg.fresh?' enter':''}">
+      <h3>New prevision</h3>
+      <div class="field"><label>Year</label><div class="chips">${[THIS_YEAR, THIS_YEAR+1].map((y)=>`<button class="chip ${pg.year===y?'on':''}" data-pvyear="${y}">${y}</button>`).join('')}</div></div>
+      <div class="hint" style="margin:0 0 6px">${mLabel(from)} to Dec ${pg.year} · ${src ? 'pre-filled from the prevision of ' + dLabel(src.created) + ' (' + src.year + ')' : 'nothing to pre-fill'}</div>
+      <div class="foot"><button class="btn close" data-pvnewclose="1">Close</button><button class="btn primary" data-pvcreate="1">Create</button></div>
+    </div>
+  </div>`;
+}
+function pvTaxSheet(pg){
+  const p = prevById(pg.pid); if (!p) return '';
+  const inc = prevTotals(p).income, rate = num(pg.rate);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-pvtaxclose="1"></div>
+    <div class="sheet${pg.fresh?' enter':''}">
+      <h3>Taxes</h3>
+      <div class="field"><label>Rate % of each month's income</label><input id="pvTax" inputmode="decimal" value="${esc(pg.rate)}" style="text-align:right"></div>
+      <div class="hint" style="margin:0 0 6px">${isFinite(rate) ? money(r2(-rate/100*inc), p.cur||store.cur) + ' on ' + money(inc, p.cur||store.cur) + ' of income over the period' : 'A rate.'}</div>
+      <div class="foot"><button class="btn close ${pg.closeArm?'arm':''}" data-pvtaxclose="1">${pg.closeArm?'Close?':'Close'}</button><button class="btn primary" data-pvtaxsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+/* the category editor: a block per month of the period, lines of amount and word, + a line, Copy to chosen months */
+function pvCatSheet(pg){
+  const p = prevById(pg.pid), c = store.categories.find((x)=>x.name===pg.cat); if (!p || !c) return '';
+  const cur = p.cur || store.cur, sign = prevSign(c);
+  const avg = (Y) => money(prevAvg(c.name, Y), store.cur);
+  const total = (mb) => r2(mb.lines.reduce((t,l)=>{ const v = num(l.amount); return t + (isFinite(v) ? Math.abs(v) : 0); }, 0)) * sign;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-pvcatclose="1"></div>
+    <div class="sheet${pg.fresh?' enter':''}">
+      <h3><span class="dot" style="background:${typeColor(c.type)};display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:6px"></span>${esc(c.name)} <span class="muted" style="font-size:12px;font-weight:600">${esc(c.type)}</span></h3>
+      <div class="hint" style="margin:0 0 8px">A month: ${THIS_YEAR} so far <b>${avg(THIS_YEAR)}</b> · ${THIS_YEAR-1} <b>${avg(THIS_YEAR-1)}</b> · ${THIS_YEAR-2} <b>${avg(THIS_YEAR-2)}</b></div>
+      ${pg.months.map((mb, i)=>`
+      <div class="field" style="margin-bottom:8px">
+        <label style="display:flex;justify-content:space-between"><span>${mLabel(mb.m)}</span><span>${money(total(mb), cur)}</span></label>
+        ${mb.lines.map((l, j)=>`<div class="btnrow" style="margin-bottom:4px">
+          <input id="pvA${i}_${j}" inputmode="decimal" value="${esc(l.amount)}" placeholder="${sign<0?'−':'+'}" style="flex:0 0 96px;text-align:right">
+          <input id="pvN${i}_${j}" value="${esc(l.note)}" placeholder="what for" style="flex:1;min-width:0">
+          <button class="gbtn ${pg.arm===i+'|'+j?'':'ghost'}" style="${pg.arm===i+'|'+j?'background:var(--bad);border-color:var(--bad)':''}" data-pvline="del|${i}|${j}">${pg.arm===i+'|'+j?'×?':'×'}</button>
+        </div>`).join('')}
+        <div class="btnrow"><button class="gbtn ghost" data-pvline="add|${i}">+ line</button>${mb.lines.length && pg.months.length > 1 ? `<button class="gbtn ghost" data-pvcopy="${i}">Copy to…</button>` : ''}</div>
+        ${pg.copyFrom===i ? `<div class="chips" style="margin-top:6px">${pg.months.map((x, k)=> k===i ? '' : `<button class="chip ${pg.copyTo.includes(k)?'on':''}" data-pvto="${k}">${MON[+x.m.slice(5,7)-1]}</button>`).join('')}</div>
+        <div class="chips" style="margin-top:6px"><button class="chip" data-pvpat="1">Every month</button><button class="chip" data-pvpat="2">Every 2nd</button><button class="chip" data-pvpat="3">Every 3rd</button><button class="chip" data-pvpat="0">None</button></div>
+        <div class="btnrow" style="margin-top:6px"><button class="btn close" data-pvcopycancel="1">Cancel</button><button class="btn primary" data-pvcopygo="1">Copy to ${pg.copyTo.length} month${pg.copyTo.length===1?'':'s'}</button></div>` : ''}
+      </div>`).join('')}
+      <div class="foot"><button class="btn close ${pg.closeArm?'arm':''}" data-pvcatclose="1">${pg.closeArm?'Close?':'Close'}</button><button class="btn primary" data-pvcatsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
 function tabBudgets(){
   const p = state.page;
   const widget = p && p.kind==='budget' ? budgetSheet(p) : p && p.kind==='op' ? opSheet(p, opAcct()) : '';
@@ -4269,7 +4438,7 @@ function wire(){
      fresh plays the slide-up once - a redraw from Sync inside must not. */
   document.querySelectorAll('[data-about]').forEach((el)=>el.onclick=()=>{ state.about={ fresh:true }; state.sync=null; render(); state.about.fresh=false; });
   document.querySelectorAll('[data-aboutclose]').forEach((el)=>el.onclick=()=>{ state.about=null; render(); });
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.about=null; state.page=null; state.account=null; state.budget=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.about=null; state.page=null; state.account=null; state.budget=null; state.prev=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
     if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
@@ -4944,6 +5113,51 @@ function wire(){
     state.page=null; state.opAccount=null; commit(a.key); });
 
   /* budgets */
+  /* previsions */
+  const pvCur = () => state.prev && prevById(state.prev);
+  document.querySelectorAll('[data-pvnew]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; state.page={ kind:'pvnew', year:THIS_YEAR, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-pvyear]').forEach((el)=>el.onclick=()=>{ state.page.year=+el.dataset.pvyear; render(); });
+  document.querySelectorAll('[data-pvnewclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-pvcreate]').forEach((el)=>el.onclick=()=>{ const p = newPrevision(state.page.year); previsions().push(p); state.prev=p.id; state.pvArm=false; state.page=null; commit('Prevision'); });
+  document.querySelectorAll('[data-pvopen]').forEach((el)=>el.onclick=()=>{ state.prev=el.dataset.pvopen; state.pvArm=false; state.page=null; render(); });
+  document.querySelectorAll('[data-pvback]').forEach((el)=>el.onclick=()=>{ state.prev=null; state.pvArm=false; state.page=null; render(); });
+  document.querySelectorAll('[data-pvdelete]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; if (!state.pvArm) { state.pvArm=true; render(); return; }
+    store.previsions = previsions().filter((p)=>p.id!==el.dataset.pvdelete); state.prev=null; state.pvArm=false; commit('Prevision'); });
+  document.querySelectorAll('[data-pvtax]').forEach((el)=>el.onclick=()=>{ const p = pvCur(); if (!p || store.locked) return;
+    const cur = { rate: String(p.tax||'') }; state.page={ kind:'pvtax', pid:p.id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, fresh:true }; render(); state.page.fresh=false; });
+  const PT = [['pvTax','rate']];
+  if (state.page && state.page.kind==='pvtax') { const e=document.getElementById('pvTax'); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; }; }
+  closeP(PT, ['rate'], 'data-pvtaxclose');
+  document.querySelectorAll('[data-pvtaxsave]').forEach((el)=>el.onclick=()=>{ readP(PT); const p = pvCur(); if (!p) return; const r = String(state.page.rate).trim()==='' ? 0 : num(state.page.rate);
+    if (!isFinite(r) || r < 0 || r > 100) { alert('A rate between 0 and 100.'); render(); return; } p.tax = r; state.page=null; commit('Prevision'); });
+  /* the category editor */
+  const readPvCat = () => { const pg = state.page; if (!pg || pg.kind!=='pvcat') return;
+    pg.months.forEach((mb, i)=>mb.lines.forEach((l, j)=>{ const a=document.getElementById('pvA'+i+'_'+j), n=document.getElementById('pvN'+i+'_'+j); if (a) l.amount=a.value; if (n) l.note=n.value; })); };
+  const pvDirty = (pg) => JSON.stringify(pg.months) !== JSON.stringify(pg.was);
+  document.querySelectorAll('[data-pvcat]').forEach((el)=>el.onclick=()=>{ const p = pvCur(); if (!p || store.locked) return; const cat = el.dataset.pvcat;
+    const months = prevMonths(p).map((m)=>({ m, lines: p.lines.filter((l)=>l.cat===cat && l.month===m).map((l)=>({ amount:String(Math.abs(l.amount)), note:l.note||'' })) }));
+    state.page={ kind:'pvcat', pid:p.id, cat, months, was:JSON.parse(JSON.stringify(months)), copyFrom:null, copyTo:[], arm:null, closeArm:false, fresh:true }; render(); state.page.fresh=false; });
+  if (state.page && state.page.kind==='pvcat') document.querySelectorAll('input[id^="pvA"], input[id^="pvN"]').forEach((e)=>{ e.oninput=()=>{ state.page.closeArm=false; state.page.arm=null; }; });
+  document.querySelectorAll('[data-pvline]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page, [what, i, j] = el.dataset.pvline.split('|');
+    if (what==='add') { pg.months[+i].lines.push({ amount:'', note:'' }); pg.arm=null; }
+    else { const key = i+'|'+j; if (pg.arm!==key) { pg.arm=key; render(); return; } pg.months[+i].lines.splice(+j, 1); pg.arm=null; }
+    pg.closeArm=false; render(); });
+  document.querySelectorAll('[data-pvcopy]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page; pg.copyFrom=+el.dataset.pvcopy; pg.copyTo=[]; pg.arm=null; render(); });
+  document.querySelectorAll('[data-pvto]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page, k=+el.dataset.pvto; pg.copyTo = pg.copyTo.includes(k) ? pg.copyTo.filter((x)=>x!==k) : pg.copyTo.concat([k]).sort((a,b)=>a-b); render(); });
+  document.querySelectorAll('[data-pvpat]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page, step=+el.dataset.pvpat; pg.copyTo=[];
+    if (step) for (let k = pg.copyFrom + step; k < pg.months.length; k += step) pg.copyTo.push(k); render(); });
+  document.querySelectorAll('[data-pvcopycancel]').forEach((el)=>el.onclick=()=>{ readPvCat(); state.page.copyFrom=null; state.page.copyTo=[]; render(); });
+  document.querySelectorAll('[data-pvcopygo]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page; const src = pg.months[pg.copyFrom];
+    for (const k of pg.copyTo) pg.months[k].lines = JSON.parse(JSON.stringify(src.lines));
+    pg.copyFrom=null; pg.copyTo=[]; pg.closeArm=false; render(); });
+  document.querySelectorAll('[data-pvcatclose]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page; if (pvDirty(pg) && !pg.closeArm) { pg.closeArm=true; pg.arm=null; render(); return; } state.page=null; render(); });
+  document.querySelectorAll('[data-pvcatsave]').forEach((el)=>el.onclick=()=>{ readPvCat(); const pg = state.page, p = pvCur(), c = store.categories.find((x)=>x.name===pg.cat); if (!p || !c) return;
+    const sign = prevSign(c), lines = [];
+    for (const mb of pg.months) for (const l of mb.lines) { const raw = String(l.amount).trim(); if (raw==='') continue; const v = num(raw);
+      if (!isFinite(v)) { alert('An amount, or nothing: ' + raw); render(); return; } if (!v) continue;
+      lines.push({ cat:c.name, month:mb.m, amount: r2(sign * Math.abs(v)), note:String(l.note||'').trim() }); }
+    p.lines = p.lines.filter((l)=>l.cat!==c.name).concat(lines); state.page=null; commit('Prevision'); });
+
   const readBud=()=>{ const n=document.getElementById('bName'), a=document.getElementById('bAmount'), d=document.getElementById('bDate');
     if (n) state.page.name=n.value; if (a) state.page.amount=a.value; if (d) state.page.created=d.value; state.page.closeArm=false; state.page.delArm=false; };
   const openBud=(index)=>{ const b=index==null?null:store.budgets[index];
@@ -5090,7 +5304,7 @@ function wire(){
     const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
-  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.cat=null; state.warnKind=null; render(); });
+  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.prev=null; state.cat=null; state.warnKind=null; render(); });
   document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; state.catView='year'; state.chLo=state.chHi=null; render(); });
   document.querySelectorAll('[data-rcatview]').forEach((el)=>el.onclick=()=>{ state.catView=el.dataset.rcatview; state.page=null; render(); });
   if (state.tab==='report' && state.cat && state.catView==='history') { const c = store.categories.find((x)=>x.name===state.cat);
