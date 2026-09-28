@@ -302,9 +302,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=140"></script>
+<script src="backend.js?v=141"></script>
 <script>
-const APP_VERSION="140";
+const APP_VERSION="141";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -375,30 +375,41 @@ const ownValue = (a) => isFund(a) || isProp(a) || isLife(a) || isBond(a) || isOp
    Sell (redemption, negative), Price (a market value, the amount). */
 const indexAt = (symbol, end) => { let best = null; for (const r of (store.indices||[])) if (r.symbol===symbol && r.date <= end && (!best || r.date > best.date)) best = r; return best; };
 function notePayoff(t, worst){
-  const lev = +t.participation || 1, cap = t.cap!=null && t.cap!=='' ? +t.cap/100 : null, bar = t.barrier!=null && t.barrier!=='' ? +t.barrier/100 : 0;
+  const lev = t.participation!=null && t.participation!=='' && isFinite(+t.participation) ? +t.participation : 1, cap = t.cap!=null && t.cap!=='' ? +t.cap/100 : null, bar = t.barrier!=null && t.barrier!=='' ? +t.barrier/100 : 0;
   if (worst >= 0) { const g = worst*lev; return 1 + (cap!=null ? Math.min(g, cap) : g); }
   if (worst >= -(1-bar)) return 1;
   return 1 + worst;
 }
 function noteAt(a, f, end){
   const t = f.terms || {}; const ops = fundOps(a, f.name).filter((o)=>o.date <= end);
-  const face = r2(ops.reduce((s,o)=> o.kind==='Buy' ? s+(o.amount||0) : o.kind==='Sell' ? s-Math.abs(o.amount||0) : s, 0));
-  const fees = r2(ops.reduce((s,o)=> o.kind==='Fee' ? s+Math.abs(o.amount||0) : s, 0));
-  const paid = r2(face + fees);
-  const out = { paid, face, fees, value:0, interest:r2(-paid), worst:null, levels:[], asOf:end, priced:false, unpriced:false, matured: !!(t.matures && end >= t.matures) };
+  const sum = (k) => r2(ops.reduce((s,o)=> o.kind===k ? s+Math.abs(o.amount||0) : s, 0));
+  const bought = sum('Buy'), sold = sum('Sell'), fees = sum('Fee'), coupons = sum('Coupon');
+  /* paid: the face and the fees put in; got: what the note paid back - coupons, and the face when redeemed or called */
+  const face = r2(bought - sold), paid = r2(bought + fees), got = r2(sold + coupons);
+  const redeemed = face <= 0 && sold > 0 ? ops.filter((o)=>o.kind==='Sell').map((o)=>o.date).sort().pop() : null;
+  const out = { paid, face, fees, coupons, got, redeemed, value:0, interest:r2(got-paid), worst:null, levels:[], asOf:end, priced:false, unpriced:false, matured: !!(t.matures && end >= t.matures) };
   if (face <= 0) return out;
   const mark = ops.filter((o)=>o.kind==='Price' && o.amount > 0).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0];
-  if (mark) { out.value = r2(mark.amount); out.priced = true; out.asOf = mark.date; out.interest = r2(out.value - paid); return out; }
+  if (mark) { out.value = r2(mark.amount); out.priced = true; out.asOf = mark.date; out.interest = r2(out.value + got - paid); return out; }
   const asOf = t.valuation && end > t.valuation ? t.valuation : end;
   out.asOf = asOf;
   out.levels = (t.indices||[]).map((i)=>{ const at = indexAt(i.symbol, asOf); return { ...i, at, ret: at && +i.initial > 0 ? at.close / +i.initial - 1 : null }; });
-  if (!out.levels.length || out.levels.some((l)=>l.ret==null)) { out.value = face; out.unpriced = true; out.interest = r2(face - paid); return out; }
+  if (!out.levels.length || out.levels.some((l)=>l.ret==null)) { out.value = face; out.unpriced = true; out.interest = r2(face + got - paid); return out; }
   out.worst = Math.min(...out.levels.map((l)=>l.ret));
-  out.value = r2(face * notePayoff(t, out.worst)); out.interest = r2(out.value - paid);
+  out.value = r2(face * notePayoff(t, out.worst)); out.interest = r2(out.value + got - paid);
   return out;
 }
-const notesValueAt = (a, end) => r2(fundsOf(a).reduce((s,f)=>s + noteAt(a, f, end).value, 0));
-const notesPaidAt = (a, end) => r2(fundsOf(a).reduce((s,f)=>s + noteAt(a, f, end).paid, 0));
+/* the notes of the account, and its cash - a fund of kind cash, there since v141:
+   what was paid in, less what the notes cost, plus what they paid back */
+const notesOf = (a) => fundsOf(a).filter((f)=>f.kind!=='cash');
+const noteCash = (a) => fundsOf(a).find((f)=>f.kind==='cash') || null;
+function notesCashAt(a, end){
+  const c = noteCash(a); if (!c) return 0;
+  return r2(opsOf(a.key).filter((o)=>o.date <= end).reduce((s,o)=> same(o.fund||'', c.name) ? s + (o.amount||0)
+    : (o.kind==='Buy' || o.kind==='Fee') ? s - Math.abs(o.amount||0) : (o.kind==='Sell' || o.kind==='Coupon') ? s + Math.abs(o.amount||0) : s, 0));
+}
+const notesValueAt = (a, end) => r2(notesOf(a).reduce((s,f)=>s + noteAt(a, f, end).value, 0) + notesCashAt(a, end));
+const notesPaidAt = (a, end) => { const c = noteCash(a); return c ? r2(fundOps(a, c.name).filter((o)=>o.date <= end && o.kind!=='Interest').reduce((s,o)=>s+(o.amount||0), 0)) : r2(notesOf(a).reduce((s,f)=>s + noteAt(a, f, end).paid, 0)); };
 
 /* ---- Series I savings bonds (TreasuryDirect) ----
    Each row: the month a rate was announced (May, November), the semiannual
@@ -810,7 +821,7 @@ function readDismissed(tab){
 const OPS_HEADERS = ['Date','Name','Amount','Description','Tag','Splits','Budget','One-off','Id','Fund','Kind','Shares','Unit price','Source','Vest','Expire'];
 /* Where a fund's money came from - taxed differently, so followed apart:
    Roth and Traditional (his own), Match and Profit sharing (the employer's). */
-const SOURCES = ['Roth','Traditional','Match','Profit sharing'];
+const SOURCES = ['Roth','Traditional','Rollover','Match','Profit sharing'];
 function opsTab(a){
   return { name:a.key, headers:OPS_HEADERS,
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount==null?'':o.amount, o.note||'', o.tag,
@@ -3079,17 +3090,19 @@ function oopSheet(p, a){
 /* the price marks (a fund's, a note's, the company's) shown or not in the operation lists: one setting for the whole app */
 const priceSwitch = () => `<label class="switch mini"><span>Prices</span><input type="checkbox" id="showPrices" ${store.showPrices?'checked':''}><span class="track" data-showprices="1"></span></label>`;
 /* ------------------------------------------------------------------- notes --*/
-const NOTE_KINDS = [['Buy','Bought'],['Fee','Fee'],['Sell','Redeemed'],['Price','Market value']];
+const NOTE_KINDS = [['Buy','Bought'],['Fee','Fee'],['Coupon','Coupon'],['Sell','Redeemed'],['Price','Market value']];
+const CASH_NOTE_KINDS = [['Paid in','Paid in'],['Interest','Interest'],['Fee','Fee']];
+const noteKindLabel = (k) => (NOTE_KINDS.concat(CASH_NOTE_KINDS).find(([x])=>x===k)||[k,k])[1];
 const pctS = (r) => (r>=0?'+':'') + (Math.round(r*1000)/10).toFixed(1) + '%';
 /* a note's short code for chips: the terms' `short`, else its initials and the maturity year */
 const noteShort = (f) => (f.terms||{}).short || (f.name.split(/\s+/).filter((w)=>!/^\d/.test(w)).map((w)=>w[0]).join('').toUpperCase().slice(0,4) + String((f.terms||{}).matures||'').slice(2,4));
-const noteNowOf = (a) => fundsOf(a).find((f)=>f.name===state.nfund) || fundsOf(a)[0] || null;
+const noteNowOf = (a) => notesOf(a).find((f)=>f.name===state.nfund) || notesOf(a)[0] || null;
 /* the note's value at each month's end: this year, or from the month before its issue to now */
 const NOTE_METRICS = [['value','Balance'],['worst','Worst']];
 const noteMetric = () => NOTE_METRICS.some(([k])=>k===state.nmet) ? state.nmet : 'value';
 function notePoints(a, f, Y, hist, key){
   const now = nowMonth();
-  const at = (end) => { const n = noteAt(a, f, end); return key==='worst' ? (n.worst==null ? 0 : Math.round(n.worst*1000)/10) : n.value; };
+  const at = (end) => { const n = noteAt(a, f, end); return key==='worst' ? (n.worst==null ? 0 : Math.round(n.worst*1000)/10) : (n.redeemed ? n.got : n.value); };
   if (hist) {
     const first = ((f.terms||{}).issued || (fundOps(a, f.name).map((o)=>o.date).sort()[0] || '')).slice(0,7);
     if (!first) return [];
@@ -3106,8 +3119,8 @@ function notesPage(a){
   const Y = theYear();
   const end = Y >= THIS_YEAR ? TODAY() : Y+'-12-31';
   const hist = state.nview==='history';
-  const funds = fundsOf(a), f = noteNowOf(a);
-  const value = notesValueAt(a, end), paid = notesPaidAt(a, end);
+  const funds = notesOf(a), f = noteNowOf(a);
+  const value = notesValueAt(a, end), paid = notesPaidAt(a, end), cash = notesCashAt(a, end), hasCash = !!noteCash(a);
   const conv1 = a.currency!==store.cur ? conv(value, a.currency, store.cur, yearMonth(Y)) : null;
   const widget = p && p.kind==='account' ? accountSheet(p) : p && p.kind==='nop' ? nopSheet(p, a) : '';
   const rows = funds.map((x)=>({ f:x, n:noteAt(a, x, end) })).filter((r)=>r.n.paid || r.n.value);
@@ -3118,8 +3131,9 @@ function notesPage(a){
     <div class="hero">${money(value, a.currency)}</div>
     ${conv1!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(conv1, store.cur)}</div>`:''}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
-    ${rows.length ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${esc(r.f.index||noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
+    ${rows.length || hasCash ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${esc(r.f.index||noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${r.n.redeemed ? '<span class="muted" style="font-weight:400">redeemed</span>' : money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
+      ${hasCash ? `<tr><td>Cash</td><td>—</td><td><b>${money(cash, a.currency)}</b></td><td>—</td></tr>` : ''}
       <tr class="sum"><td>Total</td><td>${money(paid, a.currency)}</td><td>${money(value, a.currency)}</td><td style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}${paid>0?'<div class="muted" style="font-size:11px">'+pctS((value-paid)/paid)+'</div>':''}</td></tr></tbody></table></div>` : ''}
     <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-nsel="${esc(x.name)}">${esc(noteShort(x))}</button>`).join('')}</div>
   </div>
@@ -3135,9 +3149,12 @@ function noteCard(a, f, Y, end, hist){
   return `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">${esc(f.name)}</span>${chips}</h2>
-    <div class="hero ${n.value<n.paid?'neg':''}" style="font-size:24px">${money(n.value, a.currency)}</div>
-    ${line('Pay off:', (+t.participation||1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap'))}
-    ${line('Protection:', t.barrier!=null && t.barrier!=='' ? (100 - +t.barrier) + '% fall, one for one beyond' : '')}
+    <div class="hero ${n.interest<0?'neg':''}" style="font-size:24px">${money(n.redeemed ? n.got : n.value, a.currency)}</div>
+    ${n.redeemed ? line('Redeemed:', dLabel(n.redeemed) + ' · ' + money(n.got, a.currency) + ' back') : ''}
+    ${t.coupon ? line('Coupon:', t.coupon + '% a quarter while the worst index holds ' + (t.couponBarrier!=null && t.couponBarrier!=='' ? t.couponBarrier : t.barrier) + '% of its start') : ''}
+    ${t.call && t.call.from ? line('Callable:', 'from ' + dLabel(t.call.from) + ', quarterly, when every index is at or above ' + (t.call.value||100) + '% of its start') : ''}
+    ${line('Pay off:', +t.participation > 0 || t.participation==null || t.participation==='' ? (t.participation!=null && t.participation!=='' ? +t.participation : 1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap') : 'the face back at maturity')}
+    ${line('Protection:', t.barrier!=null && t.barrier!=='' ? (+t.barrier === 0 ? 'the face back whatever the fall' : (100 - +t.barrier) + '% fall, one for one beyond') : '')}
     ${line('Dates:', [t.priced ? dLabel(t.priced) : '', t.matures ? dLabel(t.matures) : ''].filter(Boolean).join(' to '))}
     ${n.levels.length ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px">
       <thead><tr><th>Index</th><th>Start</th><th>Now</th><th>Change</th></tr></thead>
@@ -3170,21 +3187,22 @@ function noteTable(a, f, Y, end, hist){
     <h2>${hist?'By year':'By month'}</h2>
     ${periods.length ? `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>${hist?'Year':'Month'}</th><th>Paid in</th><th>Worst</th><th>Growth</th><th>Value</th></tr></thead>
-      <tbody>${periods.map((pr)=>{ const n = noteAt(a, f, pr.end); const empty = !n.paid && !n.value;
+      <tbody>${periods.map((pr)=>{ const n = noteAt(a, f, pr.end); if (n.redeemed) n.value = n.got; const empty = !n.paid && !n.value;
         return `<tr${empty?' class="muted"':''}><td>${pr.label}</td><td>${n.paid?cell(n.paid):'—'}</td><td style="color:${n.worst==null?'var(--muted)':n.worst<0?'var(--bad)':'var(--good)'}">${n.worst==null?'—':pctS(n.worst)}</td><td style="color:${n.interest<0?'var(--bad)':'var(--good)'}">${n.paid?cell(n.interest):'—'}</td><td><b>${n.value?cell(n.value):'—'}</b></td></tr>`; }).join('')}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
 function notesOps(a, f, Y){
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y) && (!f || o.fund===f.name)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
-  const label = (k) => (NOTE_KINDS.find(([x])=>x===k)||[k,k])[1];
+  const c = noteCash(a);
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y) && (!f || o.fund===f.name || (c && same(o.fund||'', c.name)))).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const label = noteKindLabel;
   return `
   <div class="card">
     <h2>Operations <span class="fbar"><span class="muted">${ops.filter((o)=>store.showPrices || o.kind!=='Price').length}</span><button class="gbtn" data-nopnew="1"${LKY()}>+</button></span></h2>
     ${priceSwitch()}
     ${ops.filter((o)=>store.showPrices || o.kind!=='Price').length ? `<div class="rows">${ops.filter((o)=>store.showPrices || o.kind!=='Price').map((o)=>`
       <div class="row tap ${o.kind==='Price'?'muted':''}" data-nopedit="${esc(o.id)}">
-        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${esc(label(o.kind))}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}</div>
+        <div style="flex:1;min-width:0"><div class="k" style="font-weight:600">${c && same(o.fund||'', c.name) ? esc(c.name) + ' · ' : ''}${esc(label(o.kind))}${o.note?' <span class="muted" style="font-weight:400">· '+esc(o.note)+'</span>':''}</div>
           <div class="sub">${esc(o.date)}</div></div>
         <span class="v ${o.kind==='Price'?'':(o.amount<0?'neg':'pos')}">${money(o.amount, a.currency)}</span>
       </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
@@ -3195,9 +3213,9 @@ function nopSheet(p, a){
   <div class="sheetwrap">
     <div class="scrim" data-nopclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
-      <h3>${p.id==null?'New operation':esc((NOTE_KINDS.find(([x])=>x===p.was.nkind)||['',''])[1])}</h3>
+      <h3>${p.id==null?'New operation':esc(noteKindLabel(p.was.nkind))}</h3>
       <div class="field"><label>Note</label><div class="chips">${fundsOf(a).map((f)=>`<button class="chip ${p.nfund===f.name?'on':''}" data-nopfund="${esc(f.name)}">${esc(f.name)}</button>`).join('')}</div></div>
-      <div class="field"><label>Kind</label><div class="chips">${NOTE_KINDS.map(([k,l])=>`<button class="chip ${p.nkind===k?'on':''}" data-nopkind="${k}">${l}</button>`).join('')}</div></div>
+      <div class="field"><label>Kind</label><div class="chips">${(noteCash(a) && same(p.nfund, noteCash(a).name) ? CASH_NOTE_KINDS : NOTE_KINDS).map(([k,l])=>`<button class="chip ${p.nkind===k?'on':''}" data-nopkind="${k}">${l}</button>`).join('')}</div></div>
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Date</label><input id="noDate" type="date" value="${esc(p.date)}"></div>
         <div class="field" style="flex:1"><label>${p.nkind==='Price'?'Market value':p.nkind==='Buy'?'Face':'Amount'} ${esc(SYM[a.currency]||a.currency)}</label><input id="noAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
@@ -4692,12 +4710,15 @@ function wire(){
   document.querySelectorAll('[data-nopnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear())) openNo(null); });
   document.querySelectorAll('[data-nopedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !closedId(el.dataset.nopedit)) openNo(el.dataset.nopedit); });
   document.querySelectorAll('[data-nopkind]').forEach((el)=>el.onclick=()=>{ readP(NO); state.page.nkind=el.dataset.nopkind; render(); });
-  document.querySelectorAll('[data-nopfund]').forEach((el)=>el.onclick=()=>{ readP(NO); state.page.nfund=el.dataset.nopfund; render(); });
+  document.querySelectorAll('[data-nopfund]').forEach((el)=>el.onclick=()=>{ readP(NO); state.page.nfund=el.dataset.nopfund;
+    const c = noteCash(notesAcc()), isC = c && same(state.page.nfund, c.name);
+    if (isC && !CASH_NOTE_KINDS.some(([k])=>k===state.page.nkind)) state.page.nkind='Paid in'; if (!isC && !NOTE_KINDS.some(([k])=>k===state.page.nkind)) state.page.nkind='Price';
+    render(); });
   if (state.page && state.page.kind==='nop') for (const [id] of NO) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   closeP(NO, ['date','nfund','nkind','amount','note'], 'data-nopclose');
   document.querySelectorAll('[data-nopsave]').forEach((el)=>el.onclick=()=>{ readP(NO); const p=state.page, a=notesAcc(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const amt = num(p.amount);
-    const o = { id:p.id||uid(), date:p.date, fund:p.nfund, kind:p.nkind, amount: p.nkind==='Fee' || p.nkind==='Sell' ? -Math.abs(amt) : Math.abs(amt), name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
+    const o = { id:p.id||uid(), date:p.date, fund:p.nfund, kind:p.nkind, amount: p.nkind==='Fee' || p.nkind==='Sell' ? -Math.abs(amt) : p.nkind==='Paid in' ? amt : Math.abs(amt), name:'', note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!fundsOf(a).some((f)=>f.name===o.fund)) { alert('Which note.'); render(); return; } if (!(Math.abs(o.amount) > 0)) { alert('An amount.'); render(); return; }
     const list = opsOf(a.key), i = list.findIndex((x)=>x.id===o.id); if (i>=0) Object.assign(list[i], o); else list.push(o);
     state.page=null; commit(a.key); });
