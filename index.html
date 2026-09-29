@@ -311,20 +311,20 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=144"></script>
+<script src="backend.js?v=145"></script>
 <script>
-const APP_VERSION="144";
+const APP_VERSION="145";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], bills:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
-const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, prev:null, pvArm:false, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
+const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, prev:null, pvArm:false, bill:null, blView:'year', blLo:null, blHi:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
 /* The operations filter, per visit of an account page. */
 const blankFilter = () => ({ q:'', min:'', max:'', from:'', to:'', dir:'', inc:[], exc:[], sort:'date', desc:true, open:false, picking:null });
 const opFilter = () => state.opf || (state.opf = blankFilter());
@@ -785,7 +785,8 @@ function configTab(){
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
         Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'', Facts:a.facts&&Object.keys(a.facts).length?JSON.stringify(a.facts):'' })))
       .concat(store.accounts.filter((a)=>isFund(a) || isNotes(a)).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key, Policy: f.kind==='note' && f.terms ? JSON.stringify(f.terms) : '' }))))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' }))) };
+      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' })))
+      .concat((store.bills||[]).map((b)=>row({ Kind:'bill', Name:b.name, Tags:(b.tags||[]).join(', ') }))) };
 }
 /* The findings marked correct, in a tab of their own - there may be many.
    The key (kind|id) is what counts; the rest says what it was, for reading. */
@@ -870,7 +871,7 @@ function readOps(tab){
 }
 /* Read by header name, so a column added later never shifts an older one. */
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[], sources=[]; let closed = null, closedLocked = false;
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[], sources=[], bills=[]; let closed = null, closedLocked = false;
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -881,6 +882,7 @@ function readConfig(tab){
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
     if (kind==='closed' && /^\d{4}$/.test(name)) { closed = +name; closedLocked = type==='locked'; }
+    if (kind==='bill' && name) bills.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='source' && name) sources.push({ key:name, type: SOURCE_TYPES.includes(type) ? type : 'Funds', currency: CURRENCIES.includes(col(r,'Currency')) ? col(r,'Currency') : 'USD', owner: col(r,'Owners'), monthly: +col(r,'Amount')||0, account: col(r,'Account') });
     if (kind==='insurance' && name) { let f = {}; try { f = JSON.parse(col(r,'Policy')||'{}') || {}; } catch (e) { f = {}; }
       insurance.push({ id: String(f.id||uid()), name, kind: INSURANCE_KINDS.includes(type) ? type : 'Other', ...insuranceFacts(f) }); }
@@ -902,7 +904,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names, ibond, insurance, sources, closed, closedLocked };
+  return { categories:cats, people, accounts, budgets, names, ibond, insurance, sources, bills, closed, closedLocked };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -1156,7 +1158,7 @@ async function pullNow(keep){
   const tab = (n) => j.tabs.find((t)=>t.name===n);
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; store.sources=got.sources||[];
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; store.sources=got.sources||[];
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   const ops = {};
@@ -1189,7 +1191,7 @@ const TABS = [
 const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint" style="margin-top:0">Nothing yet.</div></div>`;
 const SCREENS = {
   summary: () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '') + subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
-  report:  () => subnav('report') + (sub('report')==='prevision' ? tabPrevision() : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? empty('Bills') : tabReport()),
+  report:  () => subnav('report') + (sub('report')==='prevision' ? tabPrevision() : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? tabBills() : tabReport()),
   account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   kids: () => subnav('kids') + (sub('kids')==='accounts' ? tabKidsAccounts() : tabKidsSummary()),
   protection: () => subnav('protection') + (sub('protection')==='insurance' ? settingsInsurance() : tabRetirement()),
@@ -2147,6 +2149,120 @@ function pvCatSheet(pg){
         </div>`).join('')}
       </div>
       <div class="foot"><button class="btn close ${pg.closeArm?'arm':''}" data-pvcatclose="1">${pg.closeArm?'Close?':'Close'}</button><button class="btn primary" data-pvcatsave="1">Save</button></div>
+    </div>
+  </div>`;
+}
+/* ------------------------------------------------------------------ bills --
+   The recurring costs worth watching year to year - phone, internet, power,
+   the insurances: a name and the tags that carry it. What a bill cost is
+   every operation of the family's cash accounts under one of its tags (split
+   parts included), read positive, in the shown currency. Config rows of kind
+   bill (Name, Tags). */
+const bills = () => store.bills || (store.bills = []);
+const billOf = (name) => bills().find((b)=>same(b.name, name)) || null;
+const billTag = (b, t) => !!t && (b.tags||[]).some((x)=>same(x, t));
+/* the bill's operations: all of them, or a year's; part = what the bill took, converted, as a cost (positive) */
+function billOps(b, year){
+  const out = [];
+  for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
+    if (year && o.date.slice(0,4)!==String(year)) continue;
+    let part = 0, hit = false;
+    for (const sp of o.splits) if (billTag(b, sp.tag)) { part += sp.amount; hit = true; }
+    if (billTag(b, o.tag)) { part += o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0); hit = true; }
+    if (hit) out.push({ o, a, part: -(conv(part, a.currency, store.cur, o.date.slice(0,7)) || 0) });
+  }
+  return out;
+}
+const billTotal = (b, year) => r2(billOps(b, year).reduce((t,x)=>t+x.part, 0));
+const billAvg = (b, year) => r2(billTotal(b, year) / monthsIn(year));
+/* the last twelve months, this one included, over twelve */
+function billAvg12(b){
+  const now = new Date().toISOString().slice(0,7), from = ymAdd(now, -11);
+  return r2(billOps(b).filter((x)=>{ const m = x.o.date.slice(0,7); return m >= from && m <= now; }).reduce((t,x)=>t+x.part, 0) / 12);
+}
+/* month by month from the first month it cost anything to now */
+function billMonths(b){
+  const by = {};
+  for (const x of billOps(b)) { const m = x.o.date.slice(0,7); by[m] = (by[m]||0) + x.part; }
+  const months = Object.keys(by).filter((m)=>by[m]).sort();
+  if (!months.length) return [];
+  const now = new Date().toISOString().slice(0,7), out = [];
+  for (let m = months[0]; m <= now; m = ymAdd(m, 1)) out.push({ label: mLabel(m), values: { v: r2(by[m]||0) } });
+  return out;
+}
+const BILL_COLOR = '#3b82f6';
+const blSeries = (b) => [{ key:'v', label:b.name, color:BILL_COLOR, money:true }];
+function tabBills(){
+  const p = state.page;
+  const widget = p && p.kind==='bill' ? billSheet(p) : p && p.kind==='op' ? opSheet(p, opAcct()) : '';
+  const cur = state.bill && billOf(state.bill);
+  if (cur) return widget + billPage(cur);
+  state.bill = null;
+  const Y = theYear(), ys = [Y-2, Y-1, Y];
+  const list = bills().slice().sort((x,y)=>x.name.localeCompare(y.name));
+  return widget + `
+  <div class="card">
+    <h2>Bills <button class="gbtn" data-billnew="1"${LK()}>+</button></h2>
+    ${list.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th></th>${ys.map((y)=>`<th>${y}</th>`).join('')}</tr></thead>
+      <tbody>${list.map((b)=>`<tr class="tap" data-billopen="${esc(b.name)}"><td><b>${esc(b.name)}</b></td>${ys.map((y)=>{ const v = billAvg(b, y); return `<td>${v ? money(v, store.cur) : '<span class="muted">—</span>'}</td>`; }).join('')}</tr>`).join('')}</tbody>
+    </table></div><div class="hint" style="margin:4px 0 0">A month, on average.</div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>`;
+}
+function billPage(b){
+  const Y = theYear(), hist = state.blView==='history';
+  const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0'));
+  const yearOps = billOps(b, Y);
+  const perMonth = months.map((m)=>r2(yearOps.filter((x)=>x.o.date.slice(0,7)===m).reduce((t,x)=>t+x.part, 0)));
+  const pts = hist ? billMonths(b) : [];
+  if (hist) { const n = pts.length; if (state.blHi==null || state.blHi > n-1 || state.blHi < 1) state.blHi = n-1; if (state.blLo==null || state.blLo >= state.blHi) state.blLo = 0; }
+  const yrows = years().filter((y)=>y<=THIS_YEAR).reverse().map((y)=>({ y, t: billTotal(b, y) })).filter((r)=>r.t).map((r)=>({ ...r, avg: r2(r.t / monthsIn(r.y)) }));
+  const shown = (hist ? billOps(b) : yearOps).sort((x,y)=>x.o.date<y.o.date?1:x.o.date>y.o.date?-1:0);
+  const chips = rot('data-blview', hist?'history':'year', [['year','This year'],['history','History']]);
+  return `
+  <div class="card">
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(b.name)}</b></span>
+      <button class="gbtn ghost" data-billedit="${esc(b.name)}"${LK()}>Edit</button></h2>
+    <div class="hero">${money(billAvg12(b), store.cur)}</div>
+    <div class="herosub">a month, last 12 months · ${esc((b.tags||[]).join(', '))}</div>
+  </div>
+  <div class="card">
+    <h2>By month${chips}</h2>
+    ${hist ? (pts.length > 1 ? rangeChart('bl', pts, blSeries(b), state.blLo, state.blHi) : '<div class="hint" style="margin-top:0">Nothing yet.</div>')
+           : columns({ labels:MON, values:perMonth, color:BILL_COLOR })}
+  </div>
+  <div class="card">
+    <h2>${hist ? 'By year' : 'This year'} <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur]||store.cur)}</span></h2>
+    ${hist ? (yrows.length ? `<table class="fx"><thead><tr><th>Year</th><th>Total</th><th>Per month</th></tr></thead>
+      <tbody>${yrows.map((r)=>`<tr><td>${r.y}</td><td>${money(r.t, store.cur)}</td><td><b>${money(r.avg, store.cur)}</b></td></tr>`).join('')}</tbody></table>` : '<div class="hint" style="margin-top:0">Nothing yet.</div>')
+         : `<table class="fx"><thead><tr><th>Month</th><th>Cost</th></tr></thead>
+      <tbody>${months.map((m,i)=>`<tr${perMonth[i]?'':' class="muted"'}><td>${MON[i]}</td><td>${perMonth[i] ? money(perMonth[i], store.cur) : '—'}</td></tr>`).join('')}
+      <tr class="sum"><td>Total</td><td><b>${money(r2(perMonth.reduce((t,v)=>t+v, 0)), store.cur)}</b></td></tr></tbody></table>`}
+  </div>
+  <div class="card">
+    <h2>Operations <span class="muted" style="text-transform:none;letter-spacing:0">${shown.length}${hist?'':' · '+Y}</span></h2>
+    ${opRowsMixed(shown)}
+  </div>
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-billback="1">Close</button></div>`;
+}
+const billDirty = (p) => JSON.stringify([p.name.trim(), p.tags.slice().sort()]) !== JSON.stringify([p.was.name, p.was.tags.slice().sort()]);
+function billSheet(p){
+  const isNew = p.index==null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-billclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New bill':esc(p.was.name)}</h3>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Name</label><input id="blName" value="${esc(p.name)}" placeholder="Phone"></div>
+        <div class="field" style="flex:1"><label>Find a tag</label><input id="blFind" value="" placeholder="type to narrow"></div>
+      </div>
+      <div class="field"><label>Tags <span class="muted">${p.tags.length ? '· ' + esc(p.tags.join(', ')) : ''}</span></label>
+        <div class="fpick">${store.categories.filter((c)=>c.type!=='Transfer').map((c)=>`<div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:2px 0"><span class="dot" style="background:${typeColor(c.type)}"></span><span class="muted" style="font-size:11.5px">${esc(c.name)}</span>
+          ${c.tags.map((t)=>`<button class="chip ${p.tags.some((x)=>same(x, t))?'on':''}" style="padding:2px 9px;font-size:11.5px" data-bltag="${esc(t)}">${esc(t)}</button>`).join('')}</div>`).join('')}</div></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-billdelete="${p.index}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-billclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-billsave="1">Save</button></div>
     </div>
   </div>`;
 }
@@ -4457,7 +4573,7 @@ function wire(){
      fresh plays the slide-up once - a redraw from Sync inside must not. */
   document.querySelectorAll('[data-about]').forEach((el)=>el.onclick=()=>{ state.about={ fresh:true }; state.sync=null; render(); state.about.fresh=false; });
   document.querySelectorAll('[data-aboutclose]').forEach((el)=>el.onclick=()=>{ state.about=null; render(); });
-  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.about=null; state.page=null; state.account=null; state.budget=null; state.prev=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-tab]').forEach((el)=>el.onclick=()=>{ state.tab=el.dataset.tab; state.about=null; state.page=null; state.account=null; state.budget=null; state.prev=null; state.bill=null; state.cat=null; state.warnKind=null; state.opf=null; render(); });
   document.querySelectorAll('[data-cur]').forEach((el)=>el.onclick=()=>{ store.cur=el.dataset.cur; save(); render(); });
   document.querySelectorAll('[data-yearstep]').forEach((el)=>el.onclick=()=>{ const ys=years(); const i=ys.indexOf(theYear())+(+el.dataset.yearstep);
     if (i>=0 && i<ys.length) { state.year=ys[i]; state.page=null; render(); } });
@@ -5132,6 +5248,36 @@ function wire(){
     state.page=null; state.opAccount=null; commit(a.key); });
 
   /* budgets */
+  /* bills */
+  const readBill = () => { const n=document.getElementById('blName'); if (n) state.page.name=n.value; };
+  const openBill = (index) => { const b = index==null ? null : bills()[index];
+    const cur = { name: b ? b.name : '', tags: b ? b.tags.slice() : [] };
+    state.page={ kind:'bill', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-billnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBill(null); });
+  document.querySelectorAll('[data-billedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBill(bills().findIndex((b)=>same(b.name, el.dataset.billedit))); });
+  document.querySelectorAll('[data-billopen]').forEach((el)=>el.onclick=()=>{ state.bill=el.dataset.billopen; state.blView='year'; state.blLo=state.blHi=null; state.page=null; render(); });
+  document.querySelectorAll('[data-billback]').forEach((el)=>el.onclick=()=>{ state.bill=null; state.page=null; render(); });
+  document.querySelectorAll('[data-blview]').forEach((el)=>el.onclick=()=>{ state.blView=el.dataset.blview; state.blLo=state.blHi=null; render(); });
+  if (state.tab==='report' && state.bill && state.blView==='history') { const b = billOf(state.bill);
+    if (b) wireRangeChart('bl', billMonths(b), blSeries(b), ()=>({ lo:state.blLo, hi:state.blHi }), (lo,hi)=>{ state.blLo=lo; state.blHi=hi; }); }
+  document.querySelectorAll('[data-bltag]').forEach((el)=>el.onclick=()=>{ readBill(); const t = el.dataset.bltag, p = state.page;
+    p.tags = p.tags.some((x)=>same(x, t)) ? p.tags.filter((x)=>!same(x, t)) : p.tags.concat([t]); p.closeArm=false; p.delArm=false; render(); });
+  const bln = document.getElementById('blName'), blf = document.getElementById('blFind');
+  if (bln && state.page && state.page.kind==='bill') bln.oninput=()=>{ state.page.name=bln.value; state.page.closeArm=false; state.page.delArm=false; };
+  /* narrowing the tags hides the chips in place: no redraw, the field keeps the focus */
+  if (blf && state.page && state.page.kind==='bill') blf.oninput=()=>{ const q = blf.value.trim().toLowerCase();
+    document.querySelectorAll('[data-bltag]').forEach((c)=>{ c.hidden = !!q && !c.dataset.bltag.toLowerCase().includes(q) && !state.page.tags.some((x)=>same(x, c.dataset.bltag)); }); };
+  document.querySelectorAll('[data-billclose]').forEach((el)=>el.onclick=()=>{ readBill(); const p=state.page; if (billDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; } state.page=null; render(); });
+  document.querySelectorAll('[data-billsave]').forEach((el)=>el.onclick=()=>{ readBill(); const p=state.page, name=p.name.trim();
+    if (!name) { alert('A name.'); render(); return; }
+    if (bills().some((b, i)=>i!==p.index && same(b.name, name))) { alert('"' + name + '" is taken.'); render(); return; }
+    if (!p.tags.length) { alert('At least one tag.'); render(); return; }
+    const b = { name, tags: p.tags.slice() };
+    if (p.index==null) bills().push(b); else { bills()[p.index] = b; if (state.bill && same(state.bill, p.was.name)) state.bill = name; }
+    state.page=null; commit('Config'); });
+  document.querySelectorAll('[data-billdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    bills().splice(+el.dataset.billdelete, 1); state.bill=null; state.page=null; commit('Config'); });
+
   /* previsions */
   const pvCur = () => state.prev && prevById(state.prev);
   document.querySelectorAll('[data-pvnew]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; state.page={ kind:'pvnew', year:THIS_YEAR, cur:store.cur, fresh:true }; render(); state.page.fresh=false; });
@@ -5324,7 +5470,7 @@ function wire(){
     const series = others.map((c)=>({ key:c, label:'1 '+base+' in '+c, color:FX_COLORS[c] }));
     wireRangeChart('fx', pts, series, ()=>({ lo:state.fxLo, hi:state.fxHi }), (lo,hi)=>{ state.fxLo=lo; state.fxHi=hi; });
   }
-  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.prev=null; state.cat=null; state.warnKind=null; render(); });
+  document.querySelectorAll('[data-sub]').forEach((el)=>el.onclick=()=>{ state.sub[state.tab]=el.dataset.sub; state.page=null; state.opf=null; state.budget=null; state.prev=null; state.bill=null; state.cat=null; state.warnKind=null; render(); });
   document.querySelectorAll('[data-rcatopen]').forEach((el)=>el.onclick=()=>{ state.cat=el.dataset.rcatopen; state.catMonths=[]; state.opf=null; state.page=null; state.catView='year'; state.chLo=state.chHi=null; render(); });
   document.querySelectorAll('[data-rcatview]').forEach((el)=>el.onclick=()=>{ state.catView=el.dataset.rcatview; state.page=null; render(); });
   if (state.tab==='report' && state.cat && state.catView==='history') { const c = store.categories.find((x)=>x.name===state.cat);
