@@ -311,9 +311,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=150"></script>
+<script src="backend.js?v=151"></script>
 <script>
-const APP_VERSION="150";
+const APP_VERSION="151";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2104,22 +2104,21 @@ function previsionPage(p){
                    : [past ? money(so, store.cur) : '—', money(pr, store.cur), money(all, store.cur)]; };
   const row = (c) => { const [a, b, d] = cells(f.soFar[c.name] || 0, f.pred[c.name] || 0); return `
       <tr class="tap" data-pvcat="${esc(c.name)}"><td>${dot(typeColor(c.type))}${esc(c.name)}</td><td>${a}</td><td>${b}</td><td><b>${d}</b></td></tr>`; };
-  const heads = monthly ? '<th>Category</th><th>A month so far</th><th>A month foreseen</th><th>A month, the year</th>' : '<th>Category</th><th>So far</th><th>Foreseen</th><th>The year</th>';
+  const heads = monthly ? '<th>Category</th><th>So far /mo</th><th>Foreseen /mo</th><th>Combined /mo</th>' : '<th>Category</th><th>So far</th><th>Foreseen</th><th>Combined</th>';
   const group = (title, types) => { const [ta, tb, td] = cells(-f.taxSoFar, -f.predTax); return `
   <div class="card">
     <h2>${title}</h2>
     <div style="overflow-x:auto"><table class="fx">
       <thead><tr>${heads}</tr></thead>
       <tbody>${prevCats().filter((c)=>types.includes(c.type)).map(row).join('')}
-      ${types.includes('Taxes') ? `<tr class="tap" data-pvtax="1"><td>${dot(typeColor('Taxes'))}Taxes <span class="muted" style="font-size:11px">${+p.tax||0}% of the income</span></td><td>${ta}</td><td>${tb}</td><td><b>${td}</b></td></tr>` : ''}</tbody>
+      ${types.includes('Taxes') ? `<tr class="tap" data-pvtax="1"><td>${dot(typeColor('Taxes'))}Taxes <span class="muted" style="font-size:11px">${+p.tax||0}%</span></td><td>${ta}</td><td>${tb}</td><td><b>${td}</b></td></tr>` : ''}</tbody>
     </table></div>
   </div>`; };
   return `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${p.year}</b></span>${chips}</h2>
-    <div class="herosub">From ${dLabel(p.created)}</div>
-    <div class="herosub">${MON[+p.from.slice(5,7)-1]} to Dec ${p.year}${past ? ' foreseen · ' + f.past + ' month' + (f.past===1?'':'s') + ' as they were' : ''}</div>
-    <div class="herosub">${esc(p.cur||store.cur)}${(p.cur||store.cur)!==store.cur ? ' · shown in ' + esc(store.cur) + ' at the rate of ' + mLabel((p.created||TODAY()).slice(0,7)) : ''}</div>
+    <div class="herosub">From ${dLabel(p.created)} - ${esc(p.cur||store.cur)}${(p.cur||store.cur)!==store.cur ? ' <span class="muted">· shown in ' + esc(store.cur) + ' at the rate of ' + mLabel((p.created||TODAY()).slice(0,7)) + '</span>' : ''}</div>
+    <div class="herosub">${MON[+p.from.slice(5,7)-1]} to Dec ${p.year}${past ? ' <span class="muted">· ' + f.past + ' month' + (f.past===1?'':'s') + ' as they were</span>' : ''}</div>
     <div style="margin-top:8px">${prevBoxes(f, monthly ? 12 : 1)}</div>
   </div>
   ${group('Spendings', ['Necessity','Optional','Misc'])}
