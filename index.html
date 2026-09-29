@@ -311,9 +311,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=146"></script>
+<script src="backend.js?v=147"></script>
 <script>
-const APP_VERSION="146";
+const APP_VERSION="147";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3442,7 +3442,7 @@ function notesPage(a){
     ${conv1!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(conv1, store.cur)}</div>`:''}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
     ${rows.length || hasCash ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${esc(r.f.index||noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${r.n.redeemed ? '<span class="muted" style="font-weight:400">redeemed</span>' : money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
+      <tbody>${rows.map((r)=>`<tr><td>${esc(noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${r.n.redeemed ? '<span class="muted" style="font-weight:400">redeemed</span>' : money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
       ${hasCash ? `<tr><td>Cash</td><td>—</td><td><b>${money(cash, a.currency)}</b></td><td>—</td></tr>` : ''}
       <tr class="sum"><td>Total</td><td>${money(paid, a.currency)}</td><td>${money(value, a.currency)}</td><td style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}${paid>0?'<div class="muted" style="font-size:11px">'+pctS((value-paid)/paid)+'</div>':''}</td></tr></tbody></table></div>` : ''}
     <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-nsel="${esc(x.name)}">${esc(noteShort(x))}</button>`).join('')}</div>
@@ -3460,7 +3460,9 @@ function noteCard(a, f, Y, end, hist){
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)">${esc(f.name)}</span>${chips}</h2>
     <div class="hero ${n.interest<0?'neg':''}" style="font-size:24px">${money(n.redeemed ? n.got : n.value, a.currency)}</div>
+    ${t.ref || t.cusip ? line('Ref:', [t.ref, t.cusip ? 'CUSIP ' + t.cusip : ''].filter(Boolean).join(' · ')) : ''}
     ${n.redeemed ? line('Redeemed:', dLabel(n.redeemed) + ' · ' + money(n.got, a.currency) + ' back') : ''}
+    ${!n.redeemed && n.face > 0 && t.call && t.call.premium ? line('If called:', money(r2(n.face * (1 + t.call.premium / 100)), a.currency) + ' on ' + dLabel(t.call.from) + ' (' + t.call.premium + '%)' + (t.call.step ? ', ' + t.call.step + '% more at each later review; nothing accrues in between' : '')) : ''}
     ${t.coupon ? line('Coupon:', t.coupon + '% a quarter while the worst index holds ' + (t.couponBarrier!=null && t.couponBarrier!=='' ? t.couponBarrier : t.barrier) + '% of its start') : ''}
     ${t.call && t.call.from ? line('Callable:', 'from ' + dLabel(t.call.from) + ', quarterly, when every index is at or above ' + (t.call.value||100) + '% of its start' + (t.call.premium ? ' · the face plus ' + t.call.premium + '%' + (t.call.step ? ', ' + t.call.step + '% more at each later review' : '') : '')) : ''}
     ${line('Pay off:', +t.participation > 0 || t.participation==null || t.participation==='' ? (t.participation!=null && t.participation!=='' ? +t.participation : 1) + 'x the worst index' + (t.cap!=null && t.cap!=='' ? ', at most +' + t.cap + '%' : ', no cap') : 'the face back at maturity')}
