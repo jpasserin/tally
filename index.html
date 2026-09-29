@@ -52,9 +52,7 @@
   .hint{font-size:12px;color:var(--muted);line-height:1.5;margin-top:4px;}
   .muted{color:var(--muted)}
 
-  .pillrow{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
   /* The sub-tab bar stays put under the header while the page scrolls. */
-  .pillrow.sticky{position:sticky;top:45px;z-index:15;background:var(--bg);padding:2px 0 10px;margin:-2px 0 6px}
 
   /* A widget over the bottom half of the screen. */
   .sheetwrap{position:fixed;inset:0;z-index:40}
@@ -192,9 +190,6 @@
   .drange{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
   .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-bottom:4px}
   .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
-  .pill{background:var(--card2);border:1px solid var(--line);border-radius:20px;padding:5px 11px;
-    color:var(--txt);font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit}
-  .pill.on{background:var(--accent);border-color:var(--accent);color:#fff}
 
   /* The lock: dark and open, or blue and shut. */
   .lockbtn{flex:0 0 auto;width:44px;padding:0;display:inline-flex;align-items:center;justify-content:center;background:var(--bg2)}
@@ -311,9 +306,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=151"></script>
+<script src="backend.js?v=152"></script>
 <script>
-const APP_VERSION="151";
+const APP_VERSION="152";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -344,7 +339,6 @@ const CURRENCIES = ['USD','EUR','AUD'];
    money reachable) and a type (how it is recorded). Cash first; other types
    will bring their own settings later. */
 const ACCOUNT_CATEGORIES = [['Cash','#3b82f6'], ['Savings','#4ade80'], ['Property','#fbbf24'], ['Excluded','#5b6170']];
-const catColor = (c) => (ACCOUNT_CATEGORIES.find(([k])=>k===c) || ['','#5b6170'])[1];
 const ACCOUNT_TYPES = ['Cash','Fund','PEL','Property','Life','Bond','Options','Notes'];
 /* A property: what it is worth (valuations, one every so often), what is
    still owed on it (a mortgage, worked out month by month), and what it
@@ -1152,11 +1146,6 @@ async function liveNow(quiet){
   } catch (e) { if (quiet) return; state.sync={ msg:e.message, bad:true }; }
   render();
 }
-/* the latest live mark of a fund: "live rate $17.36 · 22 Sep 2026", or none */
-function liveLine(a, f){
-  const m = fundOps(a, f.name).filter((o)=>o.kind==='Price' && /^live-/.test(o.id) && o.price > 0).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0];
-  return m ? `live rate <b>${money(m.price, a.currency)}</b> · ${dLabel(m.date)}` : '<span class="muted">no live rate</span>';
-}
 async function pullNow(keep){
   keep = keep || [];
   const j = await BK.pull(store.backend);
@@ -1260,7 +1249,6 @@ function rateLine(month){
 const CUR_COLORS = { USD:'#f87171', EUR:'#3b82f6', AUD:'#fbbf24' };
 /* 13.1k, 2.4M, 870 - one decimal once in thousands. */
 const kfmt1 = (v) => { const a = Math.abs(v); return a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; };
-const kfmt = (v) => { const a = Math.abs(v); const t = a >= 1e6 ? (v/1e6).toFixed(1)+'M' : a >= 1e4 ? Math.round(v/1e3)+'k' : a >= 1e3 ? (v/1e3).toFixed(1)+'k' : Math.round(v)+''; return t; };
 /* by: each currency's share in the SHOWN currency (for the bar); native: the
    same money as it actually sits, in its own currency (for the legend). */
 const NW_CATS = ['Cash','Savings','Property'];
@@ -2489,9 +2477,8 @@ function accountGroup(title, col, list, Y){
 
 /* ------------------------------------------------------------------- kids --
    The children's accounts: an account is a child's when every owner is a
-   Child in People. Kids ▸ Accounts lists them by child, the same way as the
+   Child in People. Kids > Accounts lists them by child, the same way as the
    family's; a row opens the same account page. */
-const KID_COLOR = '#c084fc';
 const kidCounted = (name) => kidAccounts(name).filter((a)=>a.category!=='Excluded');
 function tabKidsAccounts(){
   const p = state.page;
@@ -3114,26 +3101,6 @@ function bondPage(a){
   <div style="height:56px"></div>
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
 }
-/* What cashing everything would give at the end of the year shown - today,
-   for this year: nothing in a bond's first year; before five years, the
-   value less the last three months of interest. */
-function bondCashOut(a, Y, end){
-  const ym = end.slice(0,7), held = bondsHeld(a, end); if (!held.length) return '';
-  const when = Y >= THIS_YEAR ? 'today' : '31 Dec ' + Y;
-  const rows = held.map((b)=>{ const w = bondWorth(b, ym); return { b, w, can: w.months >= 12, free: w.months >= 60, from: ymAdd(b.issue, 12), freeFrom: ymAdd(b.issue, 60) }; });
-  const total = r2(rows.reduce((t,r)=>t + (r.can ? r.w.shown : 0), 0)), penalty = r2(rows.reduce((t,r)=>t + (r.can && !r.free ? r.w.held : 0), 0));
-  return `
-  <div class="card">
-    <h2>If cashed <span class="muted" style="text-transform:none;letter-spacing:0">${when}</span></h2>
-    <div class="rows">${rows.map((r)=>`
-      <div class="row"><span class="k">${ymLabel(r.b.issue)} · ${money(r.b.face, a.currency)}</span>
-        <span class="v ${r.can?'':'muted'}">${r.can ? money(r.w.shown, a.currency) : 'not before ' + ymLabel(r.from)}</span></div>
-      ${r.can && !r.free ? `<div class="row" style="display:block;padding-top:0"><div class="sub">penalty ${money(r.w.held, a.currency)}, the last three months' interest, until ${ymLabel(r.freeFrom)}</div></div>` : ''}`).join('')}
-      <div class="row"><span class="k"><b>You would get</b></span><span class="v"><b>${money(total, a.currency)}</b></span></div>
-    </div>
-    <div class="hint" style="margin:6px 0 0">An I bond cannot be cashed in its first year. Cashed before five years, it loses the last three months of interest - the difference between earned and shown${penalty?' ('+money(penalty, a.currency)+' here)':''}. Federal income tax is due on the interest the year it is cashed; none for the state.</div>
-  </div>`;
-}
 function bondSummary(a, Y, end){
   const ym = end.slice(0,7), held = bondsHeld(a, end);
   const rows = held.map((b)=>({ b, w: bondWorth(b, ym) }));
@@ -3687,8 +3654,6 @@ function tagPick(id, value, open){
     ${open?`<div class="fpick" style="margin-top:6px">${store.categories.map((c)=>`<button class="cat" data-tagset="${id}|${esc(c.name)}"><span class="dot" style="background:${typeColor(c.type)};margin-right:7px"></span>${esc(c.name)}</button>`
       + c.tags.filter((t)=>!same(t, c.name)).map((t)=>`<button class="tag" data-tagset="${id}|${esc(t)}">${esc(t)}</button>`).join('')).join('')}<button class="tag" data-tagset="${id}|">—</button></div>`:''}`;
 }
-const tagOptions = (sel) => `<option value="">—</option>` + store.categories.map((c)=>
-  `<optgroup label="${esc(c.name)}">${c.tags.map((t)=>`<option value="${esc(t)}" ${t===sel?'selected':''}>${esc(t)}</option>`).join('')}</optgroup>`).join('');
 /* The other side of a transfer: operations in every OTHER account within 60
    days of this one, opposite in sign and equal in size - same currency to
    the cent, another currency within 3% at the month's rate. */
@@ -4093,11 +4058,6 @@ function learnName(name, tag){
   let n = knownNames().find((x)=>canonName(x.name)===canonName(name));
   if (!n) { n = { name:String(name).trim(), tags:[] }; knownNames().push(n); }
   if (!n.tags.some((t)=>same(t, tag))) n.tags.push(tag);
-}
-function forgetName(name, tag){
-  const n = knownNames().find((x)=>canonName(x.name)===canonName(name)); if (!n) return;
-  n.tags = n.tags.filter((t)=>!same(t, tag));
-  if (!n.tags.length) store.names = knownNames().filter((x)=>x!==n);
 }
 /* The records' suggestions: every payee seen at least twice under a tag it
    is not yet known under, with the count and the tag's category. */
