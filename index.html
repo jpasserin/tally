@@ -306,9 +306,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=152"></script>
+<script src="backend.js?v=153"></script>
 <script>
-const APP_VERSION="152";
+const APP_VERSION="153";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -726,6 +726,8 @@ const money0 = (v, cur) => (v<0?'-':'') + (SYM[cur]||'') + Math.round(Math.abs(v
    tags, not instead. */
 const BUDGET_COLORS = ['#3b82f6','#4ade80','#fbbf24','#f87171','#c155ba','#7cb8ff','#33a569','#b68320'];
 const budgetOf = (name) => store.budgets.find((b)=>same(b.name, name)) || null;
+/* an operation under a budget marked Exclude from Report counts nowhere in Spendings */
+const excludedOp = (o) => !!(o && o.budget && (budgetOf(o.budget)||{}).exclude);
 /* Open ones first, then the closed, each group in its own order. */
 const budgetsSorted = () => store.budgets.filter((b)=>!b.closed).concat(store.budgets.filter((b)=>b.closed));
 /* What an operation may be put on: the open budgets - and the one it already
@@ -773,17 +775,57 @@ function configTab(){
       .concat(store.people.map((p)=>row({ Kind:'person', Name:p.name, Type:p.type })))
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
-      .concat((store.insurance||[]).map((x)=>row({ Kind:'insurance', Name:x.name, Type:x.kind, Policy:JSON.stringify(insuranceFacts(x)) })))
-      .concat((store.sources||[]).map((x)=>row({ Kind:'source', Name:x.key, Type:x.type, Currency:x.currency, Owners:x.owner||'', Amount:x.monthly||0, Account:x.account||'' })))
       .concat(closedYear()!=null ? [row({ Kind:'closed', Name:String(closedYear()), Type: store.lockClosed ? 'locked' : 'open' })] : [])
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:isProp(a)&&/^\d{4}-\d{2}-\d{2}/.test(a.sold||'')?a.sold:(a.closed?'yes':''),
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
         Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'', Facts:a.facts&&Object.keys(a.facts).length?JSON.stringify(a.facts):'' })))
       .concat(store.accounts.filter((a)=>isFund(a) || isNotes(a)).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key, Policy: f.kind==='note' && f.terms ? JSON.stringify(f.terms) : '' }))))
-      .concat(store.budgets.map((b)=>row({ Kind:'budget', Name:b.name, Currency:b.currency, Color:b.color, Amount:b.amount==null?'':b.amount, Date:b.created||'', Closed:b.closed?'yes':'' })))
-      .concat((store.bills||[]).map((b)=>row({ Kind:'bill', Name:b.name, Tags:(b.tags||[]).join(', ') }))) };
+ };
 }
+/* Budgets, Bills, Sources and Insurance each in a tab of their own (v153), so
+   a slip in one cannot reach the others. An older sheet still carries them as
+   Config rows: they are read from there when the tab is not in the sheet yet,
+   and written into the tabs on the next push. */
+const BUDGETS_HEADERS = ['Name','Color','Currency','Amount','Date','Closed','Exclude'];
+function budgetsTab(){
+  return { name:'Budgets', index:3, headers:BUDGETS_HEADERS, rows: store.budgets.map((b)=>[b.name, b.color, b.currency, b.amount==null?'':b.amount, b.created||'', b.closed?'yes':'', b.exclude?'yes':'']) };
+}
+const tabCol = (tab, fallback) => { const heads = ((tab && tab.headers) || fallback).map((h)=>String(h).trim()); return (r, h) => { const i = heads.indexOf(h); return i<0 || r[i]==null ? '' : r[i]; }; };
+function readBudgets(tab){
+  const col = tabCol(tab, BUDGETS_HEADERS), out = [];
+  for (const r of (tab && tab.rows) || []) { const name = String(col(r,'Name')).trim(); if (!name) continue; const d = dayOf(col(r,'Date'));
+    out.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color')) ? col(r,'Color') : BUDGET_COLORS[out.length % BUDGET_COLORS.length], currency: CURRENCIES.includes(col(r,'Currency')) ? col(r,'Currency') : 'USD',
+      amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null, created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d : TODAY(), closed: col(r,'Closed')==='yes', exclude: col(r,'Exclude')==='yes' }); }
+  return out;
+}
+const BILLS_HEADERS = ['Name','Tags'];
+function billsTab(){ return { name:'Bills', headers:BILLS_HEADERS, rows:(store.bills||[]).map((b)=>[b.name, (b.tags||[]).join(', ')]) }; }
+function readBills(tab){
+  const col = tabCol(tab, BILLS_HEADERS), out = [];
+  for (const r of (tab && tab.rows) || []) { const name = String(col(r,'Name')).trim(); if (name) out.push({ name, tags: splitTags(col(r,'Tags')) }); }
+  return out;
+}
+const SOURCES_HEADERS = ['Key','Type','Currency','Owner','Monthly','Account'];
+function sourcesTab(){ return { name:'Sources', headers:SOURCES_HEADERS, rows:(store.sources||[]).map((x)=>[x.key, x.type, x.currency, x.owner||'', x.monthly||0, x.account||'']) }; }
+function readSources(tab){
+  const col = tabCol(tab, SOURCES_HEADERS), out = [];
+  for (const r of (tab && tab.rows) || []) { const key = String(col(r,'Key')).trim().toUpperCase(); if (!key) continue;
+    out.push({ key, type: SOURCE_TYPES.includes(col(r,'Type')) ? col(r,'Type') : 'Funds', currency: CURRENCIES.includes(col(r,'Currency')) ? col(r,'Currency') : 'USD', owner: String(col(r,'Owner')).trim(), monthly: +col(r,'Monthly')||0, account: String(col(r,'Account')).trim() }); }
+  return out;
+}
+const INSURANCE_HEADERS = ['Id','Name','Kind','Insurer','Number','Contact','Premium','Covers','Beneficiaries','Renewal','Notes'];
+function insuranceTab(){ return { name:'Insurance', headers:INSURANCE_HEADERS, rows:(store.insurance||[]).map((x)=>[x.id, x.name, x.kind].concat(INS_KEYS.map((k)=>x[k]||''))) }; }
+function readInsurance(tab){
+  const col = tabCol(tab, INSURANCE_HEADERS), out = [];
+  for (const r of (tab && tab.rows) || []) { const name = String(col(r,'Name')).trim(); if (!name) continue;
+    const x = { id: String(col(r,'Id')).trim() || uid(), name, kind: INSURANCE_KINDS.includes(col(r,'Kind')) ? col(r,'Kind') : 'Other' };
+    for (const k of INS_KEYS) { const h = k[0].toUpperCase() + k.slice(1); const v = k==='renewal' ? dayOf(col(r,h)) : String(col(r,h)).trim(); if (v) x[k] = v; }
+    out.push(x); }
+  return out;
+}
+/* the sheet has the tab already (the old Budgets mirror, a list of operations, had no Color column) */
+const ownTab = (tab, name) => !!(tab && Array.isArray(tab.headers) && tab.headers.length && (name!=='Budgets' || tab.headers.map((h)=>String(h).trim()).includes('Color')));
 /* The findings marked correct, in a tab of their own - there may be many.
    The key (kind|id) is what counts; the rest says what it was, for reading. */
 /* The Indices tab: the market indices the notes follow, a row per symbol and
@@ -833,15 +875,15 @@ function opsTab(a){
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount==null?'':o.amount, o.note||'', o.tag,
       o.splits.map((sp)=>sp.tag+':'+sp.amount).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'', o.vest||'', o.until||'']) };
 }
-/* The third tab, "Budgets": every operation that carries a budget, one row
-   each, grouped by budget then date. A mirror for reading - the account tabs
+/* "Budget ops": every operation that carries a budget, one row each, grouped
+   by budget then date. A mirror for reading - the account tabs
    stay the record - rewritten with every push. */
-const BUDGETS_HEADERS = ['Budget','Date','Account','Name','Amount','Currency','Tag','Description','Id'];
-function budgetsTab(){
+const BUDGET_OPS_HEADERS = ['Budget','Date','Account','Name','Amount','Currency','Tag','Description','Id'];
+function budgetOpsTab(){
   const rows = [];
   for (const b of store.budgets) for (const {o,a} of budgetOps(b.name).sort((x,y)=>x.o.date<y.o.date?-1:x.o.date>y.o.date?1:0))
     rows.push([b.name, o.date, a.key, o.name, o.amount, a.currency, o.tag, o.note||'', o.id]);
-  return { name:'Budgets', index:3, headers:BUDGETS_HEADERS, rows };
+  return { name:'Budget ops', index:5, headers:BUDGET_OPS_HEADERS, rows };
 }
 function readOps(tab){
   const heads = ((tab && tab.headers) || OPS_HEADERS).map((h)=>String(h).trim());
@@ -931,7 +973,7 @@ function importFile(j){
   let srcs = 0;
   for (const x of (Array.isArray(j.sources) ? j.sources : [])) { if (!x || !x.key) continue;
     const clean = { key:String(x.key).trim().toUpperCase(), type: SOURCE_TYPES.includes(x.type) ? x.type : 'Funds', currency: CURRENCIES.includes(x.currency) ? x.currency : 'USD', owner:String(x.owner||''), monthly: isFinite(+x.monthly) ? +x.monthly : 0, account:String(x.account||'') };
-    const have = (store.sources||[]).find((y)=>y.key===clean.key); if (have) Object.assign(have, clean); else store.sources = (store.sources||[]).concat([clean]); srcs++; touched.add('Config'); }
+    const have = (store.sources||[]).find((y)=>y.key===clean.key); if (have) Object.assign(have, clean); else store.sources = (store.sources||[]).concat([clean]); srcs++; touched.add('Sources'); }
   /* the indices' levels (indices.js): a row per symbol and day, new or changed */
   let levels = 0;
   for (const r of (Array.isArray(j.indices) ? j.indices : [])) if (r && takeIndex(String(r.symbol||'').trim(), String(r.date||'').slice(0,10), +r.close)) { levels++; touched.add('Indices'); }
@@ -1084,11 +1126,11 @@ async function syncLocked(){
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
-  const names = everything ? ['Config','Dismissed'].concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const names = everything ? ['Config','Dismissed','Budgets','Bills','Sources','Insurance'].concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
-  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : n==='Budgets' ? budgetsTab() : n==='Bills' ? billsTab() : n==='Sources' ? sourcesTab() : n==='Insurance' ? insuranceTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
-  if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetsTab());
+  if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetOpsTab());
   state.sync={ msg:'Syncing…' }; render();
   try {
     const j = await BK.push(store.backend, tabs);
@@ -1140,7 +1182,7 @@ async function liveNow(quiet){
   try {
     const j = await BK.live(store.backend);
     const got = absorbLive(j.rows||[]);
-    store.liveAt = TODAY(); store.backendVersion = j.backend; save();
+    store.liveAt = TODAY(); store.liveTook = { at: new Date().toISOString(), prices: got.prices||0, levels: got.levels||0, rates: got.rates||0 }; store.backendVersion = j.backend; save();
     if ((got.prices || got.rates || got.levels) && !store.locked) pushSoon();
     state.sync={ msg:'Live: ' + got.prices + ' price' + (got.prices===1?'':'s') + ', ' + got.levels + ' index level' + (got.levels===1?'':'s') + ', ' + got.rates + ' rate announcement' + (got.rates===1?'':'s') + ' · ' + new Date().toTimeString().slice(0,5) };
   } catch (e) { if (quiet) return; state.sync={ msg:e.message, bad:true }; }
@@ -1156,6 +1198,12 @@ async function pullNow(keep){
     store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; store.sources=got.sources||[];
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
+  /* the tabs of their own where the sheet has them; else what Config still carries, sent on into the tabs */
+  let toTabs = false;
+  const own = (name, read, key) => { if (keep.includes(name)) return; const t = tab(name);
+    if (ownTab(t, name)) store[key] = read(t); else if ((store[key]||[]).length) toTabs = true; };
+  own('Budgets', readBudgets, 'budgets'); own('Bills', readBills, 'bills'); own('Sources', readSources, 'sources'); own('Insurance', readInsurance, 'insurance');
+  if (toTabs && !store.locked) { for (const n of ['Config','Budgets','Bills','Sources','Insurance']) markDirty(n); pushSoon(); }
   const ops = {};
   for (const a of store.accounts) ops[a.key] = keep.includes(a.key) && store.ops[a.key] ? store.ops[a.key] : readOps(tab(a.key));
   store.ops = ops;
@@ -1427,7 +1475,7 @@ const sumsByCategory = (year) => sumsFor(String(year));
 function sumsFor(prefix){
   const out = {}; let unfiled = 0;
   for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
-    if (!o.date.startsWith(prefix)) continue;
+    if (!o.date.startsWith(prefix) || excludedOp(o)) continue;
     const m = o.date.slice(0,7);
     const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount }));
     parts.push({ tag:o.tag, amount: o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0) });
@@ -1463,8 +1511,16 @@ function reportGroup(title, types, sums){
 function yearFigures(sums){
   const byType = (types) => store.categories.filter((c)=>types.includes(c.type)).reduce((t,c)=>t+(sums.out[c.name]||0), 0);
   const inc = byType(['Income']), out = -byType(['Necessity','Optional','Misc']), tax = -byType(['Taxes']), sav = -byType(['Savings']);
-  const r2 = (v) => Math.round(v*100)/100;
-  return { in:r2(inc), out:r2(out), tax:r2(tax), sav:r2(sav), cash:r2(inc-(out+tax+sav)), nw:r2(inc-(out+tax)) };
+  return sixFigures(inc, out, tax, sav);
+}
+/* the two derived ones, from the four summed: Cash = In − (Out + Taxes + Savings), Net worth change = In − (Out + Taxes) */
+const sixFigures = (inc, out, tax, sav) => ({ in:r2(inc), out:r2(out), tax:r2(tax), sav:r2(sav), cash:r2(inc-(out+tax+sav)), nw:r2(inc-(out+tax)) });
+/* the six boxes, two rows of three; perMonth divides for a /mo line, div scales the figure shown */
+function kpiBoxes(f, o){
+  o = o || {}; const cur = o.cur || store.cur, div = o.div || 1;
+  const box = (label, v, color, key) => `<div class="kpi">${o.explain?`<button class="qbtn" data-explain="${key}">?</button>`:''}<div class="l">${label}</div><div class="v" style="color:${color}">${money(r2(v/div), cur)}</div>${o.perMonth?`<div class="m">${money(Math.round(v/o.perMonth*100)/100, cur)}/mo</div>`:''}</div>`;
+  return `<div class="kpis">${box('In', f.in, 'var(--good)', 'in')}${box('Out', f.out, 'var(--bad)', 'out')}${box('Taxes', f.tax, 'var(--txt)', 'tax')}</div>
+    <div class="kpis" style="margin-top:6px">${box('Savings', f.sav, 'var(--accent)', 'sav')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)', 'cash')}${box(o.nwLabel||'Net worth change', f.nw, 'var(--txt)', 'nw')}</div>`;
 }
 /* The ? on a box: what the figure is, and the numbers it was made of. */
 const EXPLAIN = {
@@ -1508,17 +1564,10 @@ function monthsIn(year){
 }
 function summaryCard(Y){
   const f = yearFigures(sumsByCategory(Y));
-  const div = monthsIn(Y);
-  const box = (label, v, color, key) => `<div class="kpi"><button class="qbtn" data-explain="${key}">?</button><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, store.cur)}</div><div class="m">${money(Math.round(v/div*100)/100, store.cur)}/mo</div></div>`;
   return `
   <div class="card">
     <h2>Summary <span class="muted" style="text-transform:none;letter-spacing:0">${Y}</span></h2>
-    <div class="kpis">
-      ${box('In', f.in, 'var(--good)', 'in')}${box('Out', f.out, 'var(--bad)', 'out')}${box('Taxes', f.tax, 'var(--txt)', 'tax')}
-    </div>
-    <div class="kpis" style="margin-top:6px">
-      ${box('Savings', f.sav, 'var(--accent)', 'sav')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)', 'cash')}${box('Net worth change', f.nw, 'var(--txt)', 'nw')}
-    </div>
+    ${kpiBoxes(f, { explain:true, perMonth:monthsIn(Y) })}
   </div>`;
 }
 /* Report ▸ History: each year's monthly average, category by category -
@@ -1574,7 +1623,7 @@ function tabMonthly(){
 function categoryOps(name, year){
   const out = [];
   for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
-    if (o.date.slice(0,4)!==String(year)) continue;
+    if (o.date.slice(0,4)!==String(year) || excludedOp(o)) continue;
     let part = 0, hit = false;
     for (const sp of o.splits) if ((catOfTag(sp.tag)||{}).name===name) { part += sp.amount; hit = true; }
     if ((catOfTag(o.tag)||{}).name===name) { part += o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0); hit = true; }
@@ -2055,14 +2104,10 @@ function prevFigures(p){
   f.tax += predTax;
   for (const c in soFar) soFar[c] = r2(soFar[c]);
   for (const c in pred) pred[c] = r2(pred[c]);
-  return { in:r2(f.in), out:r2(f.out), tax:r2(f.tax), sav:r2(f.sav), cash:r2(f.in-(f.out+f.tax+f.sav)), nw:r2(f.in-(f.out+f.tax)), soFar, pred, taxSoFar:r2(taxSoFar), predTax:r2(predTax), past: prevPastMonths(p).length, ahead: prevMonths(p).length };
+  return { ...sixFigures(f.in, f.out, f.tax, f.sav), soFar, pred, taxSoFar:r2(taxSoFar), predTax:r2(predTax), past: prevPastMonths(p).length, ahead: prevMonths(p).length };
 }
 /* the six boxes: the year, or a month of it (the year over twelve) */
-function prevBoxes(f, div){
-  const box = (label, v, color) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${color}">${money(r2(v/div), store.cur)}</div></div>`;
-  return `<div class="kpis">${box('In', f.in, 'var(--good)')}${box('Out', f.out, 'var(--bad)')}${box('Taxes', f.tax, 'var(--txt)')}</div>
-    <div class="kpis" style="margin-top:6px">${box('Savings', f.sav, 'var(--accent)')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)')}${box('Net change', f.nw, 'var(--txt)')}</div>`;
-}
+const prevBoxes = (f, div) => kpiBoxes(f, { div, nwLabel:'Net change' });
 const prevMode = () => state.pvMode==='year' ? 'year' : 'month';
 function tabPrevision(){
   const pg = state.page;
@@ -2328,7 +2373,9 @@ function budgetPage(b){
     <div class="hero ${left!=null&&left<0?'neg':''}">${money(spent, store.cur)}</div>
     ${amt!=null?`<div class="herosub">of ${money(amt, store.cur)}${b.currency!==store.cur?' ('+money(b.amount, b.currency)+' at '+esc(b.created)+')':''} · <b style="color:${left>=0?'var(--good)':'var(--bad)'}">${left>=0?money(left, store.cur)+' left':money(-left, store.cur)+' over'}</b></div>
     <div class="bbar" style="height:9px;margin-top:8px"><i style="width:${Math.min(100, spent/amt*100).toFixed(1)}%;background:${left<0?'var(--bad)':b.color}"></i></div>`:''}
+    <label class="switch" style="margin-top:10px"><input type="checkbox" id="budExcl" ${b.exclude?'checked':''}><span class="track" data-budexclude="${esc(b.name)}"></span><span>Exclude from Report</span></label>
   </div>
+  ${budgetByCategory(b)}
   <div class="card">
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${shown.length}${filterActive(f)?' · '+money(Math.round(shown.reduce((t,o)=>t+(conv(o.amount, byId[o.id].currency, store.cur, o.date.slice(0,7))||0),0)*100)/100, store.cur):''}</span>
@@ -2339,6 +2386,24 @@ function budgetPage(b){
   <div style="height:56px"></div>
   ${selBar(true)}
   <div class="closebar"><button class="btn" data-budback="1">Close</button></div>`;
+}
+/* What a budget took, category by category - the way the Report counts, split parts included, transfers left out. */
+function budgetByCategory(b){
+  const by = {}; let unfiled = 0;
+  for (const {o,a} of budgetOps(b.name)) {
+    const parts = o.splits.map((sp)=>({ tag:sp.tag, amount:sp.amount })); parts.push({ tag:o.tag, amount:o.amount - o.splits.reduce((t,sp)=>t+sp.amount, 0) });
+    for (const p of parts) { if (isTransferTag(p.tag)) continue; const v = conv(p.amount, a.currency, store.cur, o.date.slice(0,7)); if (v==null) continue;
+      const c = catOfTag(p.tag); if (c) by[c.name] = (by[c.name]||0) + v; else unfiled += v; } }
+  const rows = store.categories.filter((c)=>by[c.name]).map((c)=>({ c, v:r2(by[c.name]) }));
+  const total = r2(rows.reduce((t,r)=>t+r.v, 0) + unfiled);
+  return `
+  <div class="card">
+    <h2>By category <span class="v ${total<0?'neg':'pos'}" style="text-transform:none;letter-spacing:0">${money(total, store.cur)}</span></h2>
+    ${rows.length || Math.abs(unfiled) >= 0.005 ? rows.map((r)=>`
+      <div class="rrow"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor(r.c.type)}"></span>${esc(r.c.name)} <span class="muted" style="font-size:11.5px">${esc(r.c.type)}</span></span><span class="v ${r.v<0?'neg':'pos'}">${money(r.v, store.cur)}</span></div>`).join('')
+      + (Math.abs(unfiled) >= 0.005 ? `<div class="rrow"><span class="k">Unfiled</span><span class="v ${unfiled<0?'neg':'pos'}">${money(r2(unfiled), store.cur)}</span></div>` : '')
+    : '<div class="hint" style="margin-top:0">Nothing yet.</div>'}
+  </div>`;
 }
 /* Rows from several accounts: each says which account, in its own currency. */
 function opRowsMixed(list){
@@ -4504,6 +4569,7 @@ function aboutSheet(){
       <div class="rows">
         <div class="row"><span class="k">App</span><span class="v">v${esc(APP_VERSION)}</span></div>
         <div class="row"><span class="k">Backend</span><span class="v">${store.backendVersion?'v'+esc(store.backendVersion):'—'}</span></div>
+        <div class="row"><span class="k">Live</span><span class="v">${store.liveTook ? dLabel(store.liveTook.at.slice(0,10)) + ' ' + new Date(store.liveTook.at).toTimeString().slice(0,5) + ' · ' + store.liveTook.prices + ' prices, ' + store.liveTook.levels + ' levels, ' + store.liveTook.rates + ' rates' : store.liveAt ? dLabel(store.liveAt) : 'never'}</span></div>
       </div>
       <div class="btnrow" style="margin-top:10px">
         <button class="btn" data-reload="1">Hard reload</button>
@@ -5075,10 +5141,10 @@ function wire(){
     const monthly = String(p.monthly||'').trim()==='' ? 0 : num(p.monthly); if (!isFinite(monthly) || monthly < 0) { alert('A monthly estimate, or none.'); render(); return; }
     const x = { key, type:p.stype, currency:p.currency, owner:p.owner||'', monthly, account: SOURCE_LINKED.includes(p.stype) ? (p.account||'') : '' };
     store.sources = (store.sources||[]).filter((y)=>y.key!==key).concat([x]);
-    state.page=null; commit('Config'); });
+    state.page=null; commit('Sources'); });
   document.querySelectorAll('[data-srcdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
-    store.sources = (store.sources||[]).filter((y)=>y.key!==el.dataset.srcdelete); state.page=null; commit('Config'); });
+    store.sources = (store.sources||[]).filter((y)=>y.key!==el.dataset.srcdelete); state.page=null; commit('Sources'); });
 
   /* insurance policies */
   const IN = [['inName','name'],['inInsurer','insurer'],['inNumber','number'],['inContact','contact'],['inPremium','premium'],['inRenewal','renewal'],['inCovers','covers'],['inBenef','beneficiaries'],['inNotes','notes']];
@@ -5095,10 +5161,10 @@ function wire(){
     if (p.renewal && !/^\d{4}-\d{2}-\d{2}$/.test(p.renewal)) { alert('A renewal date, or none.'); render(); return; }
     const x = { id: p.id || uid(), name, kind: INSURANCE_KINDS.includes(p.ikind) ? p.ikind : 'Other', ...insuranceFacts(p) }; delete x.id; x.id = p.id || uid();
     store.insurance = (store.insurance||[]).filter((y)=>y.id!==x.id).concat([x]);
-    state.page=null; commit('Config'); });
+    state.page=null; commit('Insurance'); });
   document.querySelectorAll('[data-insdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
-    store.insurance = (store.insurance||[]).filter((y)=>y.id!==el.dataset.insdelete); state.page=null; commit('Config'); });
+    store.insurance = (store.insurance||[]).filter((y)=>y.id!==el.dataset.insdelete); state.page=null; commit('Insurance'); });
   /* the situation report */
   document.querySelectorAll('[data-situation]').forEach((el)=>el.onclick=()=>{ state.situation=true; state.page=null; render(); });
   { const cy = document.getElementById('closeYear'); if (cy) cy.onchange=()=>{ if (store.locked) return; store.closedYear = cy.value ? +cy.value : null; commit('Config'); }; }
@@ -5276,9 +5342,9 @@ function wire(){
     if (!p.tags.length) { alert('At least one tag.'); render(); return; }
     const b = { name, tags: p.tags.slice() };
     if (p.index==null) bills().push(b); else { bills()[p.index] = b; if (state.bill && same(state.bill, p.was.name)) state.bill = name; }
-    state.page=null; commit('Config'); });
+    state.page=null; commit('Bills'); });
   document.querySelectorAll('[data-billdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
-    bills().splice(+el.dataset.billdelete, 1); state.bill=null; state.page=null; commit('Config'); });
+    bills().splice(+el.dataset.billdelete, 1); state.bill=null; state.page=null; commit('Bills'); });
 
   /* previsions */
   const pvCur = () => state.prev && prevById(state.prev);
@@ -5336,6 +5402,7 @@ function wire(){
   document.querySelectorAll('[data-budnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBud(null); });
   document.querySelectorAll('[data-budedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBud(+el.dataset.budedit); });
   document.querySelectorAll('[data-budopen]').forEach((el)=>el.onclick=()=>{ state.budget=el.dataset.budopen; state.page=null; state.opf=null; render(); });
+  document.querySelectorAll('[data-budexclude]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const b = budgetOf(el.dataset.budexclude); if (!b) return; b.exclude = !b.exclude; commit('Budgets'); });
   document.querySelectorAll('[data-budback]').forEach((el)=>el.onclick=()=>{ state.budget=null; state.page=null; state.opf=null; render(); });
   document.querySelectorAll('[data-budcolor]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.color=el.dataset.budcolor; render(); });
   document.querySelectorAll('[data-budcur]').forEach((el)=>el.onclick=()=>{ readBud(); state.page.currency=el.dataset.budcur; render(); });
@@ -5356,7 +5423,7 @@ function wire(){
       if (state.budget===cur.name) state.budget=b.name;
       Object.assign(cur, b);
     } else store.budgets.push(b);
-    state.page=null; commit(); });
+    state.page=null; commit('Budgets'); });
   document.querySelectorAll('[data-budclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const n=document.getElementById('bName'), a=document.getElementById('bAmount'), d=document.getElementById('bDate'); if (n) p.name=n.value; if (a) p.amount=a.value; if (d) p.created=d.value;
     if (budgetDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
@@ -5367,7 +5434,7 @@ function wire(){
     const gone = store.budgets.splice(+el.dataset.buddelete, 1)[0];
     /* The operations stay; they just lose the budget. */
     if (gone) for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) if (same(o.budget||'', gone.name)) { o.budget=''; markDirty(k); }
-    state.budget=null; state.page=null; commit(); });
+    state.budget=null; state.page=null; commit('Budgets'); });
 
   /* warnings: a kind opens its page; fixes act on the ticked findings */
   document.querySelectorAll('[data-warnopen]').forEach((el)=>el.onclick=()=>{ state.warnKind=el.dataset.warnopen; state.sel=[]; state.bulk=null; state.warnQ=''; state.warnKnown=false; render(); });
