@@ -311,9 +311,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=147"></script>
+<script src="backend.js?v=148"></script>
 <script>
-const APP_VERSION="147";
+const APP_VERSION="148";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3406,6 +3406,8 @@ const noteKindLabel = (k) => (NOTE_KINDS.concat(CASH_NOTE_KINDS).find(([x])=>x==
 const pctS = (r) => (r>=0?'+':'') + (Math.round(r*1000)/10).toFixed(1) + '%';
 /* a note's short code for chips: the terms' `short`, else its initials and the maturity year */
 const noteShort = (f) => (f.terms||{}).short || (f.name.split(/\s+/).filter((w)=>!/^\d/.test(w)).map((w)=>w[0]).join('').toUpperCase().slice(0,4) + String((f.terms||{}).matures||'').slice(2,4));
+/* when the note ends: the day it was redeemed; else, for a callable one, the first day it can be called back; else its maturity */
+const noteEnd = (f, n) => { const t = f.terms || {}; return n && n.redeemed ? dLabel(n.redeemed) : t.call && /^\d{4}-\d{2}-\d{2}/.test(t.call.from||'') ? dLabel(t.call.from) : t.matures ? dLabel(t.matures) : '—'; };
 const noteNowOf = (a) => notesOf(a).find((f)=>f.name===state.nfund) || notesOf(a)[0] || null;
 /* the note's value at each month's end: this year, or from the month before its issue to now */
 const NOTE_METRICS = [['value','Balance'],['worst','Worst']];
@@ -3441,10 +3443,10 @@ function notesPage(a){
     <div class="hero">${money(value, a.currency)}</div>
     ${conv1!=null?`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt)">${money(conv1, store.cur)}</div>`:''}
     <div class="herosub">${esc(a.owners.join(', '))}${a.owners.length?' · ':''}${Y}</div>
-    ${rows.length || hasCash ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th></tr></thead>
-      <tbody>${rows.map((r)=>`<tr><td>${esc(noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${r.n.redeemed ? '<span class="muted" style="font-weight:400">redeemed</span>' : money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td></tr>`).join('')}
-      ${hasCash ? `<tr><td>Cash</td><td>—</td><td><b>${money(cash, a.currency)}</b></td><td>—</td></tr>` : ''}
-      <tr class="sum"><td>Total</td><td>${money(paid, a.currency)}</td><td>${money(value, a.currency)}</td><td style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}${paid>0?'<div class="muted" style="font-size:11px">'+pctS((value-paid)/paid)+'</div>':''}</td></tr></tbody></table></div>` : ''}
+    ${rows.length || hasCash ? `<div style="overflow-x:auto"><table class="fx" style="margin-top:8px"><thead><tr><th>Note</th><th>Paid in</th><th>Value</th><th>Growth</th><th>End</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${esc(noteShort(r.f))}</td><td>${money(r.n.paid, a.currency)}</td><td><b>${r.n.redeemed ? '<span class="muted" style="font-weight:400">redeemed</span>' : money(r.n.value, a.currency)}</b></td><td style="color:${r.n.interest<0?'var(--bad)':'var(--good)'}">${money(r.n.interest, a.currency)}${r.n.paid>0?'<div class="muted" style="font-size:11px">'+pctS(r.n.interest/r.n.paid)+'</div>':''}</td><td class="${r.n.redeemed?'muted':''}">${esc(noteEnd(r.f, r.n))}</td></tr>`).join('')}
+      ${hasCash ? `<tr><td>Cash</td><td>—</td><td><b>${money(cash, a.currency)}</b></td><td>—</td><td>—</td></tr>` : ''}
+      <tr class="sum"><td>Total</td><td>${money(paid, a.currency)}</td><td>${money(value, a.currency)}</td><td style="color:${value-paid<0?'var(--bad)':'var(--good)'}">${money(r2(value-paid), a.currency)}${paid>0?'<div class="muted" style="font-size:11px">'+pctS((value-paid)/paid)+'</div>':''}</td><td></td></tr></tbody></table></div>` : ''}
     <div class="chips" style="margin-top:10px">${funds.map((x)=>`<button class="chip ${x===f?'on':''}" data-nsel="${esc(x.name)}">${esc(noteShort(x))}</button>`).join('')}</div>
   </div>
   ${f ? noteCard(a, f, Y, end, hist) + noteChartCard(a, f, Y, hist) + noteTable(a, f, Y, end, hist) : `<div class="card"><h2>Notes</h2><div class="hint" style="margin-top:0">No note yet.</div></div>`}
