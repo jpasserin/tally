@@ -311,9 +311,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=148"></script>
+<script src="backend.js?v=149"></script>
 <script>
-const APP_VERSION="148";
+const APP_VERSION="149";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2049,46 +2049,66 @@ function newPrevision(year, cur){
 }
 /* the average a month a category ran at: this year so far, and the two before */
 const prevAvg = (cat, Y) => { const v = sumsByCategory(Y).out[cat] || 0; return r2(v / monthsIn(Y)); };
+/* the year in six figures, as the Summary counts them: the months gone as they were, the rest as foreseen */
+const prevPastMonths = (p) => { const out = []; for (let m = p.year+'-01'; m < p.from; m = ymAdd(m, 1)) out.push(m); return out; };
+function prevFigures(p){
+  const cur = p.cur || store.cur;
+  const k = (v, m) => { if (cur===store.cur) return v; const c = conv(v, store.cur, cur, m); return c==null ? v : c; };
+  const f = { in:0, out:0, tax:0, sav:0 }, soFar = {};
+  for (const m of prevPastMonths(p)) { const s = sumsFor(m), y = yearFigures(s);
+    f.in += k(y.in, m); f.out += k(y.out, m); f.tax += k(y.tax, m); f.sav += k(y.sav, m);
+    for (const c in s.out) soFar[c] = (soFar[c]||0) + k(s.out[c], m); }
+  const taxSoFar = f.tax;
+  for (const m of prevMonths(p)) {
+    f.in += prevIncome(p, m); f.tax += -prevTax(p, m);
+    for (const c of store.categories) { const v = prevCatMonth(p, c.name, m); if (!v) continue;
+      if (c.type==='Savings') f.sav += v; else if (c.type!=='Income') f.out += -v; } }
+  for (const c in soFar) soFar[c] = r2(soFar[c]);
+  return { in:r2(f.in), out:r2(f.out), tax:r2(f.tax), sav:r2(f.sav), cash:r2(f.in-(f.out+f.tax+f.sav)), nw:r2(f.in-(f.out+f.tax)), soFar, taxSoFar:r2(taxSoFar), past: prevPastMonths(p).length };
+}
+function prevBoxes(f, cur){
+  const box = (label, v, color) => `<div class="kpi"><div class="l">${label}</div><div class="v" style="color:${color}">${money(v, cur)}</div></div>`;
+  return `<div class="kpis">${box('In', f.in, 'var(--good)')}${box('Out', f.out, 'var(--bad)')}${box('Taxes', f.tax, 'var(--txt)')}</div>
+    <div class="kpis" style="margin-top:6px">${box('Savings', f.sav, 'var(--accent)')}${box('Cash', f.cash, f.cash<0?'var(--bad)':'var(--good)')}${box('Net change', f.nw, 'var(--txt)')}</div>`;
+}
 function tabPrevision(){
   const pg = state.page;
   const widget = pg && pg.kind==='pvnew' ? pvNewSheet(pg) : pg && pg.kind==='pvcat' ? pvCatSheet(pg) : pg && pg.kind==='pvtax' ? pvTaxSheet(pg) : '';
   const cur = state.prev && prevById(state.prev);
   if (cur) return widget + previsionPage(cur);
   state.prev = null;
-  const list = prevSorted();
+  /* by year, the latest year first; within a year the newest first */
+  const list = previsions().slice().sort((x,y)=> (y.year-x.year) || (x.created<y.created ? 1 : x.created>y.created ? -1 : 0));
+  const years = [...new Set(list.map((p)=>p.year))];
   return widget + `
   <div class="card">
     <h2>Prevision <button class="gbtn" data-pvnew="1"${LK()}>+</button></h2>
-    ${list.length ? `<div class="rows">${list.map((p, i)=>{ const t = prevTotals(p); return `
-      <div class="row tap" data-pvopen="${esc(p.id)}">
-        <div style="flex:1;min-width:0"><div class="k"><b>${p.year}</b> <span class="muted" style="font-size:11.5px">${mLabel(p.from)} to Dec · made ${dLabel(p.created)}${i===0?' · latest':''}</span></div>
-          <div class="sub">In ${money(t.income, p.cur||store.cur)} · Out ${money(-t.spend, p.cur||store.cur)} · Taxes ${money(-t.taxes, p.cur||store.cur)} · Savings ${money(t.savings, p.cur||store.cur)}</div></div>
-        <span class="v ${t.cash<0?'neg':'pos'}">${money(t.cash, p.cur||store.cur)}</span>
-      </div>`; }).join('')}</div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+    ${list.length ? years.map((y)=>`<div class="herosub" style="font-size:15px;font-weight:700;color:var(--txt);margin-top:10px">${y}</div>
+      ${list.filter((p)=>p.year===y).map((p)=>`<div class="tap" data-pvopen="${esc(p.id)}" style="margin-top:6px">
+        <div class="herosub" style="margin-bottom:4px">From ${dLabel(p.created)} <span class="muted">· ${mLabel(p.from)} to Dec · ${esc(p.cur||store.cur)}</span></div>${prevBoxes(prevFigures(p), p.cur||store.cur)}</div>`).join('')}`).join('')
+    : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
   </div>`;
 }
 function previsionPage(p){
-  const t = prevTotals(p), cur = p.cur || store.cur, n = t.months.length;
-  const perMo = (v) => money(r2(v / n), cur) + '/mo';
-  const row = (c) => { const v = prevCatTotal(p, c.name); return `
-      <div class="rrow tap" data-pvcat="${esc(c.name)}"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor(c.type)}"></span>${esc(c.name)}
-        <span class="muted" style="font-size:11.5px">${esc(c.type)}</span></span>
-        <span class="mo">${perMo(v)}</span><span class="v ${v<0?'neg':v>0?'pos':''}">${money(v, cur)}</span></div>`; };
+  const f = prevFigures(p), cur = p.cur || store.cur, past = f.past > 0;
+  const dot = (col) => `<span class="dot" style="background:${col};display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px"></span>`;
+  const row = (c) => { const so = f.soFar[c.name] || 0, w = r2(so + prevCatTotal(p, c.name)); return `
+      <tr class="tap" data-pvcat="${esc(c.name)}"><td>${dot(typeColor(c.type))}${esc(c.name)}</td><td>${past ? money(so, cur) : '—'}</td><td><b>${money(w, cur)}</b></td><td>${money(r2(w/12), cur)}</td></tr>`; };
   const group = (title, types) => `
   <div class="card">
     <h2>${title}</h2>
-    ${prevCats().filter((c)=>types.includes(c.type)).map(row).join('') || '<div class="hint" style="margin-top:0">No category.</div>'}
-    ${types.includes('Taxes') ? `
-      <div class="rrow tap" data-pvtax="1"><span class="k" style="display:flex;align-items:center;gap:8px;min-width:0"><span class="dot" style="background:${typeColor('Taxes')}"></span>Taxes
-        <span class="muted" style="font-size:11.5px">${+p.tax||0}% of the income</span></span>
-        <span class="mo">${perMo(t.taxes)}</span><span class="v ${t.taxes<0?'neg':''}">${money(t.taxes, cur)}</span></div>` : ''}
+    <div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Category</th><th>So far</th><th>With prevision</th><th>A month</th></tr></thead>
+      <tbody>${prevCats().filter((c)=>types.includes(c.type)).map(row).join('')}
+      ${types.includes('Taxes') ? `<tr class="tap" data-pvtax="1"><td>${dot(typeColor('Taxes'))}Taxes <span class="muted" style="font-size:11px">${+p.tax||0}% of the income</span></td><td>${past ? money(-f.taxSoFar, cur) : '—'}</td><td><b>${money(-f.tax, cur)}</b></td><td>${money(r2(-f.tax/12), cur)}</td></tr>` : ''}</tbody>
+    </table></div>
   </div>`;
   return `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${p.year}</b></span>
-      <span class="muted" style="text-transform:none;letter-spacing:0">${mLabel(p.from)} to Dec · made ${dLabel(p.created)}</span></h2>
-    <div class="hero ${t.cash<0?'neg':''}">${money(t.cash, cur)}</div>
-    <div class="herosub">left in cash over the ${n} month${n===1?'':'s'} · In ${money(t.income, cur)} · Out ${money(-t.spend, cur)} · Taxes ${money(-t.taxes, cur)} · Savings ${money(t.savings, cur)}</div>
+      <span class="muted" style="text-transform:none;letter-spacing:0">From ${dLabel(p.created)} · ${mLabel(p.from)} to Dec · ${esc(cur)}</span></h2>
+    ${prevBoxes(f, cur)}
+    <div class="hint" style="margin:6px 0 0">${past ? f.past + ' month' + (f.past===1?'':'s') + ' as they were, the rest as foreseen' : 'the whole year as foreseen'}</div>
     <button class="btn danger ${state.pvArm?'arm':''}" style="width:100%;margin-top:10px" data-pvdelete="${esc(p.id)}"${LK()}>${state.pvArm?'Delete this prevision?':'Delete'}</button>
   </div>
   ${group('Spendings', ['Necessity','Optional','Misc'])}
