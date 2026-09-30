@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=160"></script>
+<script src="backend.js?v=161"></script>
 <script>
-const APP_VERSION="160";
+const APP_VERSION="161";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4395,7 +4395,7 @@ function fundYearNet(x, y){
 const srcHasRecord = (x) => { const t = x && x.terms; if (!t) return false; if (x.type==='US Social Security') return Object.keys(t.earnings||{}).length > 0; if (x.type==='FR Retraite') return ['quarters','salary','sam','agirc','cipavBase','cipavComp','rafp','usQuarters'].some((k)=>+t[k] > 0) || !!(t.state && (+t.state.quarters > 0 || +t.state.salary > 0)); return false; };
 const srcEstimate = (x) => x && x.type==='Funds' && x.account && store.accounts.some((z)=>z.key===x.account) ? fundPlan(x) : srcHasRecord(x) ? (x.type==='US Social Security' ? ssEstimate(x) : frEstimate(x)) : null;
 const srcMonthly = (x) => { const e = srcEstimate(x); return e ? e.monthly : (+x.monthly||0); };
-const srcTaxNote = (type) => type==='US Social Security' ? 'Taxed in the US only (tax treaty, art. 18): as US income for a citizen, else 25.5% withheld. France counts it for the rate on the rest.'
+const srcTaxNote = (type) => type==='US Social Security' ? 'Taxed in the US only (tax treaty, art. 18): a citizen on 85% of it at the graduated rates (about 10% off), a non-resident 25.5% withheld. France counts it for the rate on the rest.'
   : type==='FR Retraite' ? 'Taxed in France: 9.1% of social levies (CSG, CRDS, Casa), then income tax.'
   : type==='Funds' ? 'Withdrawals taxed in the US only (tax treaty, art. 18, 2009 protocol): a citizen at the graduated rates, a non-resident 30% withheld, on the pre-tax share; the Roth share free; 10% more before 59½. France counts them for the rate on the rest.'
   : 'A US policy: dividends and loans are generally not income. Check with the insurer.';
@@ -4418,7 +4418,7 @@ function srcTermsOf(p){
 const SOURCE_LINKED = ['Funds','Life Insurance'];
 /* what a source pays after taxes: French pensions less 9.1% of levies; US Social Security less the
    25.5% withheld from a non-resident (a citizen is taxed as on any US income - nothing taken here) */
-function srcNet(x){ const e = srcEstimate(x); if (e && e.kind==='fund') return e.net; const g = srcMonthly(x); if (x.type==='FR Retraite') return r2(g*(1-FR.levies)); if (x.type==='US Social Security' && !(x.terms && x.terms.citizen)) return r2(g*(1-0.255)); return r2(g); }
+function srcNet(x){ const e = srcEstimate(x); if (e && e.kind==='fund') return e.net; const g = srcMonthly(x); if (x.type==='FR Retraite') return r2(g*(1-FR.levies)); if (x.type==='US Social Security') return r2(g*(1 - (x.terms && x.terms.citizen ? 0.85*FUND_PLAN.taxCitizen/100 : 0.255))); return r2(g); }   /* a citizen: 85% of the benefit taxable at the graduated rates */
 /* the age a source starts paying: the one chosen, else 67 for a pension, 60 for money of one's own */
 const srcStartAge = (x) => +x.claim || (x.type==='US Social Security' || x.type==='FR Retraite' ? 67 : 60);
 const srcAgeRange = (x) => x.type==='US Social Security' ? [62, 67] : x.type==='FR Retraite' ? [Math.ceil(frLegalAge(personDob(x.owner))), 67] : x.type==='Funds' && srcEstimate(x) ? [60, 67] : null;
