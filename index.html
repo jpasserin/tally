@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=156"></script>
+<script src="backend.js?v=157"></script>
 <script>
-const APP_VERSION="156";
+const APP_VERSION="157";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4357,12 +4357,47 @@ function frEstimate(x){
   return { kind:'fr', claim, legal, req, retire, frQ, usQ, futureQ, stateQ, total, missing, taux, surcote, sam, cnavQ, ptsYear: r2(ptsYear), agircPts: Math.round(agircPts),
     base: r2(base/12), agirc: r2(agirc/12), cipav: r2(cipav/12), rafp: r2(rafp/12), state: r2(state/12), monthly: r2(yearly/12), net: r2(yearly/12*(1-FR.levies)) };
 }
+/* ---- money of one's own (401k, IRA): the 4% rule ----
+   The account's value today grows at the rate assumed until the year the
+   withdrawals start; from then on a share of the balance (4% by default) is
+   taken each year and the rest keeps growing. Withdrawals from a pre-tax plan
+   are taxable in the US only (treaty art. 18): 30% withheld from a
+   non-resident by default, the Roth share tax-free; 10% more before 59½. */
+const FUND_PLAN = { rate: 4, growth: 6, tax: 30, minGrowth: 3, maxGrowth: 10 };
+function fundTaxableShare(a){
+  if (!isFund(a)) return 1;
+  const s = accountBySource(a, '9999-12-31'); if (!s.rows.length) return 1;
+  const tot = s.rows.reduce((t,r)=>t+r.value, 0), roth = (s.rows.find((r)=>r.src==='Roth')||{}).value||0;
+  return tot > 0 ? Math.max(0, Math.min(1, (tot - roth)/tot)) : 1;
+}
+/* the span the retirement pages look at: the first parent turning 60 to the last turning 67 */
+function retireYears(){
+  const parents = store.people.filter((p)=>p.type==='Parent' && /^\d{4}/.test(p.dob||''));
+  if (!parents.length) return [THIS_YEAR + 1, THIS_YEAR + 30];
+  return [Math.min(...parents.map((p)=>+p.dob.slice(0,4)+60)), Math.max(...parents.map((p)=>+p.dob.slice(0,4)+67))];
+}
+function fundPlan(x){
+  const a = store.accounts.find((z)=>z.key===x.account); if (!a) return null;
+  const t = x.terms||{}, dob = personDob(x.owner);
+  const rate = +t.rate > 0 ? +t.rate : FUND_PLAN.rate, g = t.growth!=null && t.growth!=='' && isFinite(+t.growth) ? +t.growth : FUND_PLAN.growth, tax = t.tax!=null && t.tax!=='' && isFinite(+t.tax) ? +t.tax : FUND_PLAN.tax;
+  const start = +t.start || (dob ? +dob.slice(0,4) + 60 : retireYears()[0]);
+  const bal = balanceOf(a), yrs = Math.max(0, start - THIS_YEAR), at = bal * Math.pow(1 + g/100, yrs);
+  const taxable = fundTaxableShare(a), penalty = dob && start - +dob.slice(0,4) < 60 ? 10 : 0;
+  const gross = at * rate/100 / 12, keep = Math.max(0, 1 - taxable*tax/100 - penalty/100);
+  return { kind:'fund', account:a.key, cur:a.currency, bal:r2(bal), rate, g, tax, start, yrs, at:r2(at), taxable:r2(taxable), penalty, keep, gross:r2(gross), net:r2(gross*keep), monthly:r2(gross) };
+}
+/* what a year of the plan gives, net: the balance drawn down and grown from the start year */
+function fundYearNet(x, y){
+  const p = fundPlan(x); if (!p || y < p.start) return 0;
+  let b = p.at, w = 0; for (let yy = p.start; yy <= y; yy++) { w = b * p.rate/100; b = (b - w) * (1 + p.g/100); }
+  return r2(w * p.keep);
+}
 const srcHasRecord = (x) => { const t = x && x.terms; if (!t) return false; if (x.type==='US Social Security') return Object.keys(t.earnings||{}).length > 0; if (x.type==='FR Retraite') return ['quarters','salary','sam','agirc','cipavBase','cipavComp','rafp','usQuarters'].some((k)=>+t[k] > 0) || !!(t.state && (+t.state.quarters > 0 || +t.state.salary > 0)); return false; };
-const srcEstimate = (x) => srcHasRecord(x) ? (x.type==='US Social Security' ? ssEstimate(x) : frEstimate(x)) : null;
+const srcEstimate = (x) => x && x.type==='Funds' && x.account && store.accounts.some((z)=>z.key===x.account) ? fundPlan(x) : srcHasRecord(x) ? (x.type==='US Social Security' ? ssEstimate(x) : frEstimate(x)) : null;
 const srcMonthly = (x) => { const e = srcEstimate(x); return e ? e.monthly : (+x.monthly||0); };
 const srcTaxNote = (type) => type==='US Social Security' ? 'Taxed in the US only (tax treaty, art. 18): as US income for a citizen, else 25.5% withheld. France counts it for the rate on the rest.'
   : type==='FR Retraite' ? 'Taxed in France: 9.1% of social levies (CSG, CRDS, Casa), then income tax.'
-  : type==='Funds' ? 'Withdrawals taxed in the US only (tax treaty, art. 18, 2009 protocol). France counts them for the rate on the rest.'
+  : type==='Funds' ? 'Withdrawals taxed in the US only (tax treaty, art. 18, 2009 protocol): 30% withheld from a non-resident on the pre-tax share, the Roth share free, 10% more before 59½. France counts them for the rate on the rest.'
   : 'A US policy: dividends and loans are generally not income. Check with the insurer.';
 /* the estimate in a line under the source */
 function srcLine(x){
@@ -4375,6 +4410,7 @@ function srcTermsOf(p){
   const n = (v) => { const x = num(v); return isFinite(x) ? x : 0; };
   if (p.stype==='US Social Security') { const earnings = {}; for (const line of String(p.earn||'').split(/\n/)) { const m = line.trim().match(/^(\d{4})\s+\$?([\d,]+(?:\.\d+)?)/); if (m) earnings[m[1]] = +m[2].replace(/,/g, ''); }
     return { earnings, ...(p.spouse ? { spouse:p.spouse } : {}), ...(p.citizen==='yes' ? { citizen:true } : {}) }; }
+  if (p.stype==='Funds') { const t = {}; for (const k of ['rate','growth','start','tax']) if (String(p[k]==null?'':p[k]).trim()!=='' && isFinite(num(p[k]))) t[k] = num(p[k]); return t; }
   if (p.stype==='FR Retraite') { const t = { quarters:n(p.quarters), salary:n(p.salary) }; if (n(p.sam)) t.sam = n(p.sam); if (n(p.agirc)) t.agirc = n(p.agirc); if (n(p.cipavB)) t.cipavBase = n(p.cipavB); if (n(p.cipavC)) t.cipavComp = n(p.cipavC); if (n(p.rafp)) t.rafp = n(p.rafp);
     if (p.us) t.us = p.us; else if (n(p.usQ)) t.usQuarters = n(p.usQ); if (n(p.stateQ) || n(p.stateSal)) t.state = { quarters:n(p.stateQ), salary:n(p.stateSal) }; return t; }
   return null;
@@ -4382,7 +4418,7 @@ function srcTermsOf(p){
 const SOURCE_LINKED = ['Funds','Life Insurance'];
 /* what a source pays after taxes: French pensions less 9.1% of levies; US Social Security less the
    25.5% withheld from a non-resident (a citizen is taxed as on any US income - nothing taken here) */
-function srcNet(x){ const g = srcMonthly(x); if (x.type==='FR Retraite') return r2(g*(1-FR.levies)); if (x.type==='US Social Security' && !(x.terms && x.terms.citizen)) return r2(g*(1-0.255)); return r2(g); }
+function srcNet(x){ const e = srcEstimate(x); if (e && e.kind==='fund') return e.net; const g = srcMonthly(x); if (x.type==='FR Retraite') return r2(g*(1-FR.levies)); if (x.type==='US Social Security' && !(x.terms && x.terms.citizen)) return r2(g*(1-0.255)); return r2(g); }
 /* the age a source starts paying: the one chosen, else 67 for a pension, 60 for money of one's own */
 const srcStartAge = (x) => +x.claim || (x.type==='US Social Security' || x.type==='FR Retraite' ? 67 : 60);
 const srcAgeRange = (x) => x.type==='US Social Security' ? [62, 67] : x.type==='FR Retraite' ? [Math.ceil(frLegalAge(personDob(x.owner))), 67] : null;
@@ -4393,8 +4429,9 @@ function retireChart(list){
   const y0 = Math.min(...parents.map((p)=>+p.dob.slice(0,4)+60)), y1 = Math.max(...parents.map((p)=>+p.dob.slice(0,4)+67));
   const years = []; for (let y = y0; y <= y1; y++) years.push(y);
   const m = yearMonth(THIS_YEAR);
-  const from = (x) => { const dob = personDob(x.owner); return dob ? +dob.slice(0,4) + srcStartAge(x) : y0; };
-  const series = CURRENCIES.map((c)=>({ color: CUR_COLORS[c], values: years.map((y)=>r2(list.filter((x)=>x.currency===c && y >= from(x)).reduce((t,x)=>{ const v = conv(srcNet(x)*12, c, store.cur, m); return v==null ? t : t + v; }, 0))) })).filter((sr)=>sr.values.some(Boolean));
+  const from = (x) => { const e = srcEstimate(x); if (e && e.kind==='fund') return e.start; const dob = personDob(x.owner); return dob ? +dob.slice(0,4) + srcStartAge(x) : y0; };
+  const yearNet = (x, y) => { const e = srcEstimate(x); return e && e.kind==='fund' ? fundYearNet(x, y) : srcNet(x)*12; };
+  const series = CURRENCIES.map((c)=>({ color: CUR_COLORS[c], values: years.map((y)=>r2(list.filter((x)=>x.currency===c && y >= from(x)).reduce((t,x)=>{ const v = conv(yearNet(x, y), c, store.cur, m); return v==null ? t : t + v; }, 0))) })).filter((sr)=>sr.values.some(Boolean));
   return series.length ? columns({ labels: years.map((y)=>"'" + String(y).slice(2)), series }) + `<div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${years.length ? '<span class="muted">' + y0 + ' to ' + y1 + ' · a year, net, in ' + esc(store.cur) + '</span>' : ''}${CURRENCIES.filter((c)=>list.some((x)=>x.currency===c && srcNet(x))).map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c}</span>`).join('')}</div>` : '<div class="hint" style="margin-top:0">Nothing yet.</div>';
 }
 function tabRetirement(){
@@ -4409,6 +4446,9 @@ function tabRetirement(){
         <div class="tap" data-srcedit="${esc(x.key)}" style="display:flex;align-items:center;gap:8px"><div class="k" style="flex:1;min-width:0"><b>${esc(x.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.type)}${x.owner?' · '+esc(x.owner):''}${x.account && acc(x.account)?' · '+esc(x.account)+' '+money(balanceOf(acc(x.account)), acc(x.account).currency):''}</span></div>
           <span class="v">${money(srcNet(x), x.currency)}<span class="muted" style="font-size:11px">/mo</span></span></div>
         ${r ? `<div class="agebar"><span class="muted">${r[0]}</span><input type="range" id="srAge_${esc(x.key)}" min="${r[0]}" max="${r[1]}" step="1" value="${Math.min(r[1], Math.max(r[0], srcStartAge(x)))}" data-srcage="${esc(x.key)}"${LK()}><span class="muted">${r[1]}</span><b id="srAgeLab_${esc(x.key)}" style="min-width:44px;text-align:right">at ${Math.min(r[1], Math.max(r[0], srcStartAge(x)))}</b></div>` : ''}
+        ${(()=>{ const e = srcEstimate(x); if (!e || e.kind!=='fund') return ''; const [y0, y1] = retireYears(); const st = Math.min(y1, Math.max(y0, e.start)); return `
+        <div class="agebar"><span class="muted">${y0}</span><input type="range" id="srStart_${esc(x.key)}" min="${y0}" max="${y1}" step="1" value="${st}" data-srcstart="${esc(x.key)}"${LK()}><span class="muted">${y1}</span><b id="srStartLab_${esc(x.key)}" style="min-width:44px;text-align:right">from ${st}</b></div>
+        <div class="agebar"><span class="muted">${FUND_PLAN.minGrowth}%</span><input type="range" id="srGrowth_${esc(x.key)}" min="${FUND_PLAN.minGrowth}" max="${FUND_PLAN.maxGrowth}" step="0.5" value="${e.g}" data-srcgrowth="${esc(x.key)}"${LK()}><span class="muted">${FUND_PLAN.maxGrowth}%</span><b id="srGrowthLab_${esc(x.key)}" style="min-width:44px;text-align:right">${e.g}% a year</b></div>`; })()}
       </div>`; };
   return (p && p.kind==='src' ? srcSheet(p) : '') + `
   <div class="card">
@@ -4430,6 +4470,14 @@ function tabRetirement(){
 
 /* the fields behind an estimate, by type, and the estimate they give as typed */
 function srcTermsFields(p){
+  if (p.stype==='Funds') {
+    const f = (id, k, label, ph) => `<div class="field" style="flex:1"><label>${label}</label><input id="${id}" inputmode="decimal" value="${esc(p[k]==null?'':p[k])}" placeholder="${ph}" style="text-align:right"></div>`;
+    const x = { key:p.id||p.key, type:'Funds', owner:p.owner, account:p.account, terms: srcTermsOf(p) }, e = srcEstimate(x);
+    return `
+      <div class="btnrow">${f('srRate','rate','Taken a year, %', FUND_PLAN.rate)}${f('srGrowth','growth','Growth a year, %', FUND_PLAN.growth)}${f('srStart','start','From the year', '')}${f('srTax','tax','US tax on the pre-tax share, %', FUND_PLAN.tax)}</div>
+      ${e ? `<div class="hint" style="margin:0 0 8px">${esc(e.account)} ${money(e.bal, e.cur)} today · at ${e.g}% a year → ${money(e.at, e.cur)} in ${e.start} · ${e.rate}% a year = ${money(e.gross, e.cur)} a month gross · pre-tax share ${Math.round(e.taxable*100)}% taxed ${e.tax}%${e.penalty ? ' · ' + e.penalty + '% penalty before 59½' : ''} → ${money(e.net, e.cur)} a month net</div>` : '<div class="hint" style="margin:0 0 8px">Pick the account the money is in.</div>'}
+      <div class="hint" style="margin:0 0 6px">${esc(srcTaxNote('Funds'))}</div>`;
+  }
   if (p.stype!=='US Social Security' && p.stype!=='FR Retraite') return '';
   const dob = personDob(p.owner), us = p.stype==='US Social Security';
   const ages = us ? [62,63,64,65,66,67,68,69,70] : (()=>{ const a = Math.ceil(frLegalAge(dob)); const out = []; for (let y = a; y <= 70; y++) out.push(y); return out; })();
@@ -4466,7 +4514,7 @@ function srcSheet(p){
       <div class="field"><label>Type</label><div class="chips">${SOURCE_TYPES.map((k)=>`<button class="chip ${p.stype===k?'on':''}" data-srctype="${esc(k)}">${esc(k)}</button>`).join('')}</div></div>
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Currency</label><div class="chips">${CURRENCIES.map((c)=>`<button class="chip ${p.currency===c?'on':''}" data-srccur="${c}">${c}</button>`).join('')}</div></div>
-        <div class="field" style="flex:1"><label>A month${p.stype==='US Social Security' || p.stype==='FR Retraite' ? ' (without a record)' : ''}</label><input id="srMonthly" inputmode="decimal" value="${esc(p.monthly)}" style="text-align:right"></div>
+        <div class="field" style="flex:1"><label>A month${p.stype==='US Social Security' || p.stype==='FR Retraite' ? ' (without a record)' : p.stype==='Funds' ? ' (without an account)' : ''}</label><input id="srMonthly" inputmode="decimal" value="${esc(p.monthly)}" style="text-align:right"></div>
       </div>
       <div class="field"><label>Owner</label><div class="chips">${store.people.map((x)=>`<button class="chip ${p.owner===x.name?'on':''}" data-srcowner="${esc(x.name)}">${esc(x.name)}${x.dob?'':' <span class="muted">(no birth day)</span>'}</button>`).join('')}</div></div>
       ${srcTermsFields(p)}
@@ -5294,18 +5342,21 @@ function wire(){
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.bopdelete); state.page=null; commit(a.key); });
 
   /* retirement sources */
-  const SR = [['srKey','key'],['srMonthly','monthly'],['srEarn','earn'],['srQuarters','quarters'],['srSalary','salary'],['srSam','sam'],['srAgirc','agirc'],['srCipavB','cipavB'],['srCipavC','cipavC'],['srRafp','rafp'],['srStateQ','stateQ'],['srStateSal','stateSal'],['srUsQ','usQ']];
+  const SR = [['srKey','key'],['srMonthly','monthly'],['srRate','rate'],['srGrowth','growth'],['srStart','start'],['srTax','tax'],['srEarn','earn'],['srQuarters','quarters'],['srSalary','salary'],['srSam','sam'],['srAgirc','agirc'],['srCipavB','cipavB'],['srCipavC','cipavC'],['srRafp','rafp'],['srStateQ','stateQ'],['srStateSal','stateSal'],['srUsQ','usQ']];
   const openSrc = (id) => { const x = id==null ? null : (store.sources||[]).find((y)=>y.key===id);
     const t = (x && x.terms) || {}, sv = (v) => v==null || v==='' ? '' : String(v);
     const cur = { key:x?x.key:'', stype:x?x.type:'US Social Security', currency:x?x.currency:store.cur, owner:x?(x.owner||''):(store.people[0]||{}).name||'', monthly:x?String(x.monthly||''):'', account:x?(x.account||''):'', claim: x && x.claim ? String(x.claim) : '',
       earn: Object.keys(t.earnings||{}).sort().map((y)=>y + ' ' + t.earnings[y]).join('\n'), spouse: t.spouse||'', citizen: t.citizen ? 'yes' : 'no', quarters: sv(t.quarters), salary: sv(t.salary), sam: sv(t.sam), agirc: sv(t.agirc), cipavB: sv(t.cipavBase), cipavC: sv(t.cipavComp), rafp: sv(t.rafp),
-      stateQ: sv(t.state && t.state.quarters), stateSal: sv(t.state && t.state.salary), us: t.us||'', usQ: sv(t.usQuarters) };
+      stateQ: sv(t.state && t.state.quarters), stateSal: sv(t.state && t.state.salary), us: t.us||'', usQ: sv(t.usQuarters), rate: sv(t.rate), growth: sv(t.growth), start: sv(t.start), tax: sv(t.tax) };
     state.page={ kind:'src', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-srcnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(null); });
   /* the age slider: the label follows the thumb, the choice is kept when it is let go */
   document.querySelectorAll('[data-srcage]').forEach((el)=>{ const lab = document.getElementById('srAgeLab_' + el.dataset.srcage);
     el.oninput=()=>{ if (lab) lab.textContent = 'at ' + el.value; };
     el.onchange=()=>{ if (store.locked) return; const x = (store.sources||[]).find((z)=>z.key===el.dataset.srcage); if (!x) return; x.claim = +el.value; commit('Sources'); }; });
+  for (const [attr, key, fmt] of [['srcstart', 'start', (v)=>'from ' + v], ['srcgrowth', 'growth', (v)=>v + '% a year']]) document.querySelectorAll('[data-' + attr + ']').forEach((el)=>{ const k = el.dataset[attr], lab = document.getElementById(attr==='srcstart' ? 'srStartLab_' + k : 'srGrowthLab_' + k);
+    el.oninput=()=>{ if (lab) lab.textContent = fmt(el.value); };
+    el.onchange=()=>{ if (store.locked) return; const x = (store.sources||[]).find((z)=>z.key===k); if (!x) return; x.terms = { ...(x.terms||{}), [key]: +el.value }; commit('Sources'); }; });
   document.querySelectorAll('[data-srcedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(el.dataset.srcedit); });
   document.querySelectorAll('[data-srctype]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.stype=el.dataset.srctype; if (!SOURCE_LINKED.includes(state.page.stype)) state.page.account=''; render(); });
   document.querySelectorAll('[data-srccur]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.currency=el.dataset.srccur; render(); });
@@ -5316,13 +5367,13 @@ function wire(){
   document.querySelectorAll('[data-srccit]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.citizen=el.dataset.srccit; render(); });
   document.querySelectorAll('[data-srcus]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.us=el.dataset.srcus; render(); });
   if (state.page && state.page.kind==='src') for (const [id] of SR) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
-  closeP(SR, ['key','stype','currency','owner','monthly','account','claim','earn','spouse','citizen','quarters','salary','sam','agirc','cipavB','cipavC','rafp','stateQ','stateSal','us','usQ'], 'data-srcclose');
+  closeP(SR, ['key','stype','currency','owner','monthly','account','claim','earn','spouse','citizen','quarters','salary','sam','agirc','cipavB','cipavC','rafp','stateQ','stateSal','us','usQ','rate','growth','start','tax'], 'data-srcclose');
   document.querySelectorAll('[data-srcsave]').forEach((el)=>el.onclick=()=>{ readP(SR); const p=state.page;
     const key = String(p.id || p.key || '').trim().toUpperCase(); if (!key) { alert('A key.'); render(); return; }
     if (p.id==null && (store.sources||[]).some((x)=>x.key===key)) { alert('"' + key + '" is taken.'); render(); return; }
     const monthly = String(p.monthly||'').trim()==='' ? 0 : num(p.monthly); if (!isFinite(monthly) || monthly < 0) { alert('A monthly estimate, or none.'); render(); return; }
     const x = { key, type:p.stype, currency:p.currency, owner:p.owner||'', monthly, account: SOURCE_LINKED.includes(p.stype) ? (p.account||'') : '' };
-    const terms = srcTermsOf(p); if (terms) { x.terms = terms; if (+p.claim) x.claim = +p.claim; }
+    const terms = srcTermsOf(p); if (terms && (p.stype!=='Funds' || Object.keys(terms).length)) { x.terms = terms; if (+p.claim) x.claim = +p.claim; }
     store.sources = (store.sources||[]).filter((y)=>y.key!==key).concat([x]);
     state.page=null; commit('Sources'); });
   document.querySelectorAll('[data-srcdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page;
