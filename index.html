@@ -262,6 +262,8 @@
   .chip.tagpick{display:flex;align-items:center;gap:7px;width:100%;border-radius:10px;padding:8px 10px;background:var(--bg2);font-size:14px;text-align:left}
   /* the Warnings sub-tab, yellow while there are warnings */
   .subnav button.warn svg{stroke:var(--warn)}
+  .agebar{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11.5px}
+  .agebar input[type=range]{flex:1;margin:0}
   .pvgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 10px}
 .pvgrid .pvm{min-width:0}
 .pvgrid .pvh{display:flex;align-items:center;gap:6px;font-size:11.5px;font-weight:700;letter-spacing:.04em;margin-bottom:4px}
@@ -306,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=155"></script>
+<script src="backend.js?v=156"></script>
 <script>
-const APP_VERSION="155";
+const APP_VERSION="156";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4378,28 +4380,54 @@ function srcTermsOf(p){
   return null;
 }
 const SOURCE_LINKED = ['Funds','Life Insurance'];
+/* what a source pays after taxes: French pensions less 9.1% of levies; US Social Security less the
+   25.5% withheld from a non-resident (a citizen is taxed as on any US income - nothing taken here) */
+function srcNet(x){ const g = srcMonthly(x); if (x.type==='FR Retraite') return r2(g*(1-FR.levies)); if (x.type==='US Social Security' && !(x.terms && x.terms.citizen)) return r2(g*(1-0.255)); return r2(g); }
+/* the age a source starts paying: the one chosen, else 67 for a pension, 60 for money of one's own */
+const srcStartAge = (x) => +x.claim || (x.type==='US Social Security' || x.type==='FR Retraite' ? 67 : 60);
+const srcAgeRange = (x) => x.type==='US Social Security' ? [62, 67] : x.type==='FR Retraite' ? [Math.ceil(frLegalAge(personDob(x.owner))), 67] : null;
+/* the years from the first parent turning 60 to the last turning 67: what comes in each year, by currency, in the shown money */
+function retireChart(list){
+  const parents = store.people.filter((p)=>p.type==='Parent' && /^\d{4}/.test(p.dob||''));
+  if (!parents.length) return '<div class="hint" style="margin-top:0">A birth day on the parents (Settings › People) draws the years.</div>';
+  const y0 = Math.min(...parents.map((p)=>+p.dob.slice(0,4)+60)), y1 = Math.max(...parents.map((p)=>+p.dob.slice(0,4)+67));
+  const years = []; for (let y = y0; y <= y1; y++) years.push(y);
+  const m = yearMonth(THIS_YEAR);
+  const from = (x) => { const dob = personDob(x.owner); return dob ? +dob.slice(0,4) + srcStartAge(x) : y0; };
+  const series = CURRENCIES.map((c)=>({ color: CUR_COLORS[c], values: years.map((y)=>r2(list.filter((x)=>x.currency===c && y >= from(x)).reduce((t,x)=>{ const v = conv(srcNet(x)*12, c, store.cur, m); return v==null ? t : t + v; }, 0))) })).filter((sr)=>sr.values.some(Boolean));
+  return series.length ? columns({ labels: years.map((y)=>"'" + String(y).slice(2)), series }) + `<div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${years.length ? '<span class="muted">' + y0 + ' to ' + y1 + ' · a year, net, in ' + esc(store.cur) + '</span>' : ''}${CURRENCIES.filter((c)=>list.some((x)=>x.currency===c && srcNet(x))).map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c}</span>`).join('')}</div>` : '<div class="hint" style="margin-top:0">Nothing yet.</div>';
+}
 function tabRetirement(){
   const p = state.page;
   const list = (store.sources||[]).slice().sort((x,y)=>x.currency<y.currency?-1:x.currency>y.currency?1:x.key<y.key?-1:1);
   const m = yearMonth(THIS_YEAR);
-  const total = list.reduce((t,x)=>{ const v = conv(srcMonthly(x), x.currency, store.cur, m); return v==null ? t : t + v; }, 0);
-  const byCur = CURRENCIES.map((c)=>[c, r2(list.filter((x)=>x.currency===c).reduce((t,x)=>t+srcMonthly(x), 0))]).filter(([,v])=>v);
+  const total = list.reduce((t,x)=>{ const v = conv(srcNet(x), x.currency, store.cur, m); return v==null ? t : t + v; }, 0);
+  const byCur = CURRENCIES.map((c)=>[c, r2(list.filter((x)=>x.currency===c).reduce((t,x)=>t+srcNet(x), 0))]).filter(([,v])=>v);
   const acc = (k) => store.accounts.find((a)=>a.key===k);
+  const row = (x) => { const r = srcAgeRange(x); return `
+      <div class="row" style="display:block">
+        <div class="tap" data-srcedit="${esc(x.key)}" style="display:flex;align-items:center;gap:8px"><div class="k" style="flex:1;min-width:0"><b>${esc(x.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.type)}${x.owner?' · '+esc(x.owner):''}${x.account && acc(x.account)?' · '+esc(x.account)+' '+money(balanceOf(acc(x.account)), acc(x.account).currency):''}</span></div>
+          <span class="v">${money(srcNet(x), x.currency)}<span class="muted" style="font-size:11px">/mo</span></span></div>
+        ${r ? `<div class="agebar"><span class="muted">${r[0]}</span><input type="range" id="srAge_${esc(x.key)}" min="${r[0]}" max="${r[1]}" step="1" value="${Math.min(r[1], Math.max(r[0], srcStartAge(x)))}" data-srcage="${esc(x.key)}"${LK()}><span class="muted">${r[1]}</span><b id="srAgeLab_${esc(x.key)}" style="min-width:44px;text-align:right">at ${Math.min(r[1], Math.max(r[0], srcStartAge(x)))}</b></div>` : ''}
+      </div>`; };
   return (p && p.kind==='src' ? srcSheet(p) : '') + `
   <div class="card">
-    <h2>Monthly estimate</h2>
+    <h2>Monthly net estimate</h2>
     <div class="hero">${money(r2(total), store.cur)}</div>
-    <div class="herosub">a month, at today's rate${byCur.length>1?' · '+byCur.map(([c,v])=>money(v, c)).join(' + '):''}</div>
+    <div class="herosub">a month after taxes, at today's rate${byCur.length>1?' · '+byCur.map(([c,v])=>money(v, c)).join(' + '):''}</div>
+  </div>
+  <div class="card">
+    <h2>Income by year</h2>
+    ${retireChart(list)}
   </div>
   <div class="card">
     <h2>Sources <button class="gbtn" data-srcnew="1"${LK()}>+</button></h2>
-    ${list.length ? `<div class="rows">${list.map((x)=>`
-      <div class="row tap" data-srcedit="${esc(x.key)}">
-        <div style="flex:1;min-width:0"><div class="k"><b>${esc(x.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.type)}${x.owner?' · '+esc(x.owner):''}${x.account && acc(x.account)?' · '+esc(x.account)+' '+money(balanceOf(acc(x.account)), acc(x.account).currency):''}</span></div>${srcLine(x)?`<div class="sub">${esc(srcLine(x))}</div>`:''}<div class="sub muted" style="font-size:11px">${esc(srcTaxNote(x.type))}</div></div>
-        <span class="v">${money(srcMonthly(x), x.currency)}<span class="muted" style="font-size:11px">/mo</span></span>
-      </div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No source yet.</div>`}
+    ${list.length ? CURRENCIES.map((c)=>({ c, l:list.filter((x)=>x.currency===c) })).filter((g)=>g.l.length).map((g)=>`
+      <div class="sub" style="display:flex;align-items:center;gap:7px;margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)"><span class="dot" style="background:${CUR_COLORS[g.c]}"></span>${g.c}<span style="margin-left:auto;text-transform:none;letter-spacing:0">${money(r2(g.l.reduce((t,x)=>t+srcNet(x), 0)), g.c)}/mo</span></div>
+      <div class="rows">${g.l.map(row).join('')}</div>`).join('') : `<div class="hint" style="margin-top:0">No source yet.</div>`}
   </div>`;
 }
+
 /* the fields behind an estimate, by type, and the estimate they give as typed */
 function srcTermsFields(p){
   if (p.stype!=='US Social Security' && p.stype!=='FR Retraite') return '';
@@ -5274,6 +5302,10 @@ function wire(){
       stateQ: sv(t.state && t.state.quarters), stateSal: sv(t.state && t.state.salary), us: t.us||'', usQ: sv(t.usQuarters) };
     state.page={ kind:'src', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-srcnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(null); });
+  /* the age slider: the label follows the thumb, the choice is kept when it is let go */
+  document.querySelectorAll('[data-srcage]').forEach((el)=>{ const lab = document.getElementById('srAgeLab_' + el.dataset.srcage);
+    el.oninput=()=>{ if (lab) lab.textContent = 'at ' + el.value; };
+    el.onchange=()=>{ if (store.locked) return; const x = (store.sources||[]).find((z)=>z.key===el.dataset.srcage); if (!x) return; x.claim = +el.value; commit('Sources'); }; });
   document.querySelectorAll('[data-srcedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(el.dataset.srcedit); });
   document.querySelectorAll('[data-srctype]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.stype=el.dataset.srctype; if (!SOURCE_LINKED.includes(state.page.stype)) state.page.account=''; render(); });
   document.querySelectorAll('[data-srccur]').forEach((el)=>el.onclick=()=>{ readP(SR); state.page.currency=el.dataset.srccur; render(); });
