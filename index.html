@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=159"></script>
+<script src="backend.js?v=160"></script>
 <script>
-const APP_VERSION="159";
+const APP_VERSION="160";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4363,7 +4363,7 @@ function frEstimate(x){
    taken each year and the rest keeps growing. Withdrawals from a pre-tax plan
    are taxable in the US only (treaty art. 18): 30% withheld from a
    non-resident by default, the Roth share tax-free; 10% more before 59½. */
-const FUND_PLAN = { rate: 4, growth: 6, tax: 30, minGrowth: 3, maxGrowth: 10 };
+const FUND_PLAN = { rate: 4, growth: 6, tax: 30, taxCitizen: 12, minGrowth: 3, maxGrowth: 10 };   /* 30% withheld from a non-resident; a citizen files at the graduated rates, about 12% at this income */
 function fundTaxableShare(a){
   if (!isFund(a)) return 1;
   const s = accountBySource(a, '9999-12-31'); if (!s.rows.length) return 1;
@@ -4379,12 +4379,12 @@ function retireYears(){
 function fundPlan(x){
   const a = store.accounts.find((z)=>z.key===x.account); if (!a) return null;
   const t = x.terms||{}, dob = personDob(x.owner);
-  const rate = +t.rate > 0 ? +t.rate : FUND_PLAN.rate, g = t.growth!=null && t.growth!=='' && isFinite(+t.growth) ? +t.growth : FUND_PLAN.growth, tax = t.tax!=null && t.tax!=='' && isFinite(+t.tax) ? +t.tax : FUND_PLAN.tax;
+  const rate = +t.rate > 0 ? +t.rate : FUND_PLAN.rate, g = t.growth!=null && t.growth!=='' && isFinite(+t.growth) ? +t.growth : FUND_PLAN.growth, tax = t.tax!=null && t.tax!=='' && isFinite(+t.tax) ? +t.tax : (t.citizen ? FUND_PLAN.taxCitizen : FUND_PLAN.tax);
   const age = +x.claim || 60, start = dob ? +dob.slice(0,4) + age : (+t.start || retireYears()[0]);   /* no money before 59½: from 60 */
   const bal = balanceOf(a), yrs = Math.max(0, start - THIS_YEAR), at = bal * Math.pow(1 + g/100, yrs);
   const taxable = fundTaxableShare(a), penalty = dob && start - +dob.slice(0,4) < 60 ? 10 : 0;
   const gross = at * rate/100 / 12, keep = Math.max(0, 1 - taxable*tax/100 - penalty/100);
-  return { kind:'fund', account:a.key, cur:a.currency, bal:r2(bal), rate, g, tax, start, yrs, at:r2(at), taxable:r2(taxable), penalty, keep, gross:r2(gross), net:r2(gross*keep), monthly:r2(gross) };
+  return { kind:'fund', account:a.key, cur:a.currency, bal:r2(bal), rate, g, tax, citizen: !!t.citizen, start, yrs, at:r2(at), taxable:r2(taxable), penalty, keep, gross:r2(gross), net:r2(gross*keep), monthly:r2(gross) };
 }
 /* what a year of the plan gives, net: the balance drawn down and grown from the start year */
 function fundYearNet(x, y){
@@ -4397,7 +4397,7 @@ const srcEstimate = (x) => x && x.type==='Funds' && x.account && store.accounts.
 const srcMonthly = (x) => { const e = srcEstimate(x); return e ? e.monthly : (+x.monthly||0); };
 const srcTaxNote = (type) => type==='US Social Security' ? 'Taxed in the US only (tax treaty, art. 18): as US income for a citizen, else 25.5% withheld. France counts it for the rate on the rest.'
   : type==='FR Retraite' ? 'Taxed in France: 9.1% of social levies (CSG, CRDS, Casa), then income tax.'
-  : type==='Funds' ? 'Withdrawals taxed in the US only (tax treaty, art. 18, 2009 protocol): 30% withheld from a non-resident on the pre-tax share, the Roth share free, 10% more before 59½. France counts them for the rate on the rest.'
+  : type==='Funds' ? 'Withdrawals taxed in the US only (tax treaty, art. 18, 2009 protocol): a citizen at the graduated rates, a non-resident 30% withheld, on the pre-tax share; the Roth share free; 10% more before 59½. France counts them for the rate on the rest.'
   : 'A US policy: dividends and loans are generally not income. Check with the insurer.';
 /* the estimate in a line under the source */
 function srcLine(x){
@@ -4410,7 +4410,7 @@ function srcTermsOf(p){
   const n = (v) => { const x = num(v); return isFinite(x) ? x : 0; };
   if (p.stype==='US Social Security') { const earnings = {}; for (const line of String(p.earn||'').split(/\n/)) { const m = line.trim().match(/^(\d{4})\s+\$?([\d,]+(?:\.\d+)?)/); if (m) earnings[m[1]] = +m[2].replace(/,/g, ''); }
     return { earnings, ...(p.spouse ? { spouse:p.spouse } : {}), ...(p.citizen==='yes' ? { citizen:true } : {}) }; }
-  if (p.stype==='Funds') { const t = {}; for (const k of ['rate','growth','tax']) if (String(p[k]==null?'':p[k]).trim()!=='' && isFinite(num(p[k]))) t[k] = num(p[k]); return t; }
+  if (p.stype==='Funds') { const t = {}; for (const k of ['rate','growth','tax']) if (String(p[k]==null?'':p[k]).trim()!=='' && isFinite(num(p[k]))) t[k] = num(p[k]); if (p.citizen==='yes') t.citizen = true; return t; }
   if (p.stype==='FR Retraite') { const t = { quarters:n(p.quarters), salary:n(p.salary) }; if (n(p.sam)) t.sam = n(p.sam); if (n(p.agirc)) t.agirc = n(p.agirc); if (n(p.cipavB)) t.cipavBase = n(p.cipavB); if (n(p.cipavC)) t.cipavComp = n(p.cipavC); if (n(p.rafp)) t.rafp = n(p.rafp);
     if (p.us) t.us = p.us; else if (n(p.usQ)) t.usQuarters = n(p.usQ); if (n(p.stateQ) || n(p.stateSal)) t.state = { quarters:n(p.stateQ), salary:n(p.stateSal) }; return t; }
   return null;
@@ -4474,9 +4474,13 @@ function srcTermsFields(p){
     const claim = +p.claim || 60;
     const x = { key:p.id||p.key, type:'Funds', owner:p.owner, account:p.account, claim, terms: srcTermsOf(p) }, e = srcEstimate(x);
     return `
-      <div class="field"><label>Start at</label><div class="chips">${[60,61,62,63,64,65,66,67].map((a)=>`<button class="chip ${claim===a?'on':''}" data-srcclaim="${a}">${a}</button>`).join('')}</div></div>
-      <div class="btnrow">${f('srRate','rate','Taken a year, %', FUND_PLAN.rate)}${f('srGrowth','growth','Growth a year, %', FUND_PLAN.growth)}${f('srTax','tax','US tax on the pre-tax share, %', FUND_PLAN.tax)}</div>
-      ${e ? `<div class="hint" style="margin:0 0 8px">${esc(e.account)} ${money(e.bal, e.cur)} today · at ${e.g}% a year → ${money(e.at, e.cur)} in ${e.start} · ${e.rate}% a year = ${money(e.gross, e.cur)} a month gross · pre-tax share ${Math.round(e.taxable*100)}% taxed ${e.tax}%${e.penalty ? ' · ' + e.penalty + '% penalty before 59½' : ''} → ${money(e.net, e.cur)} a month net</div>` : '<div class="hint" style="margin:0 0 8px">Pick the account the money is in.</div>'}
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Start at</label><div class="chips">${[60,61,62,63,64,65,66,67].map((a)=>`<button class="chip ${claim===a?'on':''}" data-srcclaim="${a}">${a}</button>`).join('')}</div></div>
+        <div class="field" style="flex:0 0 auto"><label>US citizen or green card</label><div class="chips"><button class="chip ${p.citizen==='yes'?'on':''}" data-srccit="yes">Yes</button><button class="chip ${p.citizen!=='yes'?'on':''}" data-srccit="no">No</button></div></div>
+      </div>
+      <div class="btnrow">${f('srRate','rate','Taken a year, %', FUND_PLAN.rate)}${f('srGrowth','growth','Growth a year, %', FUND_PLAN.growth)}${f('srTax','tax','US tax on the pre-tax share, %', p.citizen==='yes' ? FUND_PLAN.taxCitizen : FUND_PLAN.tax)}</div>
+      <div class="hint" style="margin:0 0 8px">${p.citizen==='yes' ? 'A citizen or green-card holder files a 1040 on the withdrawals at the graduated rates, married jointly, no state tax: about ' + FUND_PLAN.taxCitizen + '% at this level of income. Set your own rate above if you know better.' : 'A non-resident has a flat ' + FUND_PLAN.tax + '% withheld on the pre-tax share; the treaty does not lower it. Set your own rate above if you know better.'}</div>
+      ${e ? `<div class="hint" style="margin:0 0 8px">${esc(e.account)} ${money(e.bal, e.cur)} today · at ${e.g}% a year → ${money(e.at, e.cur)} in ${e.start} · ${e.rate}% a year = ${money(e.gross, e.cur)} a month gross · pre-tax share ${Math.round(e.taxable*100)}% taxed ${e.tax}%${e.citizen ? ' (citizen)' : ' (non-resident)'}${e.penalty ? ' · ' + e.penalty + '% penalty before 59½' : ''} → ${money(e.net, e.cur)} a month net</div>` : '<div class="hint" style="margin:0 0 8px">Pick the account the money is in.</div>'}
       <div class="hint" style="margin:0 0 6px">${esc(srcTaxNote('Funds'))}</div>`;
   }
   if (p.stype!=='US Social Security' && p.stype!=='FR Retraite') return '';
