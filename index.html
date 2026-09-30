@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=161"></script>
+<script src="backend.js?v=162"></script>
 <script>
-const APP_VERSION="161";
+const APP_VERSION="162";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4458,6 +4458,8 @@ function tabRetirement(){
   <div class="card">
     <h2>Income by year <span class="muted" style="text-transform:none;letter-spacing:0">a month</span></h2>
     ${retireChart(list)}
+    <div class="chips" style="margin-top:10px">${[['early','Early retirement'],['late','Late retirement']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
+    <div class="chips" style="margin-top:6px">${[['bad','Bad economy 3%'],['balanced','Balanced 6%'],['strong','Strong 10%']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
   </div>
   <div class="card">
     <h2>Sources <button class="gbtn" data-srcnew="1"${LK()}>+</button></h2>
@@ -5355,6 +5357,14 @@ function wire(){
       stateQ: sv(t.state && t.state.quarters), stateSal: sv(t.state && t.state.salary), us: t.us||'', usQ: sv(t.usQuarters), rate: sv(t.rate), growth: sv(t.growth), start: sv(t.start), tax: sv(t.tax) };
     state.page={ kind:'src', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-srcnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(null); });
+  /* presets: every slider at once - the ages as early or as late as they go, the growth at a rate */
+  document.querySelectorAll('[data-preset]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const k = el.dataset.preset; let n = 0;
+    for (const x of (store.sources||[])) {
+      const r = srcAgeRange(x);
+      if ((k==='early' || k==='late') && r) { const age = k==='early' ? r[0] : (x.type==='Funds' ? 60 : r[1]); if (x.claim !== age) { x.claim = age; n++; } }
+      if ((k==='bad' || k==='balanced' || k==='strong') && x.type==='Funds' && srcEstimate(x)) { const g = k==='bad' ? FUND_PLAN.minGrowth : k==='strong' ? FUND_PLAN.maxGrowth : FUND_PLAN.growth; if (!x.terms || x.terms.growth !== g) { x.terms = { ...(x.terms||{}), growth: g }; n++; } }
+    }
+    if (n) commit('Sources'); });
   /* the age slider: the label follows the thumb, the choice is kept when it is let go */
   document.querySelectorAll('[data-srcage]').forEach((el)=>{ const lab = document.getElementById('srAgeLab_' + el.dataset.srcage);
     el.oninput=()=>{ if (lab) lab.textContent = 'at ' + el.value; };
