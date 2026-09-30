@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=157"></script>
+<script src="backend.js?v=158"></script>
 <script>
-const APP_VERSION="157";
+const APP_VERSION="158";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4430,9 +4430,9 @@ function retireChart(list){
   const years = []; for (let y = y0; y <= y1; y++) years.push(y);
   const m = yearMonth(THIS_YEAR);
   const from = (x) => { const e = srcEstimate(x); if (e && e.kind==='fund') return e.start; const dob = personDob(x.owner); return dob ? +dob.slice(0,4) + srcStartAge(x) : y0; };
-  const yearNet = (x, y) => { const e = srcEstimate(x); return e && e.kind==='fund' ? fundYearNet(x, y) : srcNet(x)*12; };
+  const yearNet = (x, y) => { const e = srcEstimate(x); return r2((e && e.kind==='fund' ? fundYearNet(x, y) : srcNet(x)*12) / 12); };   /* a month of that year */
   const series = CURRENCIES.map((c)=>({ color: CUR_COLORS[c], values: years.map((y)=>r2(list.filter((x)=>x.currency===c && y >= from(x)).reduce((t,x)=>{ const v = conv(yearNet(x, y), c, store.cur, m); return v==null ? t : t + v; }, 0))) })).filter((sr)=>sr.values.some(Boolean));
-  return series.length ? columns({ labels: years.map((y)=>"'" + String(y).slice(2)), series }) + `<div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${years.length ? '<span class="muted">' + y0 + ' to ' + y1 + ' · a year, net, in ' + esc(store.cur) + '</span>' : ''}${CURRENCIES.filter((c)=>list.some((x)=>x.currency===c && srcNet(x))).map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c}</span>`).join('')}</div>` : '<div class="hint" style="margin-top:0">Nothing yet.</div>';
+  return series.length ? columns({ labels: years.map((y)=>"'" + String(y).slice(2)), series }) + `<div class="legend" style="margin-top:6px;flex-wrap:wrap;gap:6px 14px">${years.length ? '<span class="muted">' + y0 + ' to ' + y1 + ' · a month, net, in ' + esc(store.cur) + '</span>' : ''}${CURRENCIES.filter((c)=>list.some((x)=>x.currency===c && srcNet(x))).map((c)=>`<span><i style="background:${CUR_COLORS[c]};width:9px;height:9px;border-radius:50%"></i>${c}</span>`).join('')}</div>` : '<div class="hint" style="margin-top:0">Nothing yet.</div>';
 }
 function tabRetirement(){
   const p = state.page;
@@ -4457,7 +4457,7 @@ function tabRetirement(){
     <div class="herosub">a month after taxes, at today's rate${byCur.length>1?' · '+byCur.map(([c,v])=>money(v, c)).join(' + '):''}</div>
   </div>
   <div class="card">
-    <h2>Income by year</h2>
+    <h2>Income by year <span class="muted" style="text-transform:none;letter-spacing:0">a month</span></h2>
     ${retireChart(list)}
   </div>
   <div class="card">
