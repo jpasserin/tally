@@ -266,9 +266,11 @@
   .xrow:last-child{border-bottom:0}
   .xside{flex:1;min-width:0}
   .xside .sub{font-size:11px}
-  .xside:last-of-type{text-align:right}
-  .xarrow{color:var(--muted);flex:0 0 auto}
-  .xrow .sub.muted{flex-basis:100%}
+  .xside.xcredit{text-align:right}
+  .xmid{display:flex;flex-direction:column;align-items:center;justify-content:space-between;align-self:stretch;flex:0 0 auto;min-width:56px}
+  .xarrow{color:var(--muted)}
+  .xrate{font-size:11px;color:var(--muted);white-space:nowrap}
+  .xrow.lone{border:1px solid var(--warn);border-radius:10px;padding:7px 8px;margin:4px 0}
   .agebar{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11.5px}
   .agebar input[type=range]{flex:1;margin:0}
   .pvgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 10px}
@@ -315,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=164"></script>
+<script src="backend.js?v=165"></script>
 <script>
-const APP_VERSION="164";
+const APP_VERSION="165";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1759,11 +1761,19 @@ function tabOperations(){
    60 days, an operation naming the other account first - each used once;
    what pairs with nothing is listed on its own. Across currencies the rate
    actually got is shown. A side opens its operation. */
-function transferPairs(Y){
+const xmatches = () => (store.dismissed||[]).filter((k)=>k.startsWith('xmatch|')).map((k)=>k.split('|').slice(1));
+/* every operation tagged for a transfer in a span of years, with its account */
+function transferOps(years){
   const xs = [];
-  for (const a of store.accounts) if (!ownValue(a)) for (const o of opsOf(a.key)) if (isTransferTag(o.tag) && o.date.slice(0,4)===String(Y) && o.amount) xs.push({ o, a });
-  const debits = xs.filter((x)=>x.o.amount < 0).sort((p,q)=>p.o.date<q.o.date?-1:p.o.date>q.o.date?1:0), credits = xs.filter((x)=>x.o.amount > 0);
+  for (const a of store.accounts) if (!ownValue(a)) for (const o of opsOf(a.key)) if (isTransferTag(o.tag) && years.includes(+o.date.slice(0,4)) && o.amount) xs.push({ o, a });
+  return xs;
+}
+function transferPairs(Y){
+  const xs = transferOps([Y]), byId = Object.fromEntries(xs.map((x)=>[x.o.id, x]));
   const used = new Set(), rows = [];
+  /* the pairs made by hand first */
+  for (const [d, c] of xmatches()) if (byId[d] && byId[c] && !used.has(byId[d]) && !used.has(byId[c])) { used.add(byId[d]); used.add(byId[c]); rows.push({ d: byId[d].o.amount < 0 ? byId[d] : byId[c], c: byId[d].o.amount < 0 ? byId[c] : byId[d], manual:true }); }
+  const debits = xs.filter((x)=>!used.has(x) && x.o.amount < 0).sort((p,q)=>p.o.date<q.o.date?-1:p.o.date>q.o.date?1:0), credits = xs.filter((x)=>!used.has(x) && x.o.amount > 0);
   for (const d of debits) {
     let best = null;
     for (const c of credits) { if (used.has(c) || c.a.key===d.a.key) continue;
@@ -1780,15 +1790,44 @@ function transferPairs(Y){
   for (const c of credits) if (!used.has(c)) rows.push({ d:null, c });
   return rows.sort((p,q)=>{ const dp = (p.d||p.c).o.date, dq = (q.d||q.c).o.date; return dp<dq?1:dp>dq?-1:0; });
 }
+/* the other sides a lone transfer could take: opposite in sign, another account, within 60 days, matched with nothing yet */
+function transferCandidatesFor(id){
+  const years = [THIS_YEAR - 1, THIS_YEAR, THIS_YEAR + 1].concat(allYears()).filter((v, i, l) => l.indexOf(v) === i);
+  const all = transferOps(years), me = all.find((x)=>x.o.id===id); if (!me) return { me:null, list:[] };
+  const yr = +me.o.date.slice(0,4), matched = new Set();
+  for (const y of [yr - 1, yr, yr + 1]) for (const r of transferPairs(y)) if (r.d && r.c) { matched.add(r.d.o.id); matched.add(r.c.o.id); }
+  const list = all.filter((x)=>x.o.id!==id && !matched.has(x.o.id) && x.a.key!==me.a.key && Math.sign(x.o.amount)!==Math.sign(me.o.amount) && daysApart(x.o.date, me.o.date) <= 60)
+    .sort((p,q)=>daysApart(p.o.date, me.o.date) - daysApart(q.o.date, me.o.date));
+  return { me, list };
+}
+function xfindSheet(p){
+  const { me, list } = transferCandidatesFor(p.id); if (!me) return '';
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-xfindclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>Match <span class="muted" style="font-size:12px;font-weight:600">${esc(me.a.key)} · ${money(me.o.amount, me.a.currency)} · ${dLabel(me.o.date)}</span></h3>
+      ${list.length ? `<div class="rows">${list.map((x)=>`
+        <div class="row tap" data-xpick="${esc(x.o.id)}"><div style="flex:1;min-width:0"><div class="k"><b>${esc(x.a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.o.name)}</span></div><div class="sub">${dLabel(x.o.date)}${x.a.currency!==me.a.currency ? ' · 1 ' + esc(me.o.amount < 0 ? me.a.currency : x.a.currency) + ' = ' + (me.o.amount < 0 ? x.o.amount / -me.o.amount : -me.o.amount / x.o.amount).toFixed(4) + ' ' + esc(me.o.amount < 0 ? x.a.currency : me.a.currency) : ''}</div></div>
+          <span class="v ${x.o.amount<0?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div>`).join('')}</div>`
+      : '<div class="hint" style="margin:0">No unmatched transfer the other way within 60 days.</div>'}
+      <div class="foot"><button class="btn close" style="flex:1" data-xfindclose="1">Close</button></div>
+    </div>
+  </div>`;
+}
 function tabTransfers(){
   const Y = theYear(), p = state.page, rows = transferPairs(Y);
-  const side = (x, neg) => x ? `<div class="xside tap" data-opedit="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v ${neg?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${dLabel(x.o.date)}${x.o.name && !same(x.o.name, (neg ? '' : ''))?'':''}</div></div>`
-    : `<div class="xside muted"><div>no other side</div></div>`;
-  const rate = (r) => r.d && r.c && r.d.a.currency!==r.c.a.currency ? `<div class="sub muted" style="text-align:center">1 ${esc(r.d.a.currency)} = ${(r.c.o.amount / -r.d.o.amount).toFixed(4)} ${esc(r.c.a.currency)}</div>` : '';
-  return (p && p.kind==='op' ? opSheet(p, opAcct()) : '') + `
+  const side = (x, neg) => x ? `<div class="xside${neg?'':' xcredit'} tap" data-opedit="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v ${neg?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${dLabel(x.o.date)}</div></div>`
+    : '';
+  const lone = (x, neg) => `<div class="xside${neg?'':' xcredit'} tap" data-xfind="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v ${neg?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${dLabel(x.o.date)} · <span style="color:var(--warn)">no other side - tap to match</span></div></div>`;
+  /* across currencies: the rate got, on the dates' line between the two sides, the target currency alone */
+  const rate = (r) => r.d && r.c && r.d.a.currency!==r.c.a.currency ? `<span class="xrate">${(r.c.o.amount / -r.d.o.amount).toFixed(3)} ${esc(r.c.a.currency)}</span>` : '<span class="xrate"></span>';
+  const mid = (r) => `<span class="xmid"><span class="xarrow">→</span>${rate(r)}</span>`;
+  return (p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='xfind' ? xfindSheet(p) : '') + `
   <div class="card">
     <h2>Transfers <span class="muted" style="text-transform:none;letter-spacing:0">${Y} · ${rows.length}</span></h2>
-    ${rows.length ? rows.map((r)=>`<div class="xrow">${side(r.d, true)}<span class="xarrow">→</span>${side(r.c, false)}${rate(r)}</div>`).join('') : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+    ${rows.length ? rows.map((r)=> r.d && r.c ? `<div class="xrow">${side(r.d, true)}${mid(r)}${side(r.c, false)}</div>`
+      : `<div class="xrow lone">${r.d ? lone(r.d, true) : '<div class="xside"></div>'}${mid(r)}${r.c ? lone(r.c, false) : '<div class="xside xcredit"></div>'}</div>`).join('') : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
 /* --------------------------------------------------------------- warnings --
@@ -5404,6 +5443,13 @@ function wire(){
       stateQ: sv(t.state && t.state.quarters), stateSal: sv(t.state && t.state.salary), us: t.us||'', usQ: sv(t.usQuarters), rate: sv(t.rate), growth: sv(t.growth), start: sv(t.start), tax: sv(t.tax) };
     state.page={ kind:'src', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-srcnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openSrc(null); });
+  /* a lone transfer: the sheet of the other sides it could take; a pick pairs the two for good (Dismissed: xmatch|a|b, and both out of the transfer findings) */
+  document.querySelectorAll('[data-xfind]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'xfind', id:el.dataset.xfind, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-xfindclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-xpick]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const p = state.page; if (!p || p.kind!=='xfind') return;
+    const keys = ['xmatch|' + p.id + '|' + el.dataset.xpick, 'transfer|' + p.id, 'transfer|' + el.dataset.xpick];
+    for (const k of keys) if (!(store.dismissed||[]).includes(k)) (store.dismissed = store.dismissed || []).push(k);
+    state.page=null; commit('Dismissed'); });
   /* presets: every slider at once - the ages as early or as late as they go, the growth at a rate */
   document.querySelectorAll('[data-preset]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const k = el.dataset.preset; let n = 0;
     for (const x of (store.sources||[])) {
