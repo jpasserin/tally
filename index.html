@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=165"></script>
+<script src="backend.js?v=166"></script>
 <script>
-const APP_VERSION="165";
+const APP_VERSION="166";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -969,12 +969,13 @@ function previewImport(j){
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
-function importFile(j){
+function importFile(j, mode){
   if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   if (+j.year && isClosedYear(+j.year)) throw new Error(j.year + ' is closed: nothing imported.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
-  let accounts=0, ops=0, adjusted=0; const touched=new Set(['Config']);
+  let accounts=0, ops=0, adjusted=0, removed=0, reset=0; const touched=new Set(['Config']);
+  const all = mode==='all';      /* the book wins: names, tags and notes follow the file, and rows the file no longer has go */
   const year = +j.year || null;
   /* a child's book names the child */
   for (const p of (Array.isArray(j.people) ? j.people : [])) { const have = p && p.name && store.people.find((x)=>same(x.name, p.name)); if (have && /^\d{4}-\d{2}-\d{2}/.test(p.dob||'') && have.dob !== p.dob.slice(0,10)) { have.dob = p.dob.slice(0,10); touched.add('Config'); } }
@@ -1059,6 +1060,8 @@ function importFile(j){
       if (!have) fundsOf(acc).push({ name:String(f.name), kind:fk, index:String(f.index||''), ...(fk==='note' && f.terms && typeof f.terms==='object' ? { terms:f.terms } : {}) });
       else if (fk==='note' && f.terms && typeof f.terms==='object') { have.kind = 'note'; have.terms = f.terms; if (f.index) have.index = String(f.index); } }
     const list = opsOf(key);
+    /* the file's rows by day and amount: a known id whose former row shows up under another id has moved (a row put in or taken out above it) */
+    const fileRows = new Set(((j.ops && j.ops[a.key]) || []).map((o)=>String(o.date)+'|'+(isFinite(+o.amount) ? Math.round(+o.amount*100)/100 : '')));
     for (const o of (j.ops && j.ops[a.key]) || []) {
       if (isClosedDate(o.date)) continue;                          /* a closed year keeps what it has */
       const isPrice = o.kind==='Price' || o.kind==='Grant';      /* no money moves: a price mark, a grant of options */
@@ -1076,16 +1079,25 @@ function importFile(j){
          budget, one-off mark, name and description are yours and stay. The
          book still rules the figures - date, amount, fund, kind, shares,
          price, source. */
-      if (i>=0) { const keep = list[i]; for (const k of ['date','amount','fund','kind','shares','price','src','vest','until']) { if (clean[k]===undefined) delete keep[k]; else keep[k]=clean[k]; } }
+      if (i>=0) { const keep = list[i];
+        /* another operation now sits on this row of the book - its former one is in the file under another id: nothing of the old one applies */
+        const other = keep.date!==clean.date && keep.amount!==clean.amount && fileRows.has(String(keep.date)+'|'+(isFinite(+keep.amount) ? Math.round(+keep.amount*100)/100 : ''));
+        for (const k of ['date','amount','fund','kind','shares','price','src','vest','until']) { if (clean[k]===undefined) delete keep[k]; else keep[k]=clean[k]; }
+        if (all || other) { if (keep.name!==clean.name || keep.tag!==clean.tag || keep.note!==clean.note) reset++; keep.name=clean.name; keep.tag=clean.tag; keep.note=clean.note; }
+        if (other) { keep.splits=[]; keep.budget=''; keep.oneoff=false; } }
       else { list.push(clean); ops++; }
     }
+    /* the book wins: rows an earlier conversion wrote for this account and year under ids the file no longer has go; the app's own rows (openings, live prices, yours) stay */
+    if (all && year) { const ids = new Set(((j.ops && j.ops[a.key]) || []).map((o)=>String(o.id||''))), pre = year+'-'+key+'-';
+      const kept = list.filter((o)=>!(String(o.id).startsWith(pre) && !/-opening$/.test(o.id) && !ids.has(o.id)));
+      if (kept.length !== list.length) { removed += list.length - kept.length; store.ops[key] = kept; } }
     touched.add(key);
     adjusted += reconcileOpenings(acc, touched);
   }
   /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
-  return { accounts, ops, adjusted, names, rates, levels, srcs, touched:[...touched] };
+  return { accounts, ops, adjusted, names, rates, levels, srcs, removed, reset, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
    account's opening; every later book gets an adjustment where it opens at
@@ -4833,6 +4845,7 @@ function settingsData(){
     <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
         <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':Array.isArray(f.file.sources)?f.file.sources.length+' retirement sources':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
+    <div style="margin-top:8px"><button class="chip" data-importmode="${state.importMode==='all'?'figures':'all'}" style="padding:2px 9px;font-size:11.5px"${LK()}>${state.importMode==='all'?'The book wins':'Keep my edits'}</button></div>
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
       <button class="btn primary" data-importgo="1"${LK()}>Import</button>
@@ -5151,14 +5164,15 @@ function wire(){
     };
     inp.click(); });
   document.querySelectorAll('[data-importcancel]').forEach((el)=>el.onclick=()=>{ state.pending=null; render(); });
+  document.querySelectorAll('[data-importmode]').forEach((el)=>el.onclick=()=>{ state.importMode = el.dataset.importmode; render(); });
   document.querySelectorAll('[data-importgo]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return;
     const pend=state.pending; if (!pend) return;
     try {
-      const got = { accounts:0, ops:0, adjusted:0, names:0, touched:new Set() };
-      for (const f of pend.files) { const r = importFile(f.file); got.accounts+=r.accounts; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); for (const t of r.touched) got.touched.add(t); }
+      const got = { accounts:0, ops:0, adjusted:0, names:0, removed:0, reset:0, touched:new Set() };
+      for (const f of pend.files) { const r = importFile(f.file, state.importMode); got.accounts+=r.accounts; got.removed+=r.removed||0; got.reset+=r.reset||0; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.removed?', '+got.removed+' taken out':'')+(got.reset?', '+got.reset+' reset to the book':'')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
