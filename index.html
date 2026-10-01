@@ -262,6 +262,13 @@
   .chip.tagpick{display:flex;align-items:center;gap:7px;width:100%;border-radius:10px;padding:8px 10px;background:var(--bg2);font-size:14px;text-align:left}
   /* the Warnings sub-tab, yellow while there are warnings */
   .subnav button.warn svg{stroke:var(--warn)}
+  .xrow{display:flex;flex-wrap:wrap;align-items:center;gap:4px 8px;padding:7px 0;border-bottom:1px solid var(--line)}
+  .xrow:last-child{border-bottom:0}
+  .xside{flex:1;min-width:0}
+  .xside .sub{font-size:11px}
+  .xside:last-of-type{text-align:right}
+  .xarrow{color:var(--muted);flex:0 0 auto}
+  .xrow .sub.muted{flex-basis:100%}
   .agebar{display:flex;align-items:center;gap:8px;margin-top:4px;font-size:11.5px}
   .agebar input[type=range]{flex:1;margin:0}
   .pvgrid{display:grid;grid-template-columns:1fr 1fr;gap:10px 10px}
@@ -308,9 +315,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=163"></script>
+<script src="backend.js?v=164"></script>
 <script>
-const APP_VERSION="163";
+const APP_VERSION="164";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1242,7 +1249,7 @@ const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint
 const SCREENS = {
   summary: () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '') + subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
   report:  () => subnav('report') + (sub('report')==='prevision' ? tabPrevision() : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? tabBills() : tabReport()),
-  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
+  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='transfers' ? tabTransfers() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   kids: () => subnav('kids') + (sub('kids')==='accounts' ? tabKidsAccounts() : tabKidsSummary()),
   protection: () => subnav('protection') + (sub('protection')==='insurance' ? settingsInsurance() : tabRetirement()),
   settings: tabSettings,
@@ -1252,6 +1259,7 @@ const SCREENS = {
 const SUBS = {
   account: [['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
             ['operations','Operations','<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>'],
+            ['transfers','Transfers','<path d="M4 8h13"/><path d="M13 4l4 4-4 4"/><path d="M20 16H7"/><path d="M11 12l-4 4 4 4"/>'],
             ['warnings','Warnings','<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>']],
   kids:    [['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
             ['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>']],
@@ -1744,6 +1752,45 @@ function tabOperations(){
   ${selBar()}`;
 }
 
+/* -------------------------------------------------------------- transfers --
+   Money moved between the accounts: every operation tagged for a transfer in
+   the year, the debit paired with the credit it matches - the same amount to
+   the cent in one currency, within 5% at the month's rate across two, within
+   60 days, an operation naming the other account first - each used once;
+   what pairs with nothing is listed on its own. Across currencies the rate
+   actually got is shown. A side opens its operation. */
+function transferPairs(Y){
+  const xs = [];
+  for (const a of store.accounts) if (!ownValue(a)) for (const o of opsOf(a.key)) if (isTransferTag(o.tag) && o.date.slice(0,4)===String(Y) && o.amount) xs.push({ o, a });
+  const debits = xs.filter((x)=>x.o.amount < 0).sort((p,q)=>p.o.date<q.o.date?-1:p.o.date>q.o.date?1:0), credits = xs.filter((x)=>x.o.amount > 0);
+  const used = new Set(), rows = [];
+  for (const d of debits) {
+    let best = null;
+    for (const c of credits) { if (used.has(c) || c.a.key===d.a.key) continue;
+      const days = daysApart(c.o.date, d.o.date); if (days > 60) continue;
+      let close;
+      if (c.a.currency===d.a.currency) close = Math.abs(c.o.amount + d.o.amount) < 0.005;
+      else { const v = conv(-d.o.amount, d.a.currency, c.a.currency, d.o.date.slice(0,7)); close = v!=null && Math.abs(v - c.o.amount)/c.o.amount < 0.05; }
+      if (!close) continue;
+      const named = same(d.o.name, c.a.key) || same(c.o.name, d.a.key) ? 0 : 1;
+      if (!best || named < best.named || (named===best.named && days < best.days)) best = { c, named, days };
+    }
+    if (best) { used.add(best.c); rows.push({ d, c:best.c }); } else rows.push({ d, c:null });
+  }
+  for (const c of credits) if (!used.has(c)) rows.push({ d:null, c });
+  return rows.sort((p,q)=>{ const dp = (p.d||p.c).o.date, dq = (q.d||q.c).o.date; return dp<dq?1:dp>dq?-1:0; });
+}
+function tabTransfers(){
+  const Y = theYear(), p = state.page, rows = transferPairs(Y);
+  const side = (x, neg) => x ? `<div class="xside tap" data-opedit="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v ${neg?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${dLabel(x.o.date)}${x.o.name && !same(x.o.name, (neg ? '' : ''))?'':''}</div></div>`
+    : `<div class="xside muted"><div>no other side</div></div>`;
+  const rate = (r) => r.d && r.c && r.d.a.currency!==r.c.a.currency ? `<div class="sub muted" style="text-align:center">1 ${esc(r.d.a.currency)} = ${(r.c.o.amount / -r.d.o.amount).toFixed(4)} ${esc(r.c.a.currency)}</div>` : '';
+  return (p && p.kind==='op' ? opSheet(p, opAcct()) : '') + `
+  <div class="card">
+    <h2>Transfers <span class="muted" style="text-transform:none;letter-spacing:0">${Y} · ${rows.length}</span></h2>
+    ${rows.length ? rows.map((r)=>`<div class="xrow">${side(r.d, true)}<span class="xarrow">→</span>${side(r.c, false)}${rate(r)}</div>`).join('') : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
 /* --------------------------------------------------------------- warnings --
    What looks wrong in the records, for a person to judge. Each finding
    points at the operation (or account) behind it; tapping opens it. */
