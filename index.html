@@ -308,9 +308,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=162"></script>
+<script src="backend.js?v=163"></script>
 <script>
-const APP_VERSION="162";
+const APP_VERSION="163";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4458,8 +4458,8 @@ function tabRetirement(){
   <div class="card">
     <h2>Income by year <span class="muted" style="text-transform:none;letter-spacing:0">a month</span></h2>
     ${retireChart(list)}
-    <div class="chips" style="margin-top:10px">${[['early','Early retirement'],['late','Late retirement']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
-    <div class="chips" style="margin-top:6px">${[['bad','Bad economy 3%'],['balanced','Balanced 6%'],['strong','Strong 10%']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
+    <div class="chips" style="margin-top:10px;align-items:center"><span class="muted" style="font-size:11.5px;margin-right:4px">Retirement age</span>${[['early','Early'],['late','Late']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
+    <div class="chips" style="margin-top:6px;align-items:center"><span class="muted" style="font-size:11.5px;margin-right:4px">Economy</span>${[['bad','Weak'],['balanced','Balanced'],['strong','Strong']].map(([k,l])=>`<button class="chip" data-preset="${k}"${LK()}>${l}</button>`).join('')}</div>
   </div>
   <div class="card">
     <h2>Sources <button class="gbtn" data-srcnew="1"${LK()}>+</button></h2>
