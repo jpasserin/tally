@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=169"></script>
+<script src="backend.js?v=170"></script>
 <script>
-const APP_VERSION="169";
+const APP_VERSION="170";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1664,7 +1664,52 @@ function categoryHistoryCard(id, title, types, pts){
 const CH_GROUPS = [['hs', 'Spendings', ['Necessity','Optional','Misc']], ['hi', 'Income, tax and savings', ['Income','Taxes','Savings']]];
 function tabReportHistory(){
   const pts = monthlyByCategory();
-  return CH_GROUPS.map(([id, title, types])=>categoryHistoryCard(id, title, types, pts)).join('');
+  return CH_GROUPS.map(([id, title, types])=>categoryHistoryCard(id, title, types, pts)).join('') + savingsHistoryCard();
+}
+/* Summary ▸ History ▸ Savings: the Savings accounts month by month since
+   their first record - what was paid in at the bottom, the growth on top -
+   in the shown currency, or one currency's accounts in their own (the chip
+   under the chart turns All, USD, EUR); Graph | Table top right, the table
+   each year's end. */
+const shState = () => state.sh = state.sh || { view:'graph', cur:'all' };
+const SV_PICKS = ['all', 'USD', 'EUR'];
+const SV_SERIES = [{ key:'paid', label:'Paid in', color:'#3b82f6', money:true, stack:true }, { key:'growth', label:'Growth', color:'#f87171', money:true, stack:true }];
+function savingsMonths(pick){
+  const accs = counted().filter((a)=>a.category==='Savings' && (pick==='all' || a.currency===pick));
+  const cur = pick==='all' ? store.cur : pick;
+  let first = null;
+  for (const a of accs) for (const o of opsOf(a.key)) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
+  if (!first) return { cur, pts:[] };
+  const now = nowMonth(); const pts = [];
+  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
+    const m = y+'-'+String(mo).padStart(2,'0'), end = m+'-31'; let paid = 0, value = 0;
+    for (const a of accs) { const p = paidAt(a, end), v = valueAt(a, end);
+      const cp = pick==='all' ? conv(p, a.currency, cur, m) : p, cv = pick==='all' ? conv(v, a.currency, cur, m) : v;
+      if (cp!=null) paid += cp; if (cv!=null) value += cv; }
+    pts.push({ m, label: mLabel(m), values: { paid: Math.round(paid), growth: Math.round(value-paid), value: Math.round(value) } });
+    mo++; if (mo > 12) { mo = 1; y++; }
+  }
+  return { cur, pts };
+}
+function savingsHistoryCard(){
+  const st = shState(); const pick = SV_PICKS.includes(st.cur) ? st.cur : 'all';
+  const { cur, pts } = savingsMonths(pick); const n = pts.length;
+  if (st.hi==null || st.hi > n-1 || st.hi < 1) st.hi = n-1;
+  if (st.lo==null || st.lo >= st.hi) st.lo = 0;
+  const table = st.view==='table';
+  const ys = years().filter((y)=>y<=THIS_YEAR).reverse();
+  const rows = ys.map((Y)=>{ const p = pts.filter((x)=>x.m.slice(0,4)===String(Y)).pop(); return p ? { Y, ...p.values } : null; }).filter(Boolean);
+  const pc = (r) => r.paid ? (r.growth/r.paid*100).toFixed(1)+'%' : '—';
+  const col = (v) => v<0 ? 'var(--bad)' : 'var(--good)';
+  return `
+  <div class="card">
+    <h2>Savings <span class="chips" style="margin-left:auto"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shview="${table?'graph':'table'}">${table?'Table':'Graph'}</button></span></h2>
+    ${n < 2 ? `<div class="hint" style="margin-top:0">No savings${pick==='all'?'':' in '+pick} yet.</div>` : table ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Year</th><th>Paid in</th><th>Growth</th><th>%</th><th>Balance</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr><td>${r.Y}</td><td>${money0(r.paid, cur)}</td><td style="color:${col(r.growth)}">${money0(r.growth, cur)}</td><td style="color:${col(r.growth)}">${pc(r)}</td><td><b>${money0(r.value, cur)}</b></td></tr>`).join('')}</tbody>
+    </table></div>` : rangeChart('sv', pts, SV_SERIES, st.lo, st.hi)}
+    <div class="chips" style="margin-top:8px"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shcur="${nextOf(SV_PICKS, pick)}">${pick==='all'?'All':pick}</button></div>
+  </div>`;
 }
 /* The Summary's six figures, month by month, with the year's total and the
    average per month under each column. */
@@ -5971,6 +6016,8 @@ function wire(){
   document.querySelectorAll('[data-savcur]').forEach((el)=>el.onclick=()=>{ state.savCur=el.dataset.savcur; render(); });
   document.querySelectorAll('[data-chview]').forEach((el)=>el.onclick=()=>{ const [id, v] = el.dataset.chview.split('|'); chState(id).view = v; render(); });
   document.querySelectorAll('[data-chtog]').forEach((el)=>el.onclick=()=>{ const [id, c] = el.dataset.chtog.split('|'); const st = chState(id); st.hide[c] = !st.hide[c]; render(); });
+  document.querySelectorAll('[data-shview]').forEach((el)=>el.onclick=()=>{ shState().view = el.dataset.shview; render(); });
+  document.querySelectorAll('[data-shcur]').forEach((el)=>el.onclick=()=>{ const st = shState(); st.cur = el.dataset.shcur; st.lo = st.hi = null; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-explainclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
   if (state.tab==='summary' && sub('summary')==='history') {
@@ -5980,6 +6027,9 @@ function wire(){
     const cpts = monthlyByCategory();
     for (const [id, , types] of CH_GROUPS) { const st = chState(id); if (st.view==='table') continue; const { series } = chSeriesFor(id, types, cpts);
       if (series.length && cpts.length > 1) wireRangeChart(id, cpts, series, ()=>({ lo:st.lo, hi:st.hi }), (lo,hi)=>{ st.lo=lo; st.hi=hi; }); }
+    const sh = shState();
+    if (sh.view!=='table') { const { pts: spts } = savingsMonths(SV_PICKS.includes(sh.cur) ? sh.cur : 'all');
+      if (spts.length > 1) wireRangeChart('sv', spts, SV_SERIES, ()=>({ lo:sh.lo, hi:sh.hi }), (lo,hi)=>{ sh.lo=lo; sh.hi=hi; }); }
   }
   const ff=document.getElementById('fxFrom'), ft=document.getElementById('fxTo');
   if (ff) ff.onchange=()=>{ store.fxFrom=+ff.value; save(); };
