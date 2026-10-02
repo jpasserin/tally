@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=170"></script>
+<script src="backend.js?v=171"></script>
 <script>
-const APP_VERSION="170";
+const APP_VERSION="171";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -328,7 +328,7 @@ const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
 const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], bills:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
-const save = () => { warnMemo = null; rateMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
+const save = () => { warnMemo = null; rateMemo = new Map(); seriesMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
 const state = { tab:'summary', settings:'data', sync:null, about:null, page:null, account:null, year:null, sub:{}, opf:null, budget:null, prev:null, pvArm:false, bill:null, blView:'year', blLo:null, blHi:null, opAccount:null, sel:[], bulk:null, cat:null, catMonths:[], warnKind:null, fund:null };
 /* The operations filter, per visit of an account page. */
@@ -708,6 +708,12 @@ const valueAt = (a, end) => isFund(a) ? fundValueAt(a, end) : isProp(a) ? propEq
    latest month before it; for the current month, or when the sheet has
    nothing yet, today's live rate. Null when there is nothing at all. */
 let rateMemo = new Map();   // month -> row, for one redraw (a list converts hundreds of amounts)
+/* The month-by-month series of the History charts (every account valued at
+   every month) are kept until the data changes - save() empties this - so a
+   chip or a slider does not value everything again. The shown currency and
+   the month in view are part of the key. */
+let seriesMemo = new Map();
+function memoSeries(key, make){ const k = key+'|'+store.cur+'|'+nowMonth(); if (!seriesMemo.has(k)) seriesMemo.set(k, make()); return seriesMemo.get(k); }
 function rateRow(month){
   if (rateMemo.has(month)) return rateMemo.get(month);
   const now = new Date().toISOString().slice(0,7);
@@ -1623,7 +1629,8 @@ function historyTableBody(types){
 const CAT_PALETTE = ['#3b82f6','#f87171','#4ade80','#fbbf24','#a78bfa','#fb923c','#22d3ee','#f472b6','#84cc16','#e879f9','#2dd4bf','#f59e0b','#60a5fa','#fca5a5'];
 const chState = (id) => { state.ch = state.ch || {}; return state.ch[id] = state.ch[id] || { view:'graph', hide:{} }; };
 /* every month from the first record to now: each category's amount, in the shown currency at the month's rate (values keyed by category name) */
-function monthlyByCategory(){
+const monthlyByCategory = () => memoSeries('cat', monthlyByCategoryNow);
+function monthlyByCategoryNow(){
   const by = {}; let first = null;
   for (const a of reportAccounts()) for (const o of opsOf(a.key)) {
     if (excludedOp(o)) continue;
@@ -1674,21 +1681,20 @@ function tabReportHistory(){
 const shState = () => state.sh = state.sh || { view:'graph', cur:'all' };
 const SV_PICKS = ['all', 'USD', 'EUR'];
 const SV_SERIES = [{ key:'paid', label:'Paid in', color:'#3b82f6', money:true, stack:true }, { key:'growth', label:'Growth', color:'#f87171', money:true, stack:true }];
-function savingsMonths(pick){
-  const accs = counted().filter((a)=>a.category==='Savings' && (pick==='all' || a.currency===pick));
+const savingsMonths = (pick) => memoSeries('sav|'+pick, ()=>savingsMonthsNow(pick));
+function savingsMonthsNow(pick){
+  const accs = counted().filter((a)=>a.category==='Savings' && (pick==='all' || a.currency===pick)).map((a)=>({ a, vals: valueSeries(a), paid: paidSeries(a) }));
   const cur = pick==='all' ? store.cur : pick;
   let first = null;
-  for (const a of accs) for (const o of opsOf(a.key)) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
+  for (const { a } of accs) for (const o of opsOf(a.key)) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
   if (!first) return { cur, pts:[] };
-  const now = nowMonth(); const pts = [];
-  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
-    const m = y+'-'+String(mo).padStart(2,'0'), end = m+'-31'; let paid = 0, value = 0;
-    for (const a of accs) { const p = paidAt(a, end), v = valueAt(a, end);
+  const months = allMonths(), pts = [];
+  months.forEach((m, i)=>{ if (m < first) return;
+    let paid = 0, value = 0;
+    for (const { a, vals, paid: ps } of accs) { const p = ps[i], v = vals[i];
       const cp = pick==='all' ? conv(p, a.currency, cur, m) : p, cv = pick==='all' ? conv(v, a.currency, cur, m) : v;
       if (cp!=null) paid += cp; if (cv!=null) value += cv; }
-    pts.push({ m, label: mLabel(m), values: { paid: Math.round(paid), growth: Math.round(value-paid), value: Math.round(value) } });
-    mo++; if (mo > 12) { mo = 1; y++; }
-  }
+    pts.push({ m, label: mLabel(m), values: { paid: Math.round(paid), growth: Math.round(value-paid), value: Math.round(value) } }); });
   return { cur, pts };
 }
 function savingsHistoryCard(){
@@ -2640,23 +2646,25 @@ function budgetSheet(p){
    chart. */
 /* Every month from the first record to now: the net worth, and each account
    category's part of it (values: nw, Cash, Savings, Property). */
-function netWorthMonths(){
+/* every month from the first record of any account to the month in view */
+const allMonths = () => memoSeries('months', ()=>{
   let first = null;
   for (const k of Object.keys(store.ops)) for (const o of store.ops[k]) { const m = o.date.slice(0,7); if (!first || m < first) first = m; }
   if (!first) return [];
-  const now = nowMonth();
-  const out = [];
-  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) {
-    const m = y+'-'+String(mo).padStart(2,'0');
-    const end = m + '-31';
+  const now = nowMonth(), out = [];
+  for (let y = +first.slice(0,4), mo = +first.slice(5,7); y+'-'+String(mo).padStart(2,'0') <= now; ) { out.push(y+'-'+String(mo).padStart(2,'0')); mo++; if (mo > 12) { mo = 1; y++; } }
+  return out; });
+/* an account valued (and its paid-in) at the end of each of those months, kept with the series */
+const valueSeries = (a) => memoSeries('val|'+a.key, ()=>allMonths().map((m)=>valueAt(a, m+'-31')));
+const paidSeries = (a) => memoSeries('paid|'+a.key, ()=>allMonths().map((m)=>paidAt(a, m+'-31')));
+const netWorthMonths = () => memoSeries('nw', netWorthMonthsNow);
+function netWorthMonthsNow(){
+  const months = allMonths(), accs = counted().map((a)=>({ a, vals: valueSeries(a) }));
+  return months.map((m, i)=>{
     let total = 0; const by = { Cash:0, Savings:0, Property:0 };
-    for (const a of counted()) {
-      const v = conv(valueAt(a, end), a.currency, store.cur, m); if (v!=null) { total += v; by[a.category] = (by[a.category]||0) + v; }
-    }
-    out.push({ label: mLabel(m), values: { nw: Math.round(total), Cash: Math.round(by.Cash), Savings: Math.round(by.Savings), Property: Math.round(by.Property) } });
-    mo++; if (mo > 12) { mo = 1; y++; }
-  }
-  return out;
+    for (const { a, vals } of accs) { const v = conv(vals[i], a.currency, store.cur, m); if (v!=null) { total += v; by[a.category] = (by[a.category]||0) + v; } }
+    return { label: mLabel(m), values: { nw: Math.round(total), Cash: Math.round(by.Cash), Savings: Math.round(by.Savings), Property: Math.round(by.Property) } };
+  });
 }
 /* The History chart: one chip reads what is shown and turns to the next -
    All (savings, cash and property stacked), Cash, Savings, Property (one
