@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=171"></script>
+<script src="backend.js?v=172"></script>
 <script>
-const APP_VERSION="171";
+const APP_VERSION="172";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1654,18 +1654,28 @@ function chSeriesFor(id, types, pts){
   const cats = store.categories.filter((c)=>types.includes(c.type) && pts.some((p)=>p.values[c.name])).map((c,i)=>({ c, color:CAT_PALETTE[i % CAT_PALETTE.length] }));
   return { cats, series: cats.filter((x)=>!st.hide[x.c.name]).map((x)=>({ key:x.c.name, label:x.c.name, color:x.color, money:true })) };
 }
+/* the lines smoothed: each month the average of the last k months (fewer at the start) */
+const CH_SMOOTH = [[1, 'Monthly'], [3, '3 months'], [12, '12 months']];
+const chSmooth = (st) => CH_SMOOTH.some(([k])=>k===st.smooth) ? st.smooth : 1;
+function smoothPts(pts, k){
+  if (k <= 1) return pts;
+  return pts.map((p, i)=>{ const from = Math.max(0, i-k+1), vals = {};
+    for (const key of Object.keys(p.values)) { let t = 0; for (let j = from; j <= i; j++) t += pts[j].values[key] || 0; vals[key] = r2(t / (i-from+1)); }
+    return { label: p.label, values: vals }; });
+}
 function categoryHistoryCard(id, title, types, pts){
   const st = chState(id), n = pts.length;
   const { cats, series } = chSeriesFor(id, types, pts);
   if (st.hi==null || st.hi > n-1 || st.hi < 1) st.hi = n-1;
   if (st.lo==null || st.lo >= st.hi) st.lo = 0;
-  const table = st.view==='table';
+  const table = st.view==='table', k = chSmooth(st);
+  const small = 'style="padding:2px 9px;font-size:11.5px"';
   return `
   <div class="card">
-    <h2>${esc(title)}${table?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}/month</span>`:''} <span class="chips" style="margin-left:auto"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-chview="${id}|${table?'graph':'table'}">${table?'Table':'Graph'}</button></span></h2>
+    <h2>${esc(title)}${table?` <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[store.cur])}/month</span>`:''} <span class="chips" style="margin-left:auto">${table?'':`<button class="chip" ${small} data-chsmooth="${id}|${nextOf(CH_SMOOTH.map(([x])=>x), k)}">${CH_SMOOTH.find(([x])=>x===k)[1]}</button>`}<button class="chip" ${small} data-chview="${id}|${table?'graph':'table'}">${table?'Table':'Graph'}</button></span></h2>
     ${!cats.length ? `<div class="hint" style="margin-top:0">Nothing yet.</div>` : table ? historyTableBody(types) : `
     <div class="chips" style="margin-bottom:8px">${cats.map((x)=>`<button class="chip${st.hide[x.c.name]?'':' on'}" style="padding:2px 9px;font-size:11.5px${st.hide[x.c.name]?'':';background:'+x.color+';border-color:'+x.color}" data-chtog="${id}|${esc(x.c.name)}">${esc(x.c.name)}</button>`).join('')}</div>
-    ${series.length && n > 1 ? rangeChart(id, pts, series, st.lo, st.hi, { legend:false }) : `<div class="hint" style="margin-top:0">${n > 1 ? 'Every category is hidden.' : 'Nothing yet.'}</div>`}`}
+    ${series.length && n > 1 ? rangeChart(id, smoothPts(pts, k), series, st.lo, st.hi, { legend:false }) : `<div class="hint" style="margin-top:0">${n > 1 ? 'Every category is hidden.' : 'Nothing yet.'}</div>`}`}
   </div>`;
 }
 const CH_GROUPS = [['hs', 'Spendings', ['Necessity','Optional','Misc']], ['hi', 'Income, tax and savings', ['Income','Taxes','Savings']]];
@@ -1675,8 +1685,8 @@ function tabReportHistory(){
 }
 /* Summary ▸ History ▸ Savings: the Savings accounts month by month since
    their first record - what was paid in at the bottom, the growth on top -
-   in the shown currency, or one currency's accounts in their own (the chip
-   under the chart turns All, USD, EUR); Graph | Table top right, the table
+   in the shown currency, or one currency's accounts in their own (the first
+   chip top right turns All, USD, EUR); Graph | Table beside it, the table
    each year's end. */
 const shState = () => state.sh = state.sh || { view:'graph', cur:'all' };
 const SV_PICKS = ['all', 'USD', 'EUR'];
@@ -1709,12 +1719,11 @@ function savingsHistoryCard(){
   const col = (v) => v<0 ? 'var(--bad)' : 'var(--good)';
   return `
   <div class="card">
-    <h2>Savings <span class="chips" style="margin-left:auto"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shview="${table?'graph':'table'}">${table?'Table':'Graph'}</button></span></h2>
+    <h2>Savings <span class="chips" style="margin-left:auto"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shcur="${nextOf(SV_PICKS, pick)}">${pick==='all'?'All':pick}</button><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shview="${table?'graph':'table'}">${table?'Table':'Graph'}</button></span></h2>
     ${n < 2 ? `<div class="hint" style="margin-top:0">No savings${pick==='all'?'':' in '+pick} yet.</div>` : table ? `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>Year</th><th>Paid in</th><th>Growth</th><th>%</th><th>Balance</th></tr></thead>
       <tbody>${rows.map((r)=>`<tr><td>${r.Y}</td><td>${money0(r.paid, cur)}</td><td style="color:${col(r.growth)}">${money0(r.growth, cur)}</td><td style="color:${col(r.growth)}">${pc(r)}</td><td><b>${money0(r.value, cur)}</b></td></tr>`).join('')}</tbody>
     </table></div>` : rangeChart('sv', pts, SV_SERIES, st.lo, st.hi)}
-    <div class="chips" style="margin-top:8px"><button class="chip" style="padding:2px 9px;font-size:11.5px" data-shcur="${nextOf(SV_PICKS, pick)}">${pick==='all'?'All':pick}</button></div>
   </div>`;
 }
 /* The Summary's six figures, month by month, with the year's total and the
@@ -6024,6 +6033,7 @@ function wire(){
   document.querySelectorAll('[data-savcur]').forEach((el)=>el.onclick=()=>{ state.savCur=el.dataset.savcur; render(); });
   document.querySelectorAll('[data-chview]').forEach((el)=>el.onclick=()=>{ const [id, v] = el.dataset.chview.split('|'); chState(id).view = v; render(); });
   document.querySelectorAll('[data-chtog]').forEach((el)=>el.onclick=()=>{ const [id, c] = el.dataset.chtog.split('|'); const st = chState(id); st.hide[c] = !st.hide[c]; render(); });
+  document.querySelectorAll('[data-chsmooth]').forEach((el)=>el.onclick=()=>{ const [id, k] = el.dataset.chsmooth.split('|'); chState(id).smooth = +k; render(); });
   document.querySelectorAll('[data-shview]').forEach((el)=>el.onclick=()=>{ shState().view = el.dataset.shview; render(); });
   document.querySelectorAll('[data-shcur]').forEach((el)=>el.onclick=()=>{ const st = shState(); st.cur = el.dataset.shcur; st.lo = st.hi = null; render(); });
   document.querySelectorAll('[data-explain]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'explain', which:el.dataset.explain, fresh:true }; render(); state.page.fresh=false; });
@@ -6034,7 +6044,7 @@ function wire(){
       (r)=>{ const k=document.getElementById('nwKpis'); if (k) k.innerHTML = nwKpis(pts, r.lo, r.hi); });
     const cpts = monthlyByCategory();
     for (const [id, , types] of CH_GROUPS) { const st = chState(id); if (st.view==='table') continue; const { series } = chSeriesFor(id, types, cpts);
-      if (series.length && cpts.length > 1) wireRangeChart(id, cpts, series, ()=>({ lo:st.lo, hi:st.hi }), (lo,hi)=>{ st.lo=lo; st.hi=hi; }); }
+      if (series.length && cpts.length > 1) wireRangeChart(id, smoothPts(cpts, chSmooth(st)), series, ()=>({ lo:st.lo, hi:st.hi }), (lo,hi)=>{ st.lo=lo; st.hi=hi; }); }
     const sh = shState();
     if (sh.view!=='table') { const { pts: spts } = savingsMonths(SV_PICKS.includes(sh.cur) ? sh.cur : 'all');
       if (spts.length > 1) wireRangeChart('sv', spts, SV_SERIES, ()=>({ lo:sh.lo, hi:sh.hi }), (lo,hi)=>{ sh.lo=lo; sh.hi=hi; }); }
