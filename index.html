@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=172"></script>
+<script src="backend.js?v=173"></script>
 <script>
-const APP_VERSION="172";
+const APP_VERSION="173";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3817,6 +3817,93 @@ function nopSheet(p, a){
   </div>`;
 }
 
+/* ------------------------------------------------------- from the bank --
+   A cash account's operations straight from the bank's CSV export (Société
+   Générale's layout: a first line with the account, the period and the
+   balance; then Date;Libellé;Détail;Montant;Devise rows, French dates and
+   decimals, Latin-1). The up arrow beside + picks the file; the sheet lists
+   what is new - an operation already here is one of the same amount within
+   three days, each matched once - with a name read out of the bank's wording
+   and a tag suggested from the names known, the balance now, the balance
+   after, and the bank's own balance to compare; Add writes them. */
+function parseBankCsv(text){
+  const lines = String(text).split(/\r?\n/).map((l)=>l.trim()).filter(Boolean);
+  const fr = (d) => { const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(String(d||'').trim()); return m ? m[3]+'-'+m[2]+'-'+m[1] : null; };
+  const amt = (v) => { const n = parseFloat(String(v).replace(/\s/g,'').replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
+  let bank = null; const rows = [];
+  for (const l of lines) { const c = l.split(';');
+    if (c.length >= 5 && fr(c[0]) && isFinite(amt(c[3])) && /^[A-Z]{3}$/.test(c[4].trim())) rows.push({ date:fr(c[0]), label:c[1].replace(/\s+/g,' ').trim(), detail:c[2].replace(/\s+/g,' ').trim(), amount:amt(c[3]), cur:c[4].trim() });
+    else if (c.length >= 6 && fr(c[4]) && /^-?[\d.]+ ?[A-Z]{3}$/.test(c[5].trim())) { const m = /^(-?[\d.]+) ?([A-Z]{3})$/.exec(c[5].trim()); bank = { account:c[0].trim(), asOf:fr(c[4]), balance:Math.round(parseFloat(m[1])*100)/100, cur:m[2] }; } }
+  return { bank, rows };
+}
+/* a name out of the bank's wording: the merchant of a card payment, the person paid or paying, the creditor of a debit, else the label */
+function bankName(r){
+  const d = r.detail || r.label || '';
+  const title = (x) => x.toLowerCase().replace(/(^|[\s'-])(\S)/g, (m, a, b) => a + b.toUpperCase()).trim();
+  const person = (x) => title(x.split(/\s+OU\s+/)[0].replace(/\b(M|MME|MLLE|MLE|MR|MRS)\b\.?\s*/g, '').replace(/\s+/g,' ').trim());
+  let m;
+  if ((m = /\bCARTE X\d+ \d{2}\/\d{2}\s+(.+?)(?:\s+COMMERCE ELECTRONIQUE|\s+\d{8,}|\s+CB\b|$)/.exec(d))) return title(m[1].replace(/\*+/g,' ').replace(/\s+/g,' '));
+  if ((m = /\bPOUR:\s*(.+?)(?:\s+\d{2} \d{2} SG\b|\s+REF:|\s+CPT\b|$)/.exec(d))) return person(m[1]);
+  if ((m = /\bDE:\s*(.+?)(?:\s+DATE:|\s+MOTIF:|$)/.exec(d))) return person(m[1]);
+  if ((m = /\bPRLV(?: SEPA)?\s+(.+?)(?:\s+REF\b|\s+ID\b|\s+ECH\b|$)/i.exec(d))) return title(m[1]);
+  if (/REMISE CHEQUE/i.test(d)) return 'Remise chèque';
+  return title((r.label || d).replace(/^\d+\s+/, ''));
+}
+/* the tag to suggest: a known name's tag, else the tag this name carries most in this account, then anywhere */
+function bankTag(a, name){
+  const kn = nameTags(name); if (kn.length) return kn[0];
+  const count = (list) => { const c = {}; for (const o of list) if (o.tag && same(o.name, name)) c[o.tag] = (c[o.tag]||0) + 1; const best = Object.keys(c).sort((x,y)=>c[y]-c[x])[0]; return best || ''; };
+  return count(opsOf(a.key)) || count(store.accounts.flatMap((b)=>opsOf(b.key)));
+}
+function bankPlan(a, parsed){
+  const used = new Set(), list = opsOf(a.key);
+  const match = (r) => { let best = null;
+    for (const o of list) { if (used.has(o.id) || Math.abs((o.amount||0) - r.amount) > 0.005) continue; const d = daysApart(o.date, r.date); if (d <= 3 && (!best || d < best.d)) best = { o, d }; }
+    if (best) used.add(best.o.id); return best ? best.o : null; };
+  const rows = parsed.rows.slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((r)=>{ const have = match(r); const name = bankName(r);
+    return { ...r, have, name, tag: have ? '' : bankTag(a, name), note: r.detail.slice(0, 160), name0:name, tag0: have ? '' : bankTag(a, name) }; });
+  const news = rows.filter((r)=>!r.have);
+  const now = r2(valueAt(a, '2999-12-31'));
+  return { rows, news, now, after: r2(now + news.reduce((t,r)=>t+r.amount, 0)), bank: parsed.bank };
+}
+function bankSheet(p, a){
+  const pl = p.plan, n = pl.news.length;
+  const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - pl.after) < 0.005 : null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-bankclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>From the bank <span class="muted" style="font-size:12px;font-weight:600">${esc(p.file)}</span></h3>
+      <div class="rows">
+        <div class="row"><span class="k">In the file</span><span class="v">${pl.rows.length}</span></div>
+        <div class="row"><span class="k">Already here</span><span class="v">${pl.rows.length - n}</span></div>
+        <div class="row"><span class="k"><b>New</b></span><span class="v"><b>${n}</b></span></div>
+        <div class="row"><span class="k">Balance now</span><span class="v">${money(pl.now, a.currency)}</span></div>
+        <div class="row"><span class="k"><b>Balance after</b></span><span class="v"><b>${money(pl.after, a.currency)}</b></span></div>
+        ${pl.bank ? `<div class="row"><span class="k">The bank on ${dLabel(pl.bank.asOf)}</span><span class="v" style="color:${agree?'var(--good)':agree===false?'var(--bad)':'var(--txt)'}">${money(pl.bank.balance, pl.bank.cur)}</span></div>` : ''}
+      </div>
+      ${n ? pl.news.map((r,i)=>`
+      <div class="rows" style="margin-top:8px">
+        <div class="row"><span class="k">${dLabel(r.date)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
+        <div class="field" style="margin-top:4px"><input id="bkName${i}" type="text" value="${esc(r.name)}"></div>
+        <div class="field" style="margin-top:4px">${tagPick('bkTag'+i, r.tag, p.tagpick==='bkTag'+i)}</div>
+        <div class="sub" style="font-size:11px;margin-top:4px">${esc(r.detail)}</div>
+      </div>`).join('') : `<div class="hint">Nothing new.</div>`}
+      <div class="foot">
+        <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
+        ${n ? `<button class="btn primary" data-bankgo="1">Add ${n} operation${n===1?'':'s'}</button>` : ''}
+      </div>
+    </div>
+  </div>`;
+}
+/* the names and tags as typed, back into the plan; whether any differs from what was suggested */
+function readBank(){
+  const p = state.page; if (!p || p.kind!=='bank') return false;
+  let dirty = false;
+  p.plan.news.forEach((r,i)=>{ const nm = document.getElementById('bkName'+i), tg = document.getElementById('bkTag'+i);
+    if (nm) r.name = nm.value; if (tg) r.tag = tg.value; if (r.name !== r.name0 || r.tag !== r.tag0) dirty = true; });
+  return dirty;
+}
 function accountPage(a){
   if (isFund(a)) return fundAccountPage(a);
   if (isProp(a)) return propertyPage(a);
@@ -3831,7 +3918,7 @@ function accountPage(a){
   const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
-  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : '') + `
+  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : p && p.kind==='bank' ? bankSheet(p, a) : '') + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
@@ -3845,7 +3932,8 @@ function accountPage(a){
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
-        <button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
+        <button class="gbtn" data-bankup="1"${LKY()}>↑</button><button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
+    <input type="file" id="fBank" accept=".csv,text/csv,text/plain" style="display:none">
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
   </div>`}
@@ -5102,12 +5190,12 @@ function wire(){
     state.tagpick = null; commit(); });
   /* the tag pickers of the widgets: unfold, pick */
   document.querySelectorAll('[data-tagpick]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
-    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm();
+    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm(); else if (p.kind==='bank') readBank();
     p.tagpick = p.tagpick===el.dataset.tagpick ? null : el.dataset.tagpick; render(); });
   document.querySelectorAll('[data-tagset]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
     const i = el.dataset.tagset.indexOf('|'); const id = el.dataset.tagset.slice(0,i), tag = el.dataset.tagset.slice(i+1);
     const e = document.getElementById(id); if (e) { e.value = tag; if (typeof e.oninput==='function') e.oninput(); if (typeof e.onchange==='function') e.onchange(); }
-    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm();
+    if (p.kind==='op') readOp(); else if (p.kind==='name') readNm(); else if (p.kind==='bank') readBank();
     p.tagpick = null; render(); });
 
   /* categories - drag a row by its handle to reorder; pointer events on the
@@ -5772,6 +5860,23 @@ function wire(){
     const wireKnown = () => document.querySelectorAll('[data-opknown]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.tag=el.dataset.opknown; render(); });
     wireKnown();
   }
+  document.querySelectorAll('[data-bankup]').forEach((el)=>el.onclick=()=>{
+    if (store.locked) return; const a = acct(), inp = document.getElementById('fBank'); if (!a || !inp) return;
+    inp.onchange=()=>{ const f = (inp.files||[])[0]; if (!f) return; const rd = new FileReader();
+      rd.onload=()=>{ try { const parsed = parseBankCsv(String(rd.result)); if (!parsed.rows.length) throw new Error('No operation found in that file.');
+          state.page = { kind:'bank', fresh:true, file:f.name||'', plan:bankPlan(a, parsed) }; render(); state.page.fresh=false; }
+        catch (e) { alert(e.message); } };
+      rd.onerror=()=>alert('Could not read '+(f.name||'that file')+'.');
+      rd.readAsText(f, 'ISO-8859-1'); inp.value=''; };
+    inp.click(); });
+  document.querySelectorAll('[data-bankclose]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
+    if (readBank() && !p.closeArm) { p.closeArm=true; render(); return; }
+    state.page=null; render(); });
+  document.querySelectorAll('[data-bankgo]').forEach((el)=>el.onclick=()=>{
+    readBank(); const p = state.page, a = acct(); if (!p || !a) return;
+    const list = opsOf(a.key);
+    for (const r of p.plan.news) list.push({ id:uid(), date:r.date, name:String(r.name||'').trim(), amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:'', oneoff:false });
+    state.page=null; commit(a.key); });
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
     if (closedGuard(p.date, p.id && opDateById(p.id))) return;
