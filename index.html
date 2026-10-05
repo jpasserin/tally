@@ -190,6 +190,22 @@
   .drange{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
   .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-bottom:4px}
   .bsel{flex:0 0 29%;min-width:0;font-size:12px;padding:0 6px;height:34px;background:var(--card2);color:var(--txt);border:1px solid var(--line);border-radius:10px}
+  .opsheet h3{font-size:14.5px}
+  .opsheet .field label{font-size:10px}
+  .opsheet input{font-size:13px;padding:5px 8px}
+  .opsheet .btnrow{gap:6px}
+  .opsheet .field{margin-bottom:4px}
+  .tbox{display:flex;align-items:center;gap:6px;position:relative;min-width:0;flex:1;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:0 8px}
+  .tbox:focus-within{border-color:var(--accent)}
+  .tbox input,.opsheet .tbox input{border:0;background:none;padding:6px 0;min-width:0;flex:1;border-radius:0}
+  .tbox input:focus{border-color:transparent}
+  .tbox .bktl{top:calc(100% + 3px);min-width:170px}
+  .bktl .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+  .bktl .bopt{display:flex;align-items:center}
+  .bbox{position:relative;flex:none}
+  .bbox .bbtn{height:33px;background:var(--bg2);border:1px solid var(--line);border-radius:10px;padding:0 8px;color:var(--muted);font-size:11.5px;display:flex;align-items:center;white-space:nowrap}
+  .bbox .bbtn .cap{margin:0}
+  .bbox .bktl{left:auto;right:0;min-width:150px}
   .bkday{font-size:12px;font-weight:600;margin:10px 0 2px;color:var(--muted)}
   .bkop{font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)}
   .bkd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
@@ -198,7 +214,7 @@
   .bkn{display:flex;gap:6px;margin-top:4px}
   .bkn input{font-size:12px;padding:5px 7px;min-width:0;width:100%;box-sizing:border-box}
   .bkn > input{flex:3}
-  .bkt{flex:1;position:relative;min-width:0}
+  .bkt{flex:1;position:relative;min-width:0;display:flex}
   .bktl{position:absolute;left:0;right:0;top:100%;z-index:6;background:var(--card2);border:1px solid var(--line);border-radius:8px;max-height:170px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.35)}
   .bktl:empty{display:none}
   .bktl button{display:block;width:100%;text-align:left;padding:6px 8px;font-size:12px;background:none;border:0;color:var(--txt)}
@@ -331,9 +347,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=178"></script>
+<script src="backend.js?v=179"></script>
 <script>
-const APP_VERSION="178";
+const APP_VERSION="179";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -914,7 +930,7 @@ const SOURCES = ['Roth','Traditional','Rollover','Match','Profit sharing'];
 function opsTab(a){
   return { name:a.key, headers:OPS_HEADERS,
     rows: opsOf(a.key).slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((o)=>[o.date, o.name, o.amount==null?'':o.amount, o.note||'', o.tag,
-      o.splits.map((sp)=>sp.tag+':'+sp.amount+(sp.budget?' @ '+sp.budget:'')).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'', o.vest||'', o.until||'']) };
+      o.splits.map((sp)=>sp.tag+':'+sp.amount+(sp.budget?' @ '+sp.budget:'')+(sp.name?' # '+sp.name:'')).join('; '), o.budget||'', o.oneoff?'yes':'', o.id, o.fund||'', o.kind||'', o.shares==null?'':o.shares, o.price==null?'':o.price, o.src||'', o.vest||'', o.until||'']) };
 }
 /* "Budget ops": every operation that carries a budget, one row each, grouped
    by budget then date. A mirror for reading - the account tabs
@@ -942,8 +958,9 @@ function readOps(tab){
       src: str(col(r,'Source')) || undefined,
       vest: str(col(r,'Vest')).slice(0,10) || undefined, until: str(col(r,'Expire')).slice(0,10) || undefined,
       tag: str(col(r,'Tag')),
-      splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const b=x.lastIndexOf(' @ '); const budget = b<0 ? '' : x.slice(b+3).trim(); if (b>=0) x = x.slice(0,b); const i=x.lastIndexOf(':');
-        return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)), ...(budget ? { budget } : {}) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
+      splits: str(col(r,'Splits')).split(';').map((x)=>x.trim()).filter(Boolean).map((x)=>{ const h=x.lastIndexOf(' # '); const name = h<0 ? '' : x.slice(h+3).trim(); if (h>=0) x = x.slice(0,h);
+        const b=x.lastIndexOf(' @ '); const budget = b<0 ? '' : x.slice(b+3).trim(); if (b>=0) x = x.slice(0,b); const i=x.lastIndexOf(':');
+        return { tag:x.slice(0,i).trim(), amount:num(x.slice(i+1)), ...(budget ? { budget } : {}), ...(name ? { name } : {}) }; }).filter((sp)=>sp.tag && isFinite(sp.amount)),
       budget: str(col(r,'Budget')), oneoff: str(col(r,'One-off'))==='yes' });
   }
   return out;
@@ -1097,7 +1114,7 @@ function importFile(j, mode){
       const sharesOnly = !isPrice && isFinite(+o.shares) && +o.shares!==0 && o.fund;
       if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date||'') || (!isPrice && !sharesOnly && (!isFinite(+o.amount) || +o.amount===0))) continue;
       const clean = { id:String(o.id||uid()), date:o.date, name:String(o.name||''), amount: isPrice ? null : (isFinite(+o.amount) ? Math.round(+o.amount*100)/100 : 0), note:String(o.note||''),
-        tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount, ...(sp.budget ? { budget:String(sp.budget) } : {}) })),
+        tag:String(o.tag||''), splits:(o.splits||[]).filter((sp)=>sp&&sp.tag&&isFinite(+sp.amount)).map((sp)=>({ tag:String(sp.tag), amount:+sp.amount, ...(sp.budget ? { budget:String(sp.budget) } : {}), ...(sp.name ? { name:String(sp.name) } : {}) })),
         budget:String(o.budget||''), oneoff:!!o.oneoff };
       if (o.fund) { clean.fund=String(o.fund); clean.kind=String(o.kind||'Paid in'); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src); }
       else if (o.kind) { clean.kind=String(o.kind); if (isFinite(+o.shares)) clean.shares=+o.shares; if (isFinite(+o.price)) clean.price=+o.price; if (o.src) clean.src=String(o.src);
@@ -3942,6 +3959,37 @@ const tagHits = (q) => { q = String(q||'').trim().toLowerCase(); if (!q) return 
   return all.filter((t)=>t.tag.toLowerCase().startsWith(q)).concat(all.filter((t)=>!t.tag.toLowerCase().startsWith(q) && t.tag.toLowerCase().includes(q))).slice(0, 8); };
 /* what was typed as a tag: the tag of that name, else the first one starting so; null when none */
 const tagResolve = (q) => { q = String(q||'').trim(); if (!q) return ''; const ex = allTags().find((t)=>same(t.tag, q)); if (ex) return ex.tag; const h = tagHits(q).filter((t)=>t.tag.toLowerCase().startsWith(q.toLowerCase())); return h.length ? h[0].tag : null; };
+/* A tag box: the dot of the tag's category, then the tag typed or picked -
+   typing lists the tags starting with those letters (then the ones holding
+   them), each with its dot; a tap fills the box. wireTagBoxes wires every
+   one on screen. */
+function tagBox(id, value){
+  const c = value ? catOfTag(value) : null, col = c ? typeColor(c.type) : null;
+  return `<div class="tbox"><span class="dot" id="${id}Dot" style="background:${col||'transparent'};border:1px solid ${col||'var(--line)'}"></span><input id="${id}" type="text" value="${esc(value||'')}" placeholder="tag" autocomplete="off" data-tagbox="${id}"><div class="bktl" id="${id}List"></div></div>`;
+}
+function wireTagBoxes(onchange){
+  document.querySelectorAll('[data-tagbox]').forEach((n)=>{ const id = n.dataset.tagbox, el = document.getElementById(id) || n, box = document.getElementById(id+'List'), dot = document.getElementById(id+'Dot');
+    const paint = ()=>{ if (!dot) return; const c = catOfTag(tagResolve(el.value) || el.value), col = c ? typeColor(c.type) : null; dot.style.background = col || 'transparent'; dot.style.borderColor = col || 'var(--line)'; };
+    const show = ()=>{ if (!box) return;
+      box.innerHTML = tagHits(el.value).map((t)=>{ const c = catOfTag(t.tag); return `<button type="button" class="bopt" data-tagopt="${esc(t.tag)}"><span class="dot" style="background:${c?typeColor(c.type):'transparent'}"></span>${esc(t.tag)}<span class="cat">${esc(t.cat)}</span></button>`; }).join('');
+      box.onclick = (e)=>{ let t = e && e.target; while (t && t !== box && !(t.dataset && t.dataset.tagopt!=null)) t = t.parentNode; if (t && t !== box) { el.value = t.dataset.tagopt; box.innerHTML = ''; paint(); if (onchange) onchange(el); } }; };
+    el.oninput = ()=>{ show(); paint(); if (onchange) onchange(el); }; el.onfocus = show;
+    el.onblur = ()=>setTimeout(()=>{ if (box && document.activeElement !== el) box.innerHTML = ''; }, 200);
+    el.repaint = paint; });
+}
+/* A budget box: the budget as its capsule in its colour; a tap lists the open budgets (and the one it is on, even closed) as capsules, or none. */
+const budgetCap = (b) => `<span class="cap bcap" style="color:${b.color};margin:0">${esc(b.name)}</span>`;
+function budgetBox(id, cur){
+  if (!budgetsFor(cur).length) return '';
+  const b = cur ? budgetOf(cur) : null;
+  return `<div class="bbox"><input type="hidden" id="${id}" value="${esc(cur||'')}"><button type="button" class="bbtn" data-budbox="${id}">${b?budgetCap(b):'Budget'}</button><div class="bktl" id="${id}List"></div></div>`;
+}
+function wireBudgetBoxes(onchange){
+  document.querySelectorAll('[data-budbox]').forEach((btn)=>{ const id = btn.dataset.budbox, inp = document.getElementById(id), box = document.getElementById(id+'List'); if (!inp || !box) return;
+    btn.onclick = ()=>{ if (box.innerHTML) { box.innerHTML = ''; return; }
+      box.innerHTML = `<button type="button" class="bopt" data-budopt="">—</button>` + budgetsFor(inp.value).map((b)=>`<button type="button" class="bopt" data-budopt="${esc(b.name)}">${budgetCap(b)}</button>`).join('');
+      box.onclick = (e)=>{ let t = e && e.target; while (t && t !== box && !(t.dataset && t.dataset.budopt!=null)) t = t.parentNode; if (t && t !== box) { inp.value = t.dataset.budopt; const b = inp.value ? budgetOf(inp.value) : null; btn.innerHTML = b ? budgetCap(b) : 'Budget'; box.innerHTML = ''; if (onchange) onchange(inp); } }; }; });
+}
 function bankSheet(p, a){
   const pl = p.plan, n = pl.news.length;
   const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - pl.after) < 0.005 : null;
@@ -3961,7 +4009,7 @@ function bankSheet(p, a){
       ${d.items.map((i)=>{ const r = pl.news[i]; return `
       <div class="bkop">
         <div class="bkd"><span>${esc(r.detail)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
-        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt"><input id="bkTag${i}" type="text" value="${esc(r.tag)}" placeholder="tag" autocomplete="off" data-bktag="${i}"><div class="bktl" id="bkTagList${i}"></div></div></div>
+        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div></div>
       </div>`; }).join('')}`).join('') : `<div class="hint">Nothing new.</div>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -4084,7 +4132,7 @@ function balanceHistoryCard(a){
     </table>
   </div>`;
 }
-const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.budget||'',p.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||''])]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.budget||'',p.was.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||''])]);
+const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.budget||'',p.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.budget||'',p.was.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]);
 /* A tag picker in the app's own colours: the chosen tag with its category's
    dot; a tap unfolds the categories (bold, dotted) and their tags, a tap on
    one picks it and folds. The value sits in a hidden input under the id, so
@@ -4110,8 +4158,6 @@ function transferCandidates(o, a){
     } }
   return out.sort((x,y)=>x.days-y.days);
 }
-/* a budget to pick for a tag's part: the open budgets, and the one it is on even if closed; nothing to pick when there is no budget */
-const budgetSelect = (id, cur) => budgetsFor(cur).length ? `<select id="${id}" class="bsel"><option value="">Budget</option>${budgetsFor(cur).map((b)=>`<option value="${esc(b.name)}"${same(cur||'', b.name)?' selected':''}>${esc(b.name)}</option>`).join('')}</select>` : '';
 function opSheet(p, a){
   if (!a) return '';
   const isNew = p.id==null;
@@ -4137,29 +4183,29 @@ function opSheet(p, a){
   return `
   <div class="sheetwrap">
     <div class="scrim" data-opclose="1"></div>
-    <div class="sheet${p.fresh?' enter':''}">
+    <div class="sheet${p.fresh?' enter':''} opsheet">
       ${p.match?`<div class="chips" style="margin-bottom:4px"><button class="chip on" data-opview="edit">Edit</button><button class="chip" data-opview="match">Match</button></div>`:''}
       <h3>${isNew?'New operation':esc(p.was.name||'Operation')}</h3>
       <div class="btnrow">
-        <div class="field" style="flex:1"><label>Date</label><input id="oDate" type="date" value="${esc(p.date)}"></div>
-        <div class="field" style="flex:1"><label>Amount ${esc(SYM[a.currency]||a.currency)}</label><input id="oAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
+        <div class="field" style="flex:1.1;min-width:0"><label>Date</label><input id="oDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1.5;min-width:0"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
+        <div class="field" style="flex:0.9;min-width:0"><label>Amount ${esc(SYM[a.currency]||a.currency)}</label><input id="oAmount" inputmode="decimal" value="${esc(p.amount)}" style="text-align:right"></div>
       </div>
-      <div class="field"><label>Name</label><input id="oName" value="${esc(p.name)}"></div>
       <div class="field"><label>Description</label><input id="oNote" value="${esc(p.note)}"></div>
       <div class="field"><label>Tag</label>
-        <div class="btnrow" style="align-items:flex-start">
-          <div style="flex:1;min-width:0">${tagPick('oTag', p.tag, p.tagpick==='oTag')}</div>
-          ${budgetSelect('oBudget', p.budget)}
-          <button class="gbtn" data-opspadd="1" style="flex:none" title="a secondary tag">+</button>
+        <div class="btnrow" style="align-items:center">
+          ${tagBox('oTag', p.tag)}
+          ${p.name.trim() && p.tag ? (nameTags(p.name).some((t)=>same(t, p.tag)) ? `<button class="chip" style="flex:none;padding:4px 9px;font-size:11.5px" data-oprulerm="1">Remove rule</button>` : `<button class="chip" style="flex:none;padding:4px 9px;font-size:11.5px" data-oprule="1">Make rule</button>`) : ''}
+          ${budgetBox('oBudget', p.budget)}
         </div>
-        <div id="oKnown">${knownChips(p.name, p.tag)}</div>
-        ${p.name.trim() && p.tag && !nameTags(p.name).some((t)=>same(t, p.tag)) ? `<button class="chip" style="margin-top:5px" data-oprule="1">Make it a tag rule: ${esc(p.name.trim())} → ${esc(p.tag)}</button>` : ''}
-        ${p.splits.map((sp,i)=>`<div class="btnrow" style="margin-top:6px;align-items:flex-start">
-          <div style="flex:1;min-width:0">${tagPick('oSpTag'+i, sp.tag, p.tagpick==='oSpTag'+i)}</div>
-          <input id="oSpAmt${i}" inputmode="decimal" value="${esc(sp.amount)}" style="width:72px;text-align:right;flex:none">
-          ${budgetSelect('oSpBud'+i, sp.budget)}
-          <button class="chip" data-opspdel="${i}" style="flex:none">×</button>
-        </div>`).join('')}</div>
+        ${p.splits.map((sp,i)=>`<div class="btnrow" style="margin-top:6px;align-items:center">
+          ${tagBox('oSpTag'+i, sp.tag)}
+          <input id="oSpName${i}" value="${esc(sp.name||'')}" placeholder="name" style="flex:1;min-width:0">
+          <input id="oSpAmt${i}" inputmode="decimal" value="${esc(sp.amount)}" style="width:62px;flex:none;text-align:right">
+          ${budgetBox('oSpBud'+i, sp.budget)}
+          <button class="chip" data-opspdel="${i}" style="flex:none;padding:4px 8px">×</button>
+        </div>`).join('')}
+        <div style="margin-top:6px"><button class="gbtn" data-opspadd="1" title="a secondary tag">+</button></div></div>
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-opdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-opclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -5901,8 +5947,10 @@ function wire(){
   const acct = () => opAcct();
   document.querySelectorAll('[data-opbudget]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.budget = same(state.page.budget||'', el.dataset.opbudget) ? '' : el.dataset.opbudget; render(); });
   const readOp=()=>{ const p=state.page; if (p.view==='match') return; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
-    for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oTag','tag'],['oBudget','budget']]) { const v=g(id); if (v!==undefined) p[f]=v; }
-    p.splits = p.splits.map((sp,i)=>({ tag: g('oSpTag'+i) ?? sp.tag, amount: g('oSpAmt'+i) ?? sp.amount, budget: g('oSpBud'+i) ?? (sp.budget||'') }));
+    for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oBudget','budget']]) { const v=g(id); if (v!==undefined) p[f]=v; }
+    const tg = (id, was) => { const v = g(id); if (v===undefined) return was; const t = tagResolve(v); return t==null ? v.trim() : t; };     /* a tag typed in part is the first tag starting so; a word no tag starts with is a new tag, filed later under Settings > Tags */
+    p.tag = tg('oTag', p.tag);
+    p.splits = p.splits.map((sp,i)=>({ tag: tg('oSpTag'+i, sp.tag), name: g('oSpName'+i) ?? (sp.name||''), amount: g('oSpAmt'+i) ?? sp.amount, budget: g('oSpBud'+i) ?? (sp.budget||'') }));
     p.closeArm=false; p.delArm=false; };
   const openOp=(id)=>{ openOpById(id); };
   function openOpById(id){
@@ -5913,7 +5961,7 @@ function wire(){
     const o = id==null ? null : opsOf((owner||{}).key||state.account).find((x)=>x.id===id);
     const Y = theYear();
     const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'', budget:o?(o.budget||''):'',
-      splits:o?o.splits.map((sp)=>({ tag:sp.tag, amount:String(sp.amount), budget:sp.budget||'' })):[] };
+      splits:o?o.splits.map((sp)=>({ tag:sp.tag, name:sp.name||'', amount:String(sp.amount), budget:sp.budget||'' })):[] };
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true, match:fromTransfer, view:fromTransfer?'match':'edit' };
     render(); state.page.fresh=false; }
   document.querySelectorAll('[data-opnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openOp(null); });
@@ -5925,20 +5973,22 @@ function wire(){
     const mine = opsOf(a.key).find((x)=>x.id===state.page.id), theirs = opsOf(other.key).find((x)=>x.id===el.dataset.opmatch);
     for (const [x,acc] of [[mine,a],[theirs,other]]) { const k = dismissKey('transfer', x, acc); if (!store.dismissed.includes(k)) store.dismissed.push(k); }
     state.page=null; state.opAccount=null; commit('Dismissed'); });
-  document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', amount:'', budget:'' }); render(); });
+  document.querySelectorAll('[data-opspadd]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.push({ tag:'', name:'', amount:'', budget:'' }); render(); });
   document.querySelectorAll('[data-opspdel]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.splits.splice(+el.dataset.opspdel,1); render(); });
-  /* this payee under this tag, known from now on */
+  /* this payee under this tag, known from now on - or no longer */
   document.querySelectorAll('[data-oprule]').forEach((el)=>el.onclick=()=>{ readOp(); const p=state.page; if (!p.name.trim() || !p.tag) return; learnName(p.name.trim(), p.tag); markDirty('Config'); save(); render(); pushSoon(); });
+  document.querySelectorAll('[data-oprulerm]').forEach((el)=>el.onclick=()=>{ readOp(); const p=state.page; const n = knownFor(p.name.trim()); if (!n) return;
+    n.tags = n.tags.filter((t)=>!same(t, p.tag)); if (!n.tags.length) store.names = knownNames().filter((x)=>x!==n); markDirty('Config'); save(); render(); pushSoon(); });
   if (state.page && state.page.kind==='op') {
-    for (const id of ['oDate','oName','oAmount','oNote','oTag','oBudget'].concat(state.page.splits.flatMap((sp,i)=>['oSpTag'+i,'oSpAmt'+i,'oSpBud'+i]))) {
+    for (const id of ['oDate','oName','oAmount','oNote'].concat(state.page.splits.flatMap((sp,i)=>['oSpName'+i,'oSpAmt'+i]))) {
       const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; };
     }
-    /* the name typed: the known tags appear under Tag, the field keeps the finger */
-    const on=document.getElementById('oName'), ok=document.getElementById('oKnown');
-    if (on && ok) { const was = on.oninput; on.oninput=()=>{ if (was) was(); const t=document.getElementById('oTag'); ok.innerHTML = knownChips(on.value, t ? t.value : ''); wireKnown(); }; }
-    const wireKnown = () => document.querySelectorAll('[data-opknown]').forEach((el)=>el.onclick=()=>{ readOp(); state.page.tag=el.dataset.opknown; render(); });
-    wireKnown();
+    /* the name typed: a tag box still empty takes the tag the name is known under, the field keeps the finger */
+    const on=document.getElementById('oName'), ot=document.getElementById('oTag');
+    if (on && ot) { const was = on.oninput; on.oninput=()=>{ if (was) was(); if (!ot.value.trim()) { const kn = nameTags(on.value); if (kn.length) { ot.value = kn[0]; if (ot.repaint) ot.repaint(); } } }; }
   }
+  wireTagBoxes(()=>{ if (state.page) { state.page.closeArm=false; state.page.delArm=false; } });
+  wireBudgetBoxes(()=>{ if (state.page) { state.page.closeArm=false; state.page.delArm=false; } });
   document.querySelectorAll('[data-bankup]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return; const a = acct(), inp = document.getElementById('fBank'); if (!a || !inp) return;
     inp.onchange=()=>{ const f = (inp.files||[])[0]; if (!f) return; const rd = new FileReader();
@@ -5953,12 +6003,6 @@ function wire(){
   document.querySelectorAll('[data-bankclose]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
     if (readBank() && !p.closeArm) { p.closeArm=true; render(); return; }
     state.page=null; render(); });
-  /* typing in a tag box lists the tags starting with the letters typed; a tap on one fills the box */
-  document.querySelectorAll('[data-bktag]').forEach((el)=>{ const box = document.getElementById('bkTagList'+el.dataset.bktag);
-    const show = ()=>{ if (!box) return; const hits = tagHits(el.value);
-      box.innerHTML = hits.map((t)=>`<button type="button" data-bktagset="${esc(t.tag)}">${esc(t.tag)}<span class="cat">${esc(t.cat)}</span></button>`).join('');
-      box.onclick = (e)=>{ let t = e && e.target; while (t && t !== box && !(t.dataset && t.dataset.bktagset)) t = t.parentNode; if (t && t !== box) { el.value = t.dataset.bktagset; box.innerHTML = ''; } }; };
-    el.oninput = show; el.onfocus = show; el.onblur = ()=>setTimeout(()=>{ if (box && document.activeElement !== el) box.innerHTML = ''; }, 200); });
   document.querySelectorAll('[data-bankgo]').forEach((el)=>el.onclick=()=>{
     readBank(); const p = state.page, a = acct(); if (!p || !a) return;
     const bad = p.plan.news.filter((r)=>r.badTag).map((r)=>r.tag); if (bad.length) { alert('No tag called ' + bad.map((t)=>'"'+t+'"').join(', ') + '.'); return; }
@@ -5969,15 +6013,14 @@ function wire(){
     readOp(); const p=state.page, a=acct(); if (!a) return;
     if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id: p.id || uid(), date:p.date, name:p.name.trim(), amount:num(p.amount), note:p.note.trim(), tag:p.tag,
-      splits: p.splits.map((sp)=>({ tag:sp.tag, amount:num(sp.amount), ...(sp.budget ? { budget:sp.budget } : {}) })), budget:p.budget||'', oneoff:false };
+      splits: p.splits.map((sp)=>({ tag:sp.tag, amount:num(sp.amount), ...(sp.budget ? { budget:sp.budget } : {}), ...(String(sp.name||'').trim() ? { name:String(sp.name).trim() } : {}) })), budget:p.budget||'', oneoff:false };
     try { checkOp(o); } catch (e) { alert(e.message); render(); return; }
     const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
     if (i>=0) Object.assign(list[i], o); else list.push(o);
     state.page=null; state.opAccount=null; commit(a.key); });
   document.querySelectorAll('[data-opclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
-    for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oTag','tag'],['oBudget','budget']]) { const v=g(id); if (v!==undefined) p[f]=v; }
-    p.splits = p.splits.map((sp,i)=>({ tag: g('oSpTag'+i) ?? sp.tag, amount: g('oSpAmt'+i) ?? sp.amount, budget: g('oSpBud'+i) ?? (sp.budget||'') }));
+    readOp();
     if (opDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; }
     state.page=null; state.opAccount=null; render(); });
   document.querySelectorAll('[data-opdelete]').forEach((el)=>el.onclick=()=>{
