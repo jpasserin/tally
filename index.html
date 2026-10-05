@@ -347,9 +347,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=179"></script>
+<script src="backend.js?v=180"></script>
 <script>
-const APP_VERSION="179";
+const APP_VERSION="180";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2607,6 +2607,9 @@ function budgetPage(b){
   const all = budgetOps(b.name).sort((x,y)=>x.o.date<y.o.date?1:x.o.date>y.o.date?-1:0);
   const shown = filterOps(all.map(({o})=>o), f);
   const byId = Object.fromEntries(all.map(({o,a})=>[o.id, a]));
+  /* an operation shows what it put on this budget: the whole of it, or only the secondary tag that carries it */
+  const partAmt = {}; for (const x of budgetParts(b.name)) partAmt[x.o.id] = r2((partAmt[x.o.id]||0) + x.amount);
+  const onBudget = (o) => ({ ...o, amount: partAmt[o.id] ?? o.amount });
   const amt = budgetAmountIn(b);
   const spent = budgetSpent(b.name), left = amt!=null ? Math.round((amt - spent)*100)/100 : null;
   return `
@@ -2622,10 +2625,10 @@ function budgetPage(b){
   ${budgetByCategory(b)}
   <div class="card">
     <h2>Operations
-      <span class="fbar"><span class="muted" id="opCount">${shown.length}${filterActive(f)?' · '+money(Math.round(shown.reduce((t,o)=>t+(conv(o.amount, byId[o.id].currency, store.cur, o.date.slice(0,7))||0),0)*100)/100, store.cur):''}</span>
+      <span class="fbar"><span class="muted" id="opCount">${shown.length}${filterActive(f)?' · '+money(Math.round(shown.reduce((t,o)=>t+(conv(onBudget(o).amount, byId[o.id].currency, store.cur, o.date.slice(0,7))||0),0)*100)/100, store.cur):''}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span></span></h2>
     ${filterChips(f)}
-    <div id="opsList">${opRowsMixed(shown.map((o)=>({ o, a:byId[o.id] })))}</div>
+    <div id="opsList">${opRowsMixed(shown.map((o)=>({ o: onBudget(o), a:byId[o.id] })))}</div>
   </div>
   <div style="height:56px"></div>
   ${selBar(true)}
