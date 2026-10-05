@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=175"></script>
+<script src="backend.js?v=176"></script>
 <script>
-const APP_VERSION="175";
+const APP_VERSION="176";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3832,7 +3832,7 @@ function parseBankCsv(text){
   const amt = (v) => { const n = parseFloat(String(v).replace(/\s/g,'').replace(',', '.')); return isFinite(n) ? Math.round(n*100)/100 : NaN; };
   let bank = null; const rows = [];
   for (const l of lines) { const c = l.split(';');
-    if (c.length >= 5 && fr(c[0]) && isFinite(amt(c[3])) && /^[A-Z]{3}$/.test(c[4].trim())) rows.push({ date:fr(c[0]), label:c[1].replace(/\s+/g,' ').trim(), detail:c[2].replace(/\s+/g,' ').trim(), amount:amt(c[3]), cur:c[4].trim() });
+    if (c.length >= 5 && fr(c[0]) && isFinite(amt(c[3])) && /^[A-Z]{3}$/.test(c[4].trim())) { const detail = c[2].replace(/\s+/g,' ').trim(); rows.push({ date:bankWordingDate(detail, fr(c[0])), posted:fr(c[0]), label:c[1].replace(/\s+/g,' ').trim(), detail, amount:amt(c[3]), cur:c[4].trim() }); }
     else if (c.length >= 6 && fr(c[4]) && /^-?[\d.]+ ?[A-Z]{3}$/.test(c[5].trim())) { const m = /^(-?[\d.]+) ?([A-Z]{3})$/.exec(c[5].trim()); bank = { account:c[0].trim(), asOf:fr(c[4]), balance:Math.round(parseFloat(m[1])*100)/100, cur:m[2] }; } }
   return { bank, rows };
 }
@@ -3865,7 +3865,7 @@ function parseSgPdfLines(lines){
   const rows = []; let bank = null, day = null, balanceNext = false, asOf = null, pending = null, m;
   const amount = (t) => { const a = /(?:^|\s)(-?)\s*(\d{1,3}(?:[\s\u00a0.]\d{3})*|\d+),(\d{2})\s*(?:€|EUR|[^\w\s])?\s*$/.exec(t); if (!a) return null;
     return { value: Math.round((a[1] ? -1 : 1) * parseFloat(a[2].replace(/[\s\u00a0.]/g,'') + '.' + a[3]) * 100) / 100, head: t.slice(0, a.index).trim() }; };
-  const push = (label, value, detail) => { rows.push({ date: day, label, detail: detail || label, amount: value, cur:'EUR' }); pending = null; };
+  const push = (label, value, detail) => { rows.push({ date: bankWordingDate(label, day), posted: day, label, detail: detail || label, amount: value, cur:'EUR' }); pending = null; };
   for (const raw of lines) { const l = String(raw).replace(/\s+/g,' ').trim(); if (!l) continue;
     if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4}),/.exec(l))) { if (!asOf) asOf = (m[3].length===2 ? '20'+m[3] : m[3])+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'); continue; }
     if (/^Bonjour |^Votre avis$|^https?:\/\//i.test(l)) continue;
@@ -3883,6 +3883,13 @@ function parseSgPdfLines(lines){
   return { bank, rows };
 }
 const BANK_PDF = { SGCO: parseSgPdfLines };
+/* the day the wording itself gives - DATE: 02/10/2026 on a transfer, the day/month after CARTE on a card payment (the year the nearest one not after the posting day) - else the posting day */
+function bankWordingDate(detail, posted){
+  let m;
+  if ((m = /\bDATE:\s*(\d{2})\/(\d{2})\/(\d{4})/.exec(detail))) return m[3]+'-'+m[2]+'-'+m[1];
+  if ((m = /\bCARTE (?:X\d+ |DU )(\d{2})\/(\d{2})\b/.exec(detail))) { let y = +posted.slice(0,4); let d = y+'-'+m[2]+'-'+m[1]; if (d > posted) { y--; d = y+'-'+m[2]+'-'+m[1]; } return /^\d{4}-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.test(d) ? d : posted; }
+  return posted;
+}
 /* a name out of the bank's wording: the merchant of a card payment, the person paid or paying, the creditor of a debit, else the label */
 function bankName(r){
   const d = r.detail || r.label || '';
