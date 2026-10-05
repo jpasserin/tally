@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=174"></script>
+<script src="backend.js?v=175"></script>
 <script>
-const APP_VERSION="174";
+const APP_VERSION="175";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3856,21 +3856,30 @@ async function pdfTextLines(buf){
   return lines;
 }
 const FR_MONTHS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
-/* Société Générale's page: a day heading (Lundi 5 octobre 2026), then its rows - the wording, the amount - with a Motif line under a transfer; the balance up top, the print date in the header */
+/* Société Générale's page: a day heading (Lundi 5 octobre 2026), then its
+   rows - the wording and the amount on one line, or the amount on the line
+   after a long wording, with a Motif line under a transfer; the balance up
+   top, the print date in the header; the browser's own header and footer
+   on every page (date, greeting, address) are skipped. */
 function parseSgPdfLines(lines){
-  const rows = []; let bank = null, day = null, balanceNext = false, asOf = null, m;
+  const rows = []; let bank = null, day = null, balanceNext = false, asOf = null, pending = null, m;
   const amount = (t) => { const a = /(?:^|\s)(-?)\s*(\d{1,3}(?:[\s\u00a0.]\d{3})*|\d+),(\d{2})\s*(?:€|EUR|[^\w\s])?\s*$/.exec(t); if (!a) return null;
     return { value: Math.round((a[1] ? -1 : 1) * parseFloat(a[2].replace(/[\s\u00a0.]/g,'') + '.' + a[3]) * 100) / 100, head: t.slice(0, a.index).trim() }; };
+  const push = (label, value, detail) => { rows.push({ date: day, label, detail: detail || label, amount: value, cur:'EUR' }); pending = null; };
   for (const raw of lines) { const l = String(raw).replace(/\s+/g,' ').trim(); if (!l) continue;
-    if (!asOf && (m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4}),/.exec(l))) { asOf = (m[3].length===2 ? '20'+m[3] : m[3])+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'); continue; }
+    if ((m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4}),/.exec(l))) { if (!asOf) asOf = (m[3].length===2 ? '20'+m[3] : m[3])+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'); continue; }
+    if (/^Bonjour |^Votre avis$|^https?:\/\//i.test(l)) continue;
     if (/^Solde indicatif/i.test(l)) { balanceNext = true; continue; }
     if (balanceNext) { const a = amount(l); if (a) { bank = { balance:a.value, cur:'EUR', asOf }; balanceNext = false; } continue; }
-    if ((m = /^(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+(\d{1,2})(?:er)?\s+([a-zéû]+)\s+(\d{4})$/i.exec(l))) { const mo = FR_MONTHS.indexOf(m[2].toLowerCase()); if (mo >= 0) day = m[3]+'-'+String(mo+1).padStart(2,'0')+'-'+m[1].padStart(2,'0'); continue; }
+    if ((m = /^(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+(\d{1,2})(?:er)?\s+([a-zéû]+)\s+(\d{4})$/i.exec(l))) { const mo = FR_MONTHS.indexOf(m[2].toLowerCase()); if (mo >= 0) day = m[3]+'-'+String(mo+1).padStart(2,'0')+'-'+m[1].padStart(2,'0'); pending = null; continue; }
     if (!day) continue;
-    if ((m = /^Motif\s*:\s*(.*)$/i.exec(l))) { if (rows.length) rows[rows.length-1].detail += ' MOTIF: ' + m[1]; continue; }
-    if (/^Afficher plus|^Liens utiles|^Top 3|^Ma gestion/i.test(l)) { day = null; continue; }
-    const a = amount(l); if (!a || !a.head) continue;
-    rows.push({ date: day, label: a.head, detail: a.head, amount: a.value, cur:'EUR' }); }
+    if (/^A\s*ff\s*icher plus|^Liens utiles|^Top 3|^Ma gestion/i.test(l)) { day = null; pending = null; continue; }
+    const a = amount(l);
+    if ((m = /^Motif\s*:\s*(.*)$/i.exec(a ? a.head : l))) { const motif = ' MOTIF: ' + m[1].trim();
+      if (a && pending) push(pending.label, a.value, pending.detail + motif); else if (pending) pending.detail += motif; else if (rows.length) rows[rows.length-1].detail += motif; continue; }
+    if (a && a.head) push(a.head, a.value);
+    else if (a && pending) push(pending.label, a.value, pending.detail);
+    else if (!a) pending = { label: l, detail: l }; }
   return { bank, rows };
 }
 const BANK_PDF = { SGCO: parseSgPdfLines };
