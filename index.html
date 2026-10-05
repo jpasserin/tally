@@ -189,6 +189,19 @@
   .dslider input::-moz-range-thumb{width:18px;height:18px;border-radius:50%;background:var(--accent);border:2px solid #fff;pointer-events:auto}
   .drange{display:flex;justify-content:space-between;font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums}
   .legend{display:flex;gap:12px;font-size:11.5px;color:var(--muted);margin-bottom:4px}
+  .bkday{font-size:12px;font-weight:600;margin:10px 0 2px;color:var(--muted)}
+  .bkop{font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)}
+  .bkd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
+  .bkd span:first-child{flex:1;min-width:0;color:var(--muted);font-size:11px;line-height:1.3}
+  .bkd .v{white-space:nowrap;font-weight:600}
+  .bkn{display:flex;gap:6px;margin-top:4px}
+  .bkn input{font-size:12px;padding:5px 7px;min-width:0;width:100%;box-sizing:border-box}
+  .bkn > input{flex:3}
+  .bkt{flex:1;position:relative;min-width:0}
+  .bktl{position:absolute;left:0;right:0;top:100%;z-index:6;background:var(--card2);border:1px solid var(--line);border-radius:8px;max-height:170px;overflow:auto;box-shadow:0 6px 18px rgba(0,0,0,.35)}
+  .bktl:empty{display:none}
+  .bktl button{display:block;width:100%;text-align:left;padding:6px 8px;font-size:12px;background:none;border:0;color:var(--txt)}
+  .bktl button .cat{color:var(--muted);font-size:10.5px;margin-left:5px}
   .legend i{display:inline-block;width:10px;height:3px;border-radius:2px;vertical-align:middle;margin-right:5px}
 
   /* The lock: dark and open, or blue and shut. */
@@ -317,9 +330,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=176"></script>
+<script src="backend.js?v=177"></script>
 <script>
-const APP_VERSION="176";
+const APP_VERSION="177";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3921,29 +3934,32 @@ function bankPlan(a, parsed){
   const now = r2(valueAt(a, '2999-12-31'));
   return { rows, news, now, after: r2(now + news.reduce((t,r)=>t+r.amount, 0)), bank: parsed.bank };
 }
+/* the tags whose name starts with what was typed, then the ones containing it */
+const tagHits = (q) => { q = String(q||'').trim().toLowerCase(); if (!q) return []; const all = allTags();
+  return all.filter((t)=>t.tag.toLowerCase().startsWith(q)).concat(all.filter((t)=>!t.tag.toLowerCase().startsWith(q) && t.tag.toLowerCase().includes(q))).slice(0, 8); };
+/* what was typed as a tag: the tag of that name, else the first one starting so; null when none */
+const tagResolve = (q) => { q = String(q||'').trim(); if (!q) return ''; const ex = allTags().find((t)=>same(t.tag, q)); if (ex) return ex.tag; const h = tagHits(q).filter((t)=>t.tag.toLowerCase().startsWith(q.toLowerCase())); return h.length ? h[0].tag : null; };
 function bankSheet(p, a){
   const pl = p.plan, n = pl.news.length;
   const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - pl.after) < 0.005 : null;
+  const days = []; pl.news.forEach((r,i)=>{ const g = days.find((d)=>d.date===r.date); if (g) g.items.push(i); else days.push({ date:r.date, items:[i] }); });
   return `
   <div class="sheetwrap">
     <div class="scrim" data-bankclose="1"></div>
     <div class="sheet${p.fresh?' enter':''}">
       <h3>From the bank <span class="muted" style="font-size:12px;font-weight:600">${esc(p.file)}</span></h3>
       <div class="rows">
-        <div class="row"><span class="k">In the file</span><span class="v">${pl.rows.length}</span></div>
-        <div class="row"><span class="k">Already here</span><span class="v">${pl.rows.length - n}</span></div>
-        <div class="row"><span class="k"><b>New</b></span><span class="v"><b>${n}</b></span></div>
-        <div class="row"><span class="k">Balance now</span><span class="v">${money(pl.now, a.currency)}</span></div>
-        <div class="row"><span class="k"><b>Balance after</b></span><span class="v"><b>${money(pl.after, a.currency)}</b></span></div>
-        ${pl.bank ? `<div class="row"><span class="k">The bank on ${dLabel(pl.bank.asOf)}</span><span class="v" style="color:${agree?'var(--good)':agree===false?'var(--bad)':'var(--txt)'}">${money(pl.bank.balance, pl.bank.cur)}</span></div>` : ''}
+        <div class="row"><span class="k">New operations</span><span class="v">${n}/${pl.rows.length}</span></div>
+        <div class="row"><span class="k">End balance</span><span class="v" style="color:${agree===null?'var(--txt)':agree?'var(--good)':'var(--bad)'}">${money(pl.after, a.currency)}</span></div>
+        ${agree===false ? `<div class="row"><span class="k">The bank on ${dLabel(pl.bank.asOf)}</span><span class="v">${money(pl.bank.balance, pl.bank.cur)}</span></div>` : ''}
       </div>
-      ${n ? pl.news.map((r,i)=>`
-      <div class="rows" style="margin-top:8px">
-        <div class="row"><span class="k">${dLabel(r.date)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
-        <div class="field" style="margin-top:4px"><input id="bkName${i}" type="text" value="${esc(r.name)}"></div>
-        <div class="field" style="margin-top:4px">${tagPick('bkTag'+i, r.tag, p.tagpick==='bkTag'+i)}</div>
-        <div class="sub" style="font-size:11px;margin-top:4px">${esc(r.detail)}</div>
-      </div>`).join('') : `<div class="hint">Nothing new.</div>`}
+      ${n ? days.map((d)=>`
+      <div class="bkday">${dLabel(d.date)}</div>
+      ${d.items.map((i)=>{ const r = pl.news[i]; return `
+      <div class="bkop">
+        <div class="bkd"><span>${esc(r.detail)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
+        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt"><input id="bkTag${i}" type="text" value="${esc(r.tag)}" placeholder="tag" autocomplete="off" data-bktag="${i}"><div class="bktl" id="bkTagList${i}"></div></div></div>
+      </div>`; }).join('')}`).join('') : `<div class="hint">Nothing new.</div>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
         ${n ? `<button class="btn primary" data-bankgo="1">Add ${n} operation${n===1?'':'s'}</button>` : ''}
@@ -3951,12 +3967,13 @@ function bankSheet(p, a){
     </div>
   </div>`;
 }
-/* the names and tags as typed, back into the plan; whether any differs from what was suggested */
+/* the names and tags as typed, back into the plan (a tag typed in part becomes the first tag starting so; one no tag matches is kept as typed and refused by Add); whether any differs from what was suggested */
 function readBank(){
   const p = state.page; if (!p || p.kind!=='bank') return false;
   let dirty = false;
   p.plan.news.forEach((r,i)=>{ const nm = document.getElementById('bkName'+i), tg = document.getElementById('bkTag'+i);
-    if (nm) r.name = nm.value; if (tg) r.tag = tg.value; if (r.name !== r.name0 || r.tag !== r.tag0) dirty = true; });
+    if (nm) r.name = nm.value; if (tg) { const t = tagResolve(tg.value); r.tag = t==null ? tg.value.trim() : t; r.badTag = t==null; }
+    if (r.name !== r.name0 || r.tag !== r.tag0) dirty = true; });
   return dirty;
 }
 function accountPage(a){
@@ -5929,8 +5946,15 @@ function wire(){
   document.querySelectorAll('[data-bankclose]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
     if (readBank() && !p.closeArm) { p.closeArm=true; render(); return; }
     state.page=null; render(); });
+  /* typing in a tag box lists the tags starting with the letters typed; a tap on one fills the box */
+  document.querySelectorAll('[data-bktag]').forEach((el)=>{ const box = document.getElementById('bkTagList'+el.dataset.bktag);
+    const show = ()=>{ if (!box) return; const hits = tagHits(el.value);
+      box.innerHTML = hits.map((t)=>`<button type="button" data-bktagset="${esc(t.tag)}">${esc(t.tag)}<span class="cat">${esc(t.cat)}</span></button>`).join('');
+      box.onclick = (e)=>{ let t = e && e.target; while (t && t !== box && !(t.dataset && t.dataset.bktagset)) t = t.parentNode; if (t && t !== box) { el.value = t.dataset.bktagset; box.innerHTML = ''; } }; };
+    el.oninput = show; el.onfocus = show; el.onblur = ()=>setTimeout(()=>{ if (box && document.activeElement !== el) box.innerHTML = ''; }, 200); });
   document.querySelectorAll('[data-bankgo]').forEach((el)=>el.onclick=()=>{
     readBank(); const p = state.page, a = acct(); if (!p || !a) return;
+    const bad = p.plan.news.filter((r)=>r.badTag).map((r)=>r.tag); if (bad.length) { alert('No tag called ' + bad.map((t)=>'"'+t+'"').join(', ') + '.'); return; }
     const list = opsOf(a.key);
     for (const r of p.plan.news) list.push({ id:uid(), date:r.date, name:String(r.name||'').trim(), amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:'', oneoff:false });
     state.page=null; commit(a.key); });
