@@ -317,9 +317,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=173"></script>
+<script src="backend.js?v=174"></script>
 <script>
-const APP_VERSION="173";
+const APP_VERSION="174";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3836,6 +3836,44 @@ function parseBankCsv(text){
     else if (c.length >= 6 && fr(c[4]) && /^-?[\d.]+ ?[A-Z]{3}$/.test(c[5].trim())) { const m = /^(-?[\d.]+) ?([A-Z]{3})$/.exec(c[5].trim()); bank = { account:c[0].trim(), asOf:fr(c[4]), balance:Math.round(parseFloat(m[1])*100)/100, cur:m[2] }; } }
   return { bank, rows };
 }
+/* The same page saved as a PDF (the bank's "Mes opérations", which also
+   lists the card payments still pending). The reader is the account's:
+   BANK_PDF names one per account. pdf.js is fetched the first time a PDF is
+   picked; a PDF printed to PDF has no text and cannot be read - one saved
+   from the browser (Save as PDF) can. */
+const PDFJS = 'https://cdn.jsdelivr.net/npm/pdfjs-dist@4.10.38/build/';
+/* the PDF's text as lines, page after page: the items sharing a row, left to right */
+async function pdfTextLines(buf){
+  if (window.TallyPdf) return window.TallyPdf(buf);
+  const lib = await import(PDFJS + 'pdf.min.mjs');
+  lib.GlobalWorkerOptions.workerSrc = PDFJS + 'pdf.worker.min.mjs';
+  const doc = await lib.getDocument({ data: buf }).promise; const lines = [];
+  for (let n = 1; n <= doc.numPages; n++) {
+    const tc = await (await doc.getPage(n)).getTextContent(); const rows = new Map();
+    for (const it of tc.items) { if (!it.str || !it.str.trim()) continue; const y = Math.round(it.transform[5] / 3); if (!rows.has(y)) rows.set(y, []); rows.get(y).push({ x: it.transform[4], s: it.str }); }
+    for (const y of [...rows.keys()].sort((a,b)=>b-a)) lines.push(rows.get(y).sort((a,b)=>a.x-b.x).map((r)=>r.s).join(' ').replace(/\s+/g,' ').trim());
+  }
+  return lines;
+}
+const FR_MONTHS = ['janvier','février','mars','avril','mai','juin','juillet','août','septembre','octobre','novembre','décembre'];
+/* Société Générale's page: a day heading (Lundi 5 octobre 2026), then its rows - the wording, the amount - with a Motif line under a transfer; the balance up top, the print date in the header */
+function parseSgPdfLines(lines){
+  const rows = []; let bank = null, day = null, balanceNext = false, asOf = null, m;
+  const amount = (t) => { const a = /(?:^|\s)(-?)\s*(\d{1,3}(?:[\s\u00a0.]\d{3})*|\d+),(\d{2})\s*(?:€|EUR|[^\w\s])?\s*$/.exec(t); if (!a) return null;
+    return { value: Math.round((a[1] ? -1 : 1) * parseFloat(a[2].replace(/[\s\u00a0.]/g,'') + '.' + a[3]) * 100) / 100, head: t.slice(0, a.index).trim() }; };
+  for (const raw of lines) { const l = String(raw).replace(/\s+/g,' ').trim(); if (!l) continue;
+    if (!asOf && (m = /^(\d{1,2})\/(\d{1,2})\/(\d{2,4}),/.exec(l))) { asOf = (m[3].length===2 ? '20'+m[3] : m[3])+'-'+m[1].padStart(2,'0')+'-'+m[2].padStart(2,'0'); continue; }
+    if (/^Solde indicatif/i.test(l)) { balanceNext = true; continue; }
+    if (balanceNext) { const a = amount(l); if (a) { bank = { balance:a.value, cur:'EUR', asOf }; balanceNext = false; } continue; }
+    if ((m = /^(?:lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)\s+(\d{1,2})(?:er)?\s+([a-zéû]+)\s+(\d{4})$/i.exec(l))) { const mo = FR_MONTHS.indexOf(m[2].toLowerCase()); if (mo >= 0) day = m[3]+'-'+String(mo+1).padStart(2,'0')+'-'+m[1].padStart(2,'0'); continue; }
+    if (!day) continue;
+    if ((m = /^Motif\s*:\s*(.*)$/i.exec(l))) { if (rows.length) rows[rows.length-1].detail += ' MOTIF: ' + m[1]; continue; }
+    if (/^Afficher plus|^Liens utiles|^Top 3|^Ma gestion/i.test(l)) { day = null; continue; }
+    const a = amount(l); if (!a || !a.head) continue;
+    rows.push({ date: day, label: a.head, detail: a.head, amount: a.value, cur:'EUR' }); }
+  return { bank, rows };
+}
+const BANK_PDF = { SGCO: parseSgPdfLines };
 /* a name out of the bank's wording: the merchant of a card payment, the person paid or paying, the creditor of a debit, else the label */
 function bankName(r){
   const d = r.detail || r.label || '';
@@ -3843,7 +3881,8 @@ function bankName(r){
   const person = (x) => title(x.split(/\s+OU\s+/)[0].replace(/\b(M|MME|MLLE|MLE|MR|MRS)\b\.?\s*/g, '').replace(/\s+/g,' ').trim());
   let m;
   if ((m = /\bCARTE X\d+ \d{2}\/\d{2}\s+(.+?)(?:\s+COMMERCE ELECTRONIQUE|\s+\d{8,}|\s+CB\b|$)/.exec(d))) return title(m[1].replace(/\*+/g,' ').replace(/\s+/g,' '));
-  if ((m = /\bPOUR:\s*(.+?)(?:\s+\d{2} \d{2} SG\b|\s+REF:|\s+CPT\b|$)/.exec(d))) return person(m[1]);
+  if ((m = /\bPAIEMENT CARTE DU \d{2}\/\d{2}(?: \d{2}:\d{2})?\s+(.+)$/i.exec(d))) return title(m[1].replace(/\*+/g,' ').replace(/\s+/g,' '));
+  if ((m = /\bPOUR:\s*(.+?)(?:\s+\d{2} \d{2} SG\b|\s+REF:|\s+CPT\b|\s+CHEZ:|$)/.exec(d))) return person(m[1]);
   if ((m = /\bDE:\s*(.+?)(?:\s+DATE:|\s+MOTIF:|$)/.exec(d))) return person(m[1]);
   if ((m = /\bPRLV(?: SEPA)?\s+(.+?)(?:\s+REF\b|\s+ID\b|\s+ECH\b|$)/i.exec(d))) return title(m[1]);
   if (/REMISE CHEQUE/i.test(d)) return 'Remise chèque';
@@ -3933,7 +3972,7 @@ function accountPage(a){
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
         <button class="gbtn" data-bankup="1"${LKY()}>↑</button><button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
-    <input type="file" id="fBank" accept=".csv,text/csv,text/plain" style="display:none">
+    <input type="file" id="fBank" accept=".csv,.pdf,text/csv,text/plain,application/pdf" style="display:none">
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
   </div>`}
@@ -5863,11 +5902,13 @@ function wire(){
   document.querySelectorAll('[data-bankup]').forEach((el)=>el.onclick=()=>{
     if (store.locked) return; const a = acct(), inp = document.getElementById('fBank'); if (!a || !inp) return;
     inp.onchange=()=>{ const f = (inp.files||[])[0]; if (!f) return; const rd = new FileReader();
-      rd.onload=()=>{ try { const parsed = parseBankCsv(String(rd.result)); if (!parsed.rows.length) throw new Error('No operation found in that file.');
-          state.page = { kind:'bank', fresh:true, file:f.name||'', plan:bankPlan(a, parsed) }; render(); state.page.fresh=false; }
-        catch (e) { alert(e.message); } };
+      const pdf = /\.pdf$/i.test(f.name||'') || f.type==='application/pdf';
+      const show = (parsed) => { if (!parsed.rows.length) throw new Error(pdf ? 'No operation read from that PDF. A PDF saved from the browser (Save as PDF) keeps its text; one printed to PDF does not.' : 'No operation found in that file.');
+        state.page = { kind:'bank', fresh:true, file:f.name||'', plan:bankPlan(a, parsed) }; render(); state.page.fresh=false; };
+      if (pdf && !BANK_PDF[a.key]) { alert('No PDF reader for '+a.key+' yet; its CSV export works.'); inp.value=''; return; }
+      rd.onload=async()=>{ try { show(pdf ? BANK_PDF[a.key](await pdfTextLines(rd.result)) : parseBankCsv(String(rd.result))); } catch (e) { alert(e.message); } };
       rd.onerror=()=>alert('Could not read '+(f.name||'that file')+'.');
-      rd.readAsText(f, 'ISO-8859-1'); inp.value=''; };
+      if (pdf) rd.readAsArrayBuffer(f); else rd.readAsText(f, 'ISO-8859-1'); inp.value=''; };
     inp.click(); });
   document.querySelectorAll('[data-bankclose]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
     if (readBank() && !p.closeArm) { p.closeArm=true; render(); return; }
