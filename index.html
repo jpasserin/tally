@@ -347,9 +347,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=180"></script>
+<script src="backend.js?v=181"></script>
 <script>
-const APP_VERSION="180";
+const APP_VERSION="181";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3993,6 +3993,43 @@ function wireBudgetBoxes(onchange){
       box.innerHTML = `<button type="button" class="bopt" data-budopt="">—</button>` + budgetsFor(inp.value).map((b)=>`<button type="button" class="bopt" data-budopt="${esc(b.name)}">${budgetCap(b)}</button>`).join('');
       box.onclick = (e)=>{ let t = e && e.target; while (t && t !== box && !(t.dataset && t.dataset.budopt!=null)) t = t.parentNode; if (t && t !== box) { inp.value = t.dataset.budopt; const b = inp.value ? budgetOf(inp.value) : null; btn.innerHTML = b ? budgetCap(b) : 'Budget'; box.innerHTML = ''; if (onchange) onchange(inp); } }; }; });
 }
+/* ------------------------------------------------------- for the book --
+   A cash account's operations as the rows of his old book's tab, to paste
+   into Google Sheets: Date, Party, Amount, Solde, Group, Method, Description
+   - tab-separated, oldest first, from a day to the latest. Solde is the
+   book's running formula (=D4+C5), so the rows need to know where they land:
+   the first row is the one after the year's earlier operations, the four
+   header rows counted, and can be changed. Group is the tag, then the
+   secondary tags, comma-separated, as the book writes them. */
+const bookOps = (a, from) => opsOf(a.key).filter((o)=>o.date >= from && o.kind!=='Price').sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0);
+const bookRowFor = (a, from) => 5 + opsOf(a.key).filter((o)=>o.date.slice(0,4)===from.slice(0,4) && o.date < from && o.kind!=='Price').length;
+function bookRows(a, from, row){
+  return bookOps(a, from).map((o,i)=>{ const r = row + i;
+    return [o.date, o.name||'', (o.amount||0).toFixed(2), '=D'+(r-1)+'+C'+r, [o.tag].concat((o.splits||[]).map((sp)=>sp.tag)).filter(Boolean).join(', '), '', String(o.note||'').replace(/[\t\r\n]+/g, ' ')].join('\t'); });
+}
+function copySheet(p, a){
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(p.from||'') ? p.from : TODAY();
+  const row = +p.row > 0 ? Math.round(+p.row) : bookRowFor(a, from);
+  const n = bookOps(a, from).length;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-copyclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>Rows for the book <span class="muted" style="font-size:12px;font-weight:600">${esc(a.key)}</span></h3>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>From</label><input id="cpFrom" type="date" value="${esc(from)}"></div>
+        <div class="field" style="flex:0 0 96px"><label>First row</label><input id="cpRow" inputmode="numeric" value="${row}" style="text-align:right"></div>
+      </div>
+      <div class="rows"><div class="row"><span class="k">Operations</span><span class="v">${n}</span></div></div>
+      ${p.msg?`<div class="status ${p.text?'bad':'ok'}">${esc(p.msg)}</div>`:''}
+      ${p.text?`<textarea id="cpText" readonly style="width:100%;height:110px;font-size:11px;font-family:inherit;background:var(--bg2);color:var(--txt);border:1px solid var(--line);border-radius:10px;padding:6px">${esc(p.text)}</textarea>`:''}
+      <div class="foot">
+        <button class="btn close" data-copyclose="1">Close</button>
+        <button class="btn primary" data-copygo="1"${n?'':' disabled'}>Copy ${n} row${n===1?'':'s'}</button>
+      </div>
+    </div>
+  </div>`;
+}
 function bankSheet(p, a){
   const pl = p.plan, n = pl.news.length;
   const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - pl.after) < 0.005 : null;
@@ -4044,7 +4081,7 @@ function accountPage(a){
   const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
-  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : p && p.kind==='bank' ? bankSheet(p, a) : '') + `
+  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : p && p.kind==='bank' ? bankSheet(p, a) : p && p.kind==='copy' ? copySheet(p, a) : '') + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
@@ -4058,7 +4095,7 @@ function accountPage(a){
     <h2>Operations
       <span class="fbar"><span class="muted" id="opCount">${opCountText(a, ops, f)}</span>
         <span class="fdrop"><button class="fbtn ${filterActive(f)?'act':''}" data-fopen="1">🔍</button>${f.open?filterMenu(f):''}</span>
-        <button class="gbtn" data-bankup="1"${LKY()}>↑</button><button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
+        <button class="gbtn" data-bankup="1"${LKY()}>↑</button><button class="gbtn" data-copyopen="1" title="rows for the book">⧉</button><button class="gbtn" data-opnew="1"${LKY()}>+</button></span></h2>
     <input type="file" id="fBank" accept=".csv,.pdf,text/csv,text/plain,application/pdf" style="display:none">
     ${filterChips(f)}
     <div id="opsList">${opRows(a, ops)}</div>
@@ -6003,6 +6040,17 @@ function wire(){
       rd.onerror=()=>alert('Could not read '+(f.name||'that file')+'.');
       if (pdf) rd.readAsArrayBuffer(f); else rd.readAsText(f, 'ISO-8859-1'); inp.value=''; };
     inp.click(); });
+  /* rows for the book: from a day, landing on a row; copied to the clipboard, or shown to copy by hand where the clipboard is out of reach */
+  document.querySelectorAll('[data-copyopen]').forEach((el)=>el.onclick=()=>{ if (!acct()) return; state.page = { kind:'copy', fresh:true, from: TODAY().slice(0,8)+'01', row:'' }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-copyclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  const readCopy = ()=>{ const p = state.page; if (!p || p.kind!=='copy') return; const f = document.getElementById('cpFrom'), r = document.getElementById('cpRow'); if (f && f.value) p.from = f.value; if (r) p.row = r.value; };
+  { const f = document.getElementById('cpFrom'); if (f) f.onchange=()=>{ readCopy(); state.page.row=''; state.page.msg=''; state.page.text=''; render(); }; }
+  document.querySelectorAll('[data-copygo]').forEach((el)=>el.onclick=()=>{ readCopy(); const p = state.page, a = acct(); if (!p || !a) return;
+    const from = /^\d{4}-\d{2}-\d{2}$/.test(p.from||'') ? p.from : TODAY(), row = +p.row > 0 ? Math.round(+p.row) : bookRowFor(a, from);
+    const rows = bookRows(a, from, row); if (!rows.length) return; const text = rows.join('\n');
+    const done = ()=>{ p.msg = rows.length + ' row' + (rows.length===1?'':'s') + ' copied, from row ' + row + '.'; p.text = ''; render(); };
+    const byHand = ()=>{ p.msg = 'The clipboard is out of reach here: select the text and copy it.'; p.text = text; render(); };
+    try { if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(text).then(done, byHand); else byHand(); } catch (e) { byHand(); } });
   document.querySelectorAll('[data-bankclose]').forEach((el)=>el.onclick=()=>{ const p = state.page; if (!p) return;
     if (readBank() && !p.closeArm) { p.closeArm=true; render(); return; }
     state.page=null; render(); });
