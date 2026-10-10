@@ -347,9 +347,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=181"></script>
+<script src="backend.js?v=182"></script>
 <script>
-const APP_VERSION="181";
+const APP_VERSION="182";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -433,7 +433,7 @@ function noteAt(a, f, end){
   const redeemed = face <= 0 && sold > 0 ? ops.filter((o)=>o.kind==='Sell').map((o)=>o.date).sort().pop() : null;
   const out = { paid, face, fees, coupons, got, redeemed, value:0, interest:r2(got-paid), worst:null, levels:[], asOf:end, priced:false, unpriced:false, matured: !!(t.matures && end >= t.matures) };
   if (face <= 0) return out;
-  const mark = ops.filter((o)=>o.kind==='Price' && o.amount > 0).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0];
+  const mark = ops.filter((o)=>o.kind==='Price' && o.amount > 0).sort(newest())[0];
   if (mark) { out.value = r2(mark.amount); out.priced = true; out.asOf = mark.date; out.interest = r2(out.value + got - paid); return out; }
   const asOf = t.valuation && end > t.valuation ? t.valuation : end;
   out.asOf = asOf;
@@ -1809,7 +1809,7 @@ function categoryPage(c){
   const selM = state.catMonths.filter((m)=>months.includes(m));
   const pool = selM.length ? all.filter((x)=>selM.includes(x.o.date.slice(0,7))) : all;
   const byId = Object.fromEntries(pool.map(({o,a})=>[o.id, a]));
-  const shown = filterOps(pool.map(({o})=>o), f).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0).map((o)=>({ o, a:byId[o.id] }));
+  const shown = filterOps(pool.map(({o})=>o), f).sort(newest()).map((o)=>({ o, a:byId[o.id] }));
   const p = state.page;
   const hist = state.catView==='history';
   const views = `<span class="chips" style="margin-left:auto"><button class="chip ${hist?'':'on'}" style="padding:2px 9px;font-size:11.5px" data-rcatview="year">This year</button><button class="chip ${hist?'on':''}" style="padding:2px 9px;font-size:11.5px" data-rcatview="history">History</button></span>`;
@@ -2962,7 +2962,7 @@ function fundAccountPage(a){
   <div class="closebar"><button class="btn" data-accback="1">Close</button></div>`;
   const at = fundAt(a, f, end);
   const months = MON.map((m,i)=>Y+'-'+String(i+1).padStart(2,'0')).filter((m)=>m <= now);
-  const ops = fundOps(a, f.name).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = fundOps(a, f.name).filter((o)=>o.date.slice(0,4)===String(Y)).sort(newest());
   const inv = f.kind==='invested';
   const cell = (v) => v==null ? '—' : money(v, a.currency);
   const hist = state.fview==='history';
@@ -2971,7 +2971,7 @@ function fundAccountPage(a){
   const listed = shown.length ? shown : funds;
   const fmtSh = (v) => v.toLocaleString('en-US', { maximumFractionDigits:3 });
   const growthPct = at.paid > 0 ? Math.round(at.interest / at.paid * 1000) / 10 : null;
-  const mark = inv ? fundOps(a, f.name).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0)[0] : null;
+  const mark = inv ? fundOps(a, f.name).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort(newest())[0] : null;
   const viewChipsF = rot('data-fview', hist?'history':'year', [['year','This year'],['history','History']]);
   return widget + `
   <div class="card">
@@ -3227,7 +3227,7 @@ function propMortgage(a, Y){
   </div>`; })()}`;
 }
 function propExpenses(a, Y){
-  const ops = opsOf(a.key).filter((o)=>o.kind && o.kind!=='Value' && o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = opsOf(a.key).filter((o)=>o.kind && o.kind!=='Value' && o.date.slice(0,4)===String(Y)).sort(newest());
   const c = propCosts(a, Y);
   const box = (l, v) => `<div class="kpi"><div class="l">${l}</div><div class="v">${money(v, a.currency)}</div></div>`;
   return `
@@ -3360,7 +3360,7 @@ function lifeSummary(a, Y){
   </div>` : ''}`;
 }
 function lifeOps(a, Y){
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort(newest());
   return `
   <div class="card">
     <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-lopnew="1"${LKY()}>+</button></span></h2>
@@ -3512,7 +3512,7 @@ function irtSheet(p){
   </div>`;
 }
 function bondOps(a, Y){
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort(newest());
   return `
   <div class="card">
     <h2>Operations <span class="fbar"><span class="muted">${ops.length}</span><button class="gbtn" data-bopnew="1"${LKY()}>+</button></span></h2>
@@ -3573,7 +3573,7 @@ function optSummary(a, Y, end){
   const grants = optGrants(a, end), price = optPriceAt(a, end);
   const cost = grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised)*g.strike, 0);
   const worthNow = price==null ? 0 : grants.reduce((t,g)=>t+Math.max(0, g.vested-g.exercised)*price, 0);
-  const prices = opsOf(a.key).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const prices = opsOf(a.key).filter((o)=>o.kind==='Price' && o.price > 0 && o.date <= end).sort(newest());
   const held = optSharesHeld(a, end);
   return `
   <div class="card">
@@ -3667,7 +3667,7 @@ const optWhatIfRows2 = (f, a) => `
       <div class="row"><span class="k">Tax on it</span><span class="v neg">${money(-f.tax2, a.currency)}</span></div>
       <div class="row"><span class="k"><b>Net in all</b></span><span class="v ${f.net<0?'neg':'pos'}"><b>${money(f.net, a.currency)}</b></span></div>`;
 function optOps(a, Y){
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y)).sort(newest());
   const line = (o) => o.kind==='Grant' ? qty(o.shares||0)+' options at '+money(o.price||0, a.currency)+(o.vest?' · vesting from '+dLabel(o.vest):'')+(o.until?' · until '+dLabel(o.until):'')
     : o.kind==='Price' ? money(o.price||0, a.currency)+' a share' : qty(o.shares||0)+' at '+money(o.price||0, a.currency);
   return `
@@ -3820,7 +3820,7 @@ function noteTable(a, f, Y, end, hist){
 }
 function notesOps(a, f, Y){
   const c = noteCash(a);
-  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y) && (!f || o.fund===f.name || (c && same(o.fund||'', c.name)))).sort((x,y)=>x.date<y.date?1:x.date>y.date?-1:0);
+  const ops = opsOf(a.key).filter((o)=>o.date.slice(0,4)===String(Y) && (!f || o.fund===f.name || (c && same(o.fund||'', c.name)))).sort(newest());
   const label = noteKindLabel;
   return `
   <div class="card">
@@ -4077,7 +4077,7 @@ function accountPage(a){
   const p = state.page;
   const Y = theYear();
   const f = opFilter();
-  const yearOps = abOps(a, Y);
+  const yearOps = abOps(a, Y).sort(newest());
   const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
@@ -4122,6 +4122,10 @@ function abBounds(a, Y){
   return { pts, lo:state.abLo, hi:state.abHi };
 }
 /* The year's operations inside the months the slider shows. */
+/* Newest first: the latest day on top and, on one day, the operation made
+   last - the store keeps each account's operations in the order they came. */
+const newest = () => { const pos = new Map(); for (const k of Object.keys(store.ops)) store.ops[k].forEach((o,i)=>pos.set(o.id, i));
+  return (x,y) => x.date<y.date ? 1 : x.date>y.date ? -1 : (pos.get(y.id)||0) - (pos.get(x.id)||0); };
 function abOps(a, Y){
   const { pts, lo, hi } = abBounds(a, Y);
   const from = Math.max(1, lo), to = hi;
