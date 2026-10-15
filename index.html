@@ -207,9 +207,8 @@
   .bbox .bbtn .cap{margin:0}
   .bbox .bktl{left:auto;right:0;min-width:150px}
   .bkday{font-size:12px;font-weight:600;margin:10px 0 2px;color:var(--muted)}
-  .bkrule{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:4px}
-  .bkrule input{width:14px;height:14px;padding:0;margin:0;flex:none}
   .bkn .bbox .bbtn{height:30px;font-size:11px}
+  .bkn .switch.mini{font-size:11px}
   .bkop{font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)}
   .bkd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
   .bkd span:first-child{flex:1;min-width:0;color:var(--muted);font-size:11px;line-height:1.3}
@@ -350,9 +349,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=183"></script>
+<script src="backend.js?v=184"></script>
 <script>
-const APP_VERSION="183";
+const APP_VERSION="184";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3986,7 +3985,6 @@ function wireTagBoxes(onchange){
 /* A budget box: the budget as its capsule in its colour; a tap lists the open budgets (and the one it is on, even closed) as capsules, or none. */
 const budgetCap = (b) => `<span class="cap bcap" style="color:${b.color};margin:0">${esc(b.name)}</span>`;
 function budgetBox(id, cur){
-  if (!budgetsFor(cur).length) return '';
   const b = cur ? budgetOf(cur) : null;
   return `<div class="bbox"><input type="hidden" id="${id}" value="${esc(cur||'')}"><button type="button" class="bbtn" data-budbox="${id}">${b?budgetCap(b):'Budget'}</button><div class="bktl" id="${id}List"></div></div>`;
 }
@@ -4052,8 +4050,9 @@ function bankSheet(p, a){
       ${d.items.map((i)=>{ const r = pl.news[i]; return `
       <div class="bkop">
         <div class="bkd"><span>${esc(r.detail)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
-        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div>${budgetBox('bkBud'+i, r.budget||'')}</div>
-        ${r.tag0 ? '' : `<label class="bkrule"><input type="checkbox" id="bkRule${i}"${r.rule?' checked':''}> Make it a rule: this name under the tag chosen</label>`}
+        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div></div>
+        <div class="bkn" style="margin-top:4px;align-items:center"><div style="flex:3;display:flex;min-width:0">${budgetBox('bkBud'+i, r.budget||'')}</div>
+          <div class="bkt" style="align-items:center">${r.tag0 ? '' : `<label class="switch mini" style="margin:0;justify-content:flex-start;gap:6px"><input type="checkbox" id="bkRule${i}"${r.rule?' checked':''}><span class="track"></span><span>Make rule</span></label>`}</div></div>
       </div>`; }).join('')}`).join('') : `<div class="hint">Nothing new.</div>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
