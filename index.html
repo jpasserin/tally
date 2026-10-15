@@ -207,6 +207,9 @@
   .bbox .bbtn .cap{margin:0}
   .bbox .bktl{left:auto;right:0;min-width:150px}
   .bkday{font-size:12px;font-weight:600;margin:10px 0 2px;color:var(--muted)}
+  .bkrule{display:flex;align-items:center;gap:6px;font-size:11px;color:var(--muted);margin-top:4px}
+  .bkrule input{width:14px;height:14px;padding:0;margin:0;flex:none}
+  .bkn .bbox .bbtn{height:30px;font-size:11px}
   .bkop{font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)}
   .bkd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
   .bkd span:first-child{flex:1;min-width:0;color:var(--muted);font-size:11px;line-height:1.3}
@@ -347,9 +350,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=182"></script>
+<script src="backend.js?v=183"></script>
 <script>
-const APP_VERSION="182";
+const APP_VERSION="183";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4049,7 +4052,8 @@ function bankSheet(p, a){
       ${d.items.map((i)=>{ const r = pl.news[i]; return `
       <div class="bkop">
         <div class="bkd"><span>${esc(r.detail)}</span><span class="v ${r.amount<0?'neg':'pos'}">${money(r.amount, a.currency)}</span></div>
-        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div></div>
+        <div class="bkn"><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div>${budgetBox('bkBud'+i, r.budget||'')}</div>
+        ${r.tag0 ? '' : `<label class="bkrule"><input type="checkbox" id="bkRule${i}"${r.rule?' checked':''}> Make it a rule: this name under the tag chosen</label>`}
       </div>`; }).join('')}`).join('') : `<div class="hint">Nothing new.</div>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -4062,9 +4066,10 @@ function bankSheet(p, a){
 function readBank(){
   const p = state.page; if (!p || p.kind!=='bank') return false;
   let dirty = false;
-  p.plan.news.forEach((r,i)=>{ const nm = document.getElementById('bkName'+i), tg = document.getElementById('bkTag'+i);
+  p.plan.news.forEach((r,i)=>{ const nm = document.getElementById('bkName'+i), tg = document.getElementById('bkTag'+i), bd = document.getElementById('bkBud'+i), rl = document.getElementById('bkRule'+i);
     if (nm) r.name = nm.value; if (tg) { const t = tagResolve(tg.value); r.tag = t==null ? tg.value.trim() : t; r.badTag = t==null; }
-    if (r.name !== r.name0 || r.tag !== r.tag0) dirty = true; });
+    if (bd) r.budget = bd.value || ''; if (rl) r.rule = !!rl.checked;
+    if (r.name !== r.name0 || r.tag !== r.tag0 || r.budget || r.rule) dirty = true; });
   return dirty;
 }
 function accountPage(a){
@@ -6061,9 +6066,11 @@ function wire(){
   document.querySelectorAll('[data-bankgo]').forEach((el)=>el.onclick=()=>{
     readBank(); const p = state.page, a = acct(); if (!p || !a) return;
     const bad = p.plan.news.filter((r)=>r.badTag).map((r)=>r.tag); if (bad.length) { alert('No tag called ' + bad.map((t)=>'"'+t+'"').join(', ') + '.'); return; }
-    const list = opsOf(a.key);
-    for (const r of p.plan.news) list.push({ id:uid(), date:r.date, name:String(r.name||'').trim(), amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:'', oneoff:false });
-    state.page=null; commit(a.key); });
+    const list = opsOf(a.key); let learned = false;
+    for (const r of p.plan.news) { const name = String(r.name||'').trim();
+      list.push({ id:uid(), date:r.date, name, amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:r.budget||'', oneoff:false });
+      if (r.rule && name && r.tag) { learnName(name, r.tag); learned = true; } }      /* ticked: this name under this tag, known from now on */
+    state.page=null; if (learned) markDirty('Config'); commit(a.key); });
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
     if (closedGuard(p.date, p.id && opDateById(p.id))) return;
