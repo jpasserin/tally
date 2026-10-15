@@ -349,9 +349,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=184"></script>
+<script src="backend.js?v=185"></script>
 <script>
-const APP_VERSION="184";
+const APP_VERSION="185";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1012,12 +1012,12 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills))) throw new Error('Not a Tally import file.');
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j, mode){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   if (+j.year && isClosedYear(+j.year)) throw new Error(j.year + ' is closed: nothing imported.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
@@ -1032,6 +1032,15 @@ function importFile(j, mode){
   let names = 0;
   for (const n of (Array.isArray(j.names) ? j.names : [])) if (n && n.name && Array.isArray(n.tags)) for (const t of n.tags) if (t && !nameTags(n.name).some((x)=>same(x, t))) { learnName(String(n.name), String(t)); names++; }
   /* retirement sources: merged by key, the file's figures winning; dropSources names the ones to take out (a key renamed) */
+  /* budgets and bills: merged by name, the file's figures winning - the way back when a tab was wiped */
+  let buds = 0, bills = 0;
+  for (const b of (Array.isArray(j.budgets) ? j.budgets : [])) { if (!b || !b.name) continue;
+    const clean = { name:String(b.name).trim(), color: /^#[0-9a-fA-F]{6}$/.test(b.color||'') ? b.color : BUDGET_COLORS[store.budgets.length % BUDGET_COLORS.length], currency: CURRENCIES.includes(b.currency) ? b.currency : 'USD',
+      amount: b.amount!=null && isFinite(+b.amount) ? +b.amount : null, created: /^\d{4}-\d{2}-\d{2}/.test(b.created||'') ? String(b.created).slice(0,10) : TODAY(), closed: !!b.closed, exclude: !!b.exclude };
+    const have = store.budgets.find((x)=>same(x.name, clean.name)); if (have) Object.assign(have, clean); else store.budgets.push(clean); buds++; touched.add('Budgets'); }
+  for (const b of (Array.isArray(j.bills) ? j.bills : [])) { if (!b || !b.name) continue;
+    const clean = { name:String(b.name).trim(), tags:(Array.isArray(b.tags) ? b.tags : []).map((t)=>String(t).trim()).filter(Boolean) };
+    store.bills = store.bills || []; const have = store.bills.find((x)=>same(x.name, clean.name)); if (have) Object.assign(have, clean); else store.bills.push(clean); bills++; touched.add('Bills'); }
   let srcs = 0;
   for (const k of (Array.isArray(j.dropSources) ? j.dropSources : [])) { const before = (store.sources||[]).length; store.sources = (store.sources||[]).filter((y)=>y.key!==String(k).trim().toUpperCase()); if (store.sources.length !== before) { srcs++; touched.add('Sources'); } }
   for (const x of (Array.isArray(j.sources) ? j.sources : [])) { if (!x || !x.key) continue;
@@ -1144,7 +1153,7 @@ function importFile(j, mode){
   /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
-  return { accounts, ops, adjusted, names, rates, levels, srcs, removed, reset, touched:[...touched] };
+  return { accounts, ops, adjusted, names, rates, levels, srcs, buds, bills, removed, reset, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
    account's opening; every later book gets an adjustment where it opens at
@@ -1201,7 +1210,8 @@ async function syncLocked(){
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
-  const names = everything ? ['Config','Dismissed','Budgets','Bills','Sources','Insurance'].concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const lists = { Budgets:store.budgets, Bills:store.bills, Sources:store.sources, Insurance:store.insurance };
+  const names = everything ? ['Config','Dismissed'].concat(Object.keys(lists).filter((n)=>(lists[n]||[]).length || dirty().includes(n))).concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
   const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : n==='Budgets' ? budgetsTab() : n==='Bills' ? billsTab() : n==='Sources' ? sourcesTab() : n==='Insurance' ? insuranceTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
@@ -1268,6 +1278,8 @@ async function pullNow(keep){
   const j = await BK.pull(store.backend);
   if (!j.tabs) throw new Error('The sheet answered with no tabs.');
   const tab = (n) => j.tabs.find((t)=>t.name===n);
+  /* the lists this device holds, before Config is read over them: what goes back up if the sheet's tab is gone or emptied */
+  const before = { budgets:store.budgets||[], bills:store.bills||[], sources:store.sources||[], insurance:store.insurance||[] };
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
     store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; store.sources=got.sources||[];
@@ -1276,7 +1288,9 @@ async function pullNow(keep){
   /* the tabs of their own where the sheet has them; else what Config still carries, sent on into the tabs */
   let toTabs = false;
   const own = (name, read, key) => { if (keep.includes(name)) return; const t = tab(name);
-    if (ownTab(t, name)) store[key] = read(t); else if ((store[key]||[]).length) toTabs = true; };
+    const mine = (store[key]||[]).length ? store[key] : before[key];
+    if (ownTab(t, name)) { const got = read(t); if (got.length || !mine.length) store[key] = got; else { store[key] = mine; toTabs = true; } }     /* an emptied tab against a device that still has the list: the list goes back up */
+    else if (mine.length) { store[key] = mine; toTabs = true; } };
   own('Budgets', readBudgets, 'budgets'); own('Bills', readBills, 'bills'); own('Sources', readSources, 'sources'); own('Insurance', readInsurance, 'insurance');
   if (toTabs && !store.locked) { for (const n of ['Config','Budgets','Bills','Sources','Insurance']) markDirty(n); pushSoon(); }
   const ops = {};
@@ -5227,7 +5241,7 @@ function settingsData(){
     ${state.pending.files.length>1?`<div class="sub" style="margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(f.name)}</div>`:''}
     <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
-        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':Array.isArray(f.file.sources)?f.file.sources.length+' retirement sources':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
+        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':Array.isArray(f.file.sources)?f.file.sources.length+' retirement sources':Array.isArray(f.file.budgets)||Array.isArray(f.file.bills)?(f.file.budgets||[]).length+' budgets, '+(f.file.bills||[]).length+' bills':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
     <div style="margin-top:8px"><button class="chip" data-importmode="${state.importMode==='all'?'figures':'all'}" style="padding:2px 9px;font-size:11.5px"${LK()}>${state.importMode==='all'?'The book wins':'Keep my edits'}</button></div>
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
@@ -5553,9 +5567,9 @@ function wire(){
     const pend=state.pending; if (!pend) return;
     try {
       const got = { accounts:0, ops:0, adjusted:0, names:0, removed:0, reset:0, touched:new Set() };
-      for (const f of pend.files) { const r = importFile(f.file, state.importMode); got.accounts+=r.accounts; got.removed+=r.removed||0; got.reset+=r.reset||0; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); for (const t of r.touched) got.touched.add(t); }
+      for (const f of pend.files) { const r = importFile(f.file, state.importMode); got.accounts+=r.accounts; got.removed+=r.removed||0; got.reset+=r.reset||0; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); got.buds=(got.buds||0)+(r.buds||0); got.bills=(got.bills||0)+(r.bills||0); for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.removed?', '+got.removed+' taken out':'')+(got.reset?', '+got.reset+' reset to the book':'')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.removed?', '+got.removed+' taken out':'')+(got.reset?', '+got.reset+' reset to the book':'')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'')+(got.buds?', '+got.buds+' budget'+(got.buds===1?'':'s'):'')+(got.bills?', '+got.bills+' bill'+(got.bills===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
