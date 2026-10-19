@@ -349,9 +349,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=186"></script>
+<script src="backend.js?v=187"></script>
 <script>
-const APP_VERSION="186";
+const APP_VERSION="187";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -858,7 +858,7 @@ function configTab(){
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
         Openings:a.openings&&Object.keys(a.openings).length?JSON.stringify(a.openings):'', Policy:(isLife(a)||isOpt(a))&&a.policy?JSON.stringify(a.policy):'', Facts:a.facts&&Object.keys(a.facts).length?JSON.stringify(a.facts):'' })))
-      .concat(store.accounts.filter((a)=>isFund(a) || isNotes(a)).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key, Policy: f.kind==='note' && f.terms ? JSON.stringify(f.terms) : '' }))))
+      .concat(store.accounts.filter((a)=>isFund(a) || isNotes(a)).flatMap((a)=>fundsOf(a).map((f)=>row({ Kind:'fund', Name:f.name, Type:f.kind, Tags:f.index||'', Account:a.key, Policy: f.terms && typeof f.terms==='object' && Object.keys(f.terms).length ? JSON.stringify(f.terms) : '' }))))
  };
 }
 /* Budgets, Bills, Sources and Insurance each in a tab of their own (v153), so
@@ -1019,7 +1019,7 @@ function readConfig(tab){
       ...(type==='PEL' ? { opened: String(col(r,'Opened')||'').slice(0,10), rate: isFinite(num(col(r,'Rate'))) ? num(col(r,'Rate')) : null } : {}),
       ...(type==='Property' ? { bought: String(col(r,'Bought')||'').slice(0,10), sold: isDay(col(r,'Closed')) ? dayOf(col(r,'Closed')) : '', share: isFinite(num(col(r,'Share'))) ? num(col(r,'Share')) : 100, mortgage: (()=>{ try { const m = JSON.parse(col(r,'Mortgage')||'null'); return m && m.principal ? m : null; } catch (e) { return null; } })() } : {}) });
     if (kind==='fund') { const acc = accounts.find((x)=>same(x.key, col(r,'Account'))); if (acc) { const fk = col(r,'Type')==='invested' ? 'invested' : col(r,'Type')==='note' ? 'note' : 'cash';
-      const f = { name, kind: fk, index: col(r,'Tags') }; if (fk==='note') { try { const t = JSON.parse(col(r,'Policy')||'null'); if (t && typeof t==='object') f.terms = t; } catch (e) {} } fundsOf(acc).push(f); } }
+      const f = { name, kind: fk, index: col(r,'Tags') }; try { const t = JSON.parse(col(r,'Policy')||'null'); if (t && typeof t==='object') f.terms = t; } catch (e) {} fundsOf(acc).push(f); } }
     if (kind==='budget') { const d = col(r,'Date'); budgets.push({ name, color: /^#[0-9a-fA-F]{6}$/.test(col(r,'Color'))?col(r,'Color'):BUDGET_COLORS[budgets.length % BUDGET_COLORS.length],
       currency: CURRENCIES.includes(col(r,'Currency'))?col(r,'Currency'):'USD',
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
@@ -1134,8 +1134,8 @@ function importFile(j, mode){
     /* a fund account brings its funds; ones already there are left as they are */
     if (isFund(acc) || isNotes(acc)) for (const f of (a.funds||[])) { if (!f || !f.name) continue;
       const fk = f.kind==='invested' ? 'invested' : f.kind==='note' ? 'note' : 'cash', have = fundsOf(acc).find((x)=>same(x.name, f.name));
-      if (!have) fundsOf(acc).push({ name:String(f.name), kind:fk, index:String(f.index||''), ...(fk==='note' && f.terms && typeof f.terms==='object' ? { terms:f.terms } : {}) });
-      else if (fk==='note' && f.terms && typeof f.terms==='object') { have.kind = 'note'; have.terms = f.terms; if (f.index) have.index = String(f.index); } }
+      if (!have) fundsOf(acc).push({ name:String(f.name), kind:fk, index:String(f.index||''), ...(f.terms && typeof f.terms==='object' ? { terms:f.terms } : {}) });
+      else if (f.terms && typeof f.terms==='object') { if (fk==='note') have.kind = 'note'; have.terms = f.terms; if (f.index) have.index = String(f.index); } }
     const list = opsOf(key);
     /* the file's rows by day and amount: a known id whose former row shows up under another id has moved (a row put in or taken out above it) */
     const fileRows = new Set(((j.ops && j.ops[a.key]) || []).map((o)=>String(o.date)+'|'+(isFinite(+o.amount) ? Math.round(+o.amount*100)/100 : '')));
@@ -3029,7 +3029,8 @@ function fundAccountPage(a){
     ${fundSources(a, f, end).some((b)=>b.src!=='—') ? '' : `
     <div class="herosub">Paid in ${inv&&at.shares!=null?fmtSh(at.shares)+' shares ':''}<b style="color:var(--txt)">${money(at.paid, a.currency)}</b></div>
     <div class="herosub">${inv?'Growth':'Interest'} <b style="color:${at.interest<0?'var(--bad)':'var(--good)'}">${money(at.interest, a.currency)}</b>${growthPct!=null?' ('+(growthPct>=0?'+':'')+growthPct+'%)':''}</div>
-    ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}`}
+    ${inv?`<div class="herosub">${mark?`Unit price <b style="color:var(--txt)">${money(mark.price, a.currency)}</b> (${dLabel(mark.date)}${/^live-/.test(mark.id)?', live':''})`:'<span class="muted">no price yet</span>'}</div>`:''}
+    ${inv && f.terms && (f.terms.matures || f.terms.coupon!=null) ? `<div class="herosub">${[f.terms.matures ? 'Matures ' + dLabel(f.terms.matures) : '', f.terms.coupon!=null ? 'coupon ' + f.terms.coupon + '%' : '', f.terms.face ? 'face ' + money(f.terms.face, a.currency) : ''].filter(Boolean).join(' · ')}</div>` : ''}`}
     ${(function(){ const rows = fundSources(a, f, end); if (!rows.some((b)=>b.src!=='—')) return '';
       const priceTxt = at.price!=null ? at.price.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:4}) : '—';
       return `
