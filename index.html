@@ -349,9 +349,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=187"></script>
+<script src="backend.js?v=188"></script>
 <script>
-const APP_VERSION="187";
+const APP_VERSION="188";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1345,7 +1345,7 @@ const empty = (what) => `<div class="card"><h2>${esc(what)}</h2><div class="hint
 const SCREENS = {
   summary: () => (state.page && state.page.kind==='explain' ? explainSheet(state.page.which) : '') + subnav('summary') + (sub('summary')==='history' ? tabHistory() : tabSummary()),
   report:  () => subnav('report') + (sub('report')==='prevision' ? tabPrevision() : sub('report')==='budgets' ? tabBudgets() : sub('report')==='bills' ? tabBills() : tabReport()),
-  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='transfers' ? tabTransfers() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
+  account: () => subnav('account') + (sub('account')==='operations' ? tabOperations() : sub('account')==='transfers' ? tabTransfers() : sub('account')==='reimburse' ? tabReimburse() : sub('account')==='warnings' ? tabWarnings() : tabAccount()),
   kids: () => subnav('kids') + (sub('kids')==='accounts' ? tabKidsAccounts() : tabKidsSummary()),
   protection: () => subnav('protection') + (sub('protection')==='insurance' ? settingsInsurance() : tabRetirement()),
   settings: tabSettings,
@@ -1355,6 +1355,7 @@ const SCREENS = {
 const SUBS = {
   account: [['accounts','Accounts','<rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><path d="M7 15h3"/>'],
             ['operations','Operations','<circle cx="11" cy="11" r="6"/><path d="M20 20l-4.3-4.3"/>'],
+            ['reimburse','Reimburse','<path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'],
             ['transfers','Transfers','<path d="M4 8h13"/><path d="M13 4l4 4-4 4"/><path d="M20 16H7"/><path d="M11 12l-4 4 4 4"/>'],
             ['warnings','Warnings','<path d="M12 3 2 21h20z"/><path d="M12 10v5"/><path d="M12 18h.01"/>']],
   kids:    [['summary','Summary','<circle cx="12" cy="12" r="9"/><path d="M12 3v9l6.5 4"/>'],
@@ -2016,6 +2017,89 @@ function tabTransfers(){
     <h2>Transfers <span class="muted" style="text-transform:none;letter-spacing:0">${Y} · ${rows.length}</span></h2>
     ${rows.length ? rows.map((r)=> r.d && r.c ? `<div class="xrow">${side(r.d, true)}${mid(r)}${side(r.c, false)}</div>`
       : `<div class="xrow lone">${r.d ? lone(r.d, true) : '<div class="xside"></div>'}${mid(r)}${r.c ? lone(r.c, false) : '<div class="xside xcredit"></div>'}</div>`).join('') : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
+  </div>`;
+}
+/* ---------------------------------------------------------- reimbursements --
+   A payment made for someone else is marked "to be reimbursed" in its widget
+   (a key tbr|id in Dismissed, so every device agrees); it keeps its tag and
+   counts in the Report as before. A credit of the same amount the other way,
+   when it comes in - typed or imported - is asked about; linked
+   (reimb|payment|credit) the pair shows in Account ▸ Reimburse the way a
+   transfer does, debit left, credit right; a payment still waiting stands
+   alone there in a yellow frame, a tap on it offers the credits that fit. */
+const TBR = 'tbr|', REIMB = 'reimb|';
+const isTbr = (id) => (store.dismissed||[]).includes(TBR + id);
+const reimbLinks = () => (store.dismissed||[]).filter((k)=>k.startsWith(REIMB)).map((k)=>{ const [, t, c] = k.split('|'); return { tbr:t, by:c }; });
+const reimbOf = (tbrId) => (reimbLinks().find((l)=>l.tbr===tbrId)||{}).by || null;
+const reimbUsed = (creditId) => reimbLinks().some((l)=>l.by===creditId);
+const opWith = (id) => { for (const a of store.accounts) { const o = opsOf(a.key).find((x)=>x.id===id); if (o) return { o, a }; } return null; };
+const addKey = (k) => { if (!(store.dismissed||[]).includes(k)) (store.dismissed = store.dismissed || []).push(k); };
+const dropKey = (k) => { store.dismissed = (store.dismissed||[]).filter((x)=>x!==k); };
+/* a payment unmarked or deleted takes its link along */
+const dropTbr = (id) => { dropKey(TBR + id); for (const l of reimbLinks()) if (l.tbr===id || l.by===id) dropKey(REIMB + l.tbr + '|' + l.by); };
+/* every payment marked, newest first, with its reimbursement where linked */
+function reimbRows(){
+  const rows = [];
+  for (const k of (store.dismissed||[])) if (k.startsWith(TBR)) { const x = opWith(k.slice(TBR.length)); if (!x) continue; const by = reimbOf(x.o.id); rows.push({ d:x, c: by ? opWith(by) : null }); }
+  return rows.sort((p,q)=>p.d.o.date<q.d.o.date?1:p.d.o.date>q.d.o.date?-1:0);
+}
+/* the credits that could reimburse a payment: the same amount the other way, same currency, not a reimbursement already, newest first */
+function reimbCandidatesFor(tbrId){
+  const me = opWith(tbrId); if (!me) return { me:null, list:[] };
+  const list = [];
+  for (const a of store.accounts) { if (a.currency!==me.a.currency) continue;
+    for (const o of opsOf(a.key)) { if (!(o.amount > 0) || Math.abs(o.amount + me.o.amount) > 0.005 || reimbUsed(o.id) || isTbr(o.id)) continue; list.push({ o, a }); } }
+  return { me, list: list.sort((p,q)=>p.o.date<q.o.date?1:p.o.date>q.o.date?-1:0) };
+}
+/* the payments a credit could reimburse: marked, still waiting, the same amount the other way */
+const tbrFor = (credit, a) => (store.dismissed||[]).filter((k)=>k.startsWith(TBR)).map((k)=>opWith(k.slice(TBR.length))).filter((x)=>x && !reimbOf(x.o.id) && x.a.currency===a.currency && Math.abs(x.o.amount + credit.amount) < 0.005);
+/* new credits just written: the ones a marked payment fits are queued to be asked about, one sheet at a time */
+function askReimb(ids){
+  const asks = ids.map((id)=>opWith(id)).filter((x)=>x && x.o.amount > 0 && tbrFor(x.o, x.a).length).map((x)=>({ credit:x.o.id }));
+  if (!asks.length) return false;
+  state.reimbAsk = (state.reimbAsk||[]).concat(asks); state.page = { kind:'reimb', fresh:true }; return true;
+}
+function reimbSheet(p){
+  const ask = (state.reimbAsk||[])[0]; const c = ask ? opWith(ask.credit) : null; if (!c) return '';
+  const list = tbrFor(c.o, c.a);
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-reimbno="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>A reimbursement? <span class="muted" style="font-size:12px;font-weight:600">${esc(c.a.key)} · ${esc(c.o.name||'—')} · ${money(c.o.amount, c.a.currency)} · ${dLabel(c.o.date)}</span></h3>
+      <div class="rows">${list.map((x)=>`
+        <div class="row tap" data-reimbyes="${esc(x.o.id)}"><div style="flex:1;min-width:0"><div class="k"><b>${esc(x.a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.o.name||'—')}</span></div><div class="sub">${dLabel(x.o.date)}${x.o.tag?' · '+esc(x.o.tag):''}</div></div>
+          <span class="v neg">${money(x.o.amount, x.a.currency)}</span></div>`).join('')}</div>
+      <div class="foot"><button class="btn close" style="flex:1" data-reimbno="1">No${(state.reimbAsk||[]).length > 1 ? ' · ' + ((state.reimbAsk||[]).length - 1) + ' more' : ''}</button></div>
+    </div>
+  </div>`;
+}
+function rfindSheet(p){
+  const { me, list } = reimbCandidatesFor(p.id); if (!me) return '';
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-rfindclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>Reimbursed by <span class="muted" style="font-size:12px;font-weight:600">${esc(me.a.key)} · ${esc(me.o.name||'—')} · ${money(me.o.amount, me.a.currency)} · ${dLabel(me.o.date)}</span></h3>
+      ${list.length ? `<div class="rows">${list.map((x)=>`
+        <div class="row tap" data-rpick="${esc(x.o.id)}"><div style="flex:1;min-width:0"><div class="k"><b>${esc(x.a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(x.o.name||'—')}</span></div><div class="sub">${dLabel(x.o.date)}</div></div>
+          <span class="v pos">${money(x.o.amount, x.a.currency)}</span></div>`).join('')}</div>`
+      : '<div class="hint" style="margin:0">No credit of that amount yet.</div>'}
+      <div class="foot"><button class="btn close" style="flex:1" data-rfindclose="1">Close</button></div>
+    </div>
+  </div>`;
+}
+function tabReimburse(){
+  const p = state.page, rows = reimbRows();
+  const open = rows.filter((r)=>!r.c), owed = open.reduce((t,r)=>t + (conv(-r.d.o.amount, r.d.a.currency, store.cur, r.d.o.date.slice(0,7))||0), 0);
+  const side = (x, neg) => `<div class="xside${neg?'':' xcredit'} tap" data-opedit="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v ${neg?'neg':'pos'}">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${esc(x.o.name||'—')} · ${dLabel(x.o.date)}</div></div>`;
+  const lone = (x) => `<div class="xside tap" data-rfind="${esc(x.o.id)}"><div><b>${esc(x.a.key)}</b> <span class="v neg">${money(x.o.amount, x.a.currency)}</span></div><div class="sub">${esc(x.o.name||'—')} · ${dLabel(x.o.date)} · <span style="color:var(--warn)">waiting - tap to match</span></div></div>`;
+  const mid = (r) => `<span class="xmid"><span class="xarrow">→</span>${r.c ? `<button class="chip ${state.runlinkArm===r.d.o.id?'arm':''}" style="padding:1px 7px;font-size:11px" data-runlink="${esc(r.d.o.id)}">${state.runlinkArm===r.d.o.id?'Unlink?':'×'}</button>` : '<span class="xrate"></span>'}</span>`;
+  return (p && p.kind==='op' ? opSheet(p, opAcct()) : p && p.kind==='rfind' ? rfindSheet(p) : p && p.kind==='reimb' ? reimbSheet(p) : '') + `
+  <div class="card">
+    <h2>Reimburse <span class="muted" style="text-transform:none;letter-spacing:0">${open.length} waiting${open.length ? ' · ' + money(r2(owed), store.cur) : ''}</span></h2>
+    ${rows.length ? rows.map((r)=> r.c ? `<div class="xrow">${side(r.d, true)}${mid(r)}${side(r.c, false)}</div>`
+      : `<div class="xrow lone">${lone(r.d)}${mid(r)}<div class="xside xcredit"></div></div>`).join('') : `<div class="hint" style="margin-top:0">Nothing marked to be reimbursed.</div>`}
   </div>`;
 }
 /* --------------------------------------------------------------- warnings --
@@ -4123,7 +4207,7 @@ function accountPage(a){
   const ops = filterOps(yearOps, f);
   const bal = balanceAt(a, Y);
   const balConv = a.currency!==store.cur ? conv(bal, a.currency, store.cur, yearMonth(Y)) : null;
-  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : p && p.kind==='bank' ? bankSheet(p, a) : p && p.kind==='copy' ? copySheet(p, a) : '') + `
+  return (p && p.kind==='account' ? accountSheet(p) : p && p.kind==='op' ? opSheet(p, a) : p && p.kind==='bank' ? bankSheet(p, a) : p && p.kind==='copy' ? copySheet(p, a) : p && p.kind==='reimb' ? reimbSheet(p) : '') + `
   <div class="card">
     <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>${esc(a.key)}</b></span>
       <button class="gbtn ghost" data-accedit="${store.accounts.indexOf(a)}"${LK()}>Edit</button></h2>
@@ -4218,7 +4302,7 @@ function balanceHistoryCard(a){
     </table>
   </div>`;
 }
-const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.budget||'',p.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.budget||'',p.was.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]);
+const opDirty = (p) => JSON.stringify([p.date,p.name.trim(),p.amount,p.note.trim(),p.tag,p.budget||'',!!p.tbr,p.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]) !== JSON.stringify([p.was.date,p.was.name,p.was.amount,p.was.note,p.was.tag,p.was.budget||'',!!p.was.tbr,p.was.splits.map((sp)=>[sp.tag,sp.amount,sp.budget||'',sp.name||''])]);
 /* A tag picker in the app's own colours: the chosen tag with its category's
    dot; a tap unfolds the categories (bold, dotted) and their tags, a tap on
    one picks it and folds. The value sits in a hidden input under the id, so
@@ -4292,6 +4376,7 @@ function opSheet(p, a){
           <button class="chip" data-opspdel="${i}" style="flex:none;padding:4px 8px">×</button>
         </div>`).join('')}
         <div style="margin-top:6px"><button class="gbtn" data-opspadd="1" title="a secondary tag">+</button></div></div>
+      <label class="switch mini" style="margin:4px 0 2px;justify-content:flex-start;gap:8px"><input type="checkbox" id="oTbr"${p.tbr?' checked':''}><span class="track"></span><span>To be reimbursed</span></label>
       ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-opdelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-opclose="1">${p.closeArm?'Close?':'Close'}</button>
@@ -5886,6 +5971,18 @@ function wire(){
   /* a lone transfer: the sheet of the other sides it could take; a pick pairs the two for good (Dismissed: xmatch|a|b, and both out of the transfer findings) */
   document.querySelectorAll('[data-xfind]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'xfind', id:el.dataset.xfind, fresh:true }; render(); state.page.fresh=false; });
   document.querySelectorAll('[data-xfindclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  /* reimbursements: the question on a new credit, the match from a waiting payment, the link undone */
+  const nextAsk = ()=>{ (state.reimbAsk||[]).shift(); if ((state.reimbAsk||[]).length) { state.page={ kind:'reimb', fresh:false }; } else { state.reimbAsk = []; state.page=null; } };
+  document.querySelectorAll('[data-reimbyes]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const ask = (state.reimbAsk||[])[0]; if (!ask) return;
+    addKey(REIMB + el.dataset.reimbyes + '|' + ask.credit); nextAsk(); commit('Dismissed'); });
+  document.querySelectorAll('[data-reimbno]').forEach((el)=>el.onclick=()=>{ nextAsk(); render(); });
+  document.querySelectorAll('[data-rfind]').forEach((el)=>el.onclick=()=>{ state.page={ kind:'rfind', id:el.dataset.rfind, fresh:true }; render(); state.page.fresh=false; });
+  document.querySelectorAll('[data-rfindclose]').forEach((el)=>el.onclick=()=>{ state.page=null; render(); });
+  document.querySelectorAll('[data-rpick]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const p = state.page; if (!p || p.kind!=='rfind') return;
+    addKey(REIMB + p.id + '|' + el.dataset.rpick); state.page=null; commit('Dismissed'); });
+  document.querySelectorAll('[data-runlink]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const id = el.dataset.runlink;
+    if (state.runlinkArm !== id) { state.runlinkArm = id; render(); return; }
+    state.runlinkArm = null; for (const l of reimbLinks()) if (l.tbr===id) dropKey(REIMB + l.tbr + '|' + l.by); commit('Dismissed'); });
   document.querySelectorAll('[data-xpick]').forEach((el)=>el.onclick=()=>{ if (store.locked) return; const p = state.page; if (!p || p.kind!=='xfind') return;
     const keys = ['xmatch|' + p.id + '|' + el.dataset.xpick, 'transfer|' + p.id, 'transfer|' + el.dataset.xpick];
     for (const k of keys) if (!(store.dismissed||[]).includes(k)) (store.dismissed = store.dismissed || []).push(k);
@@ -6041,6 +6138,7 @@ function wire(){
     for (const [id,f] of [['oDate','date'],['oName','name'],['oAmount','amount'],['oNote','note'],['oBudget','budget']]) { const v=g(id); if (v!==undefined) p[f]=v; }
     const tg = (id, was) => { const v = g(id); if (v===undefined) return was; const t = tagResolve(v); return t==null ? v.trim() : t; };     /* a tag typed in part is the first tag starting so; a word no tag starts with is a new tag, filed later under Settings > Tags */
     p.tag = tg('oTag', p.tag);
+    const tb = document.getElementById('oTbr'); if (tb) p.tbr = !!tb.checked;
     p.splits = p.splits.map((sp,i)=>({ tag: tg('oSpTag'+i, sp.tag), name: g('oSpName'+i) ?? (sp.name||''), amount: g('oSpAmt'+i) ?? sp.amount, budget: g('oSpBud'+i) ?? (sp.budget||'') }));
     p.closeArm=false; p.delArm=false; };
   const openOp=(id)=>{ openOpById(id); };
@@ -6051,7 +6149,7 @@ function wire(){
     const fromTransfer = state.tab==='account' && sub('account')==='warnings' && state.warnKind==='transfer';
     const o = id==null ? null : opsOf((owner||{}).key||state.account).find((x)=>x.id===id);
     const Y = theYear();
-    const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'', budget:o?(o.budget||''):'',
+    const cur = { date:o?o.date:(Y===THIS_YEAR?TODAY():Y+'-12-31'), name:o?o.name:'', amount:o?String(o.amount):'', note:o?(o.note||''):'', tag:o?o.tag:'', budget:o?(o.budget||''):'', tbr: o ? isTbr(o.id) : false,
       splits:o?o.splits.map((sp)=>({ tag:sp.tag, name:sp.name||'', amount:String(sp.amount), budget:sp.budget||'' })):[] };
     state.page={ kind:'op', id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true, match:fromTransfer, view:fromTransfer?'match':'edit' };
     render(); state.page.fresh=false; }
@@ -6112,7 +6210,9 @@ function wire(){
     for (const r of p.plan.news) { const name = String(r.name||'').trim();
       list.push({ id:uid(), date:r.date, name, amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:r.budget||'', oneoff:false });
       if (r.rule && name && r.tag) { learnName(name, r.tag); learned = true; } }      /* ticked: this name under this tag, known from now on */
-    state.page=null; if (learned) markDirty('Config'); commit(a.key); });
+    state.page=null; if (learned) markDirty('Config');
+    const asked = askReimb(list.slice(list.length - p.plan.news.length).map((o)=>o.id));
+    commit(a.key); if (asked) state.page.fresh=false; });
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
     if (closedGuard(p.date, p.id && opDateById(p.id))) return;
@@ -6121,7 +6221,11 @@ function wire(){
     try { checkOp(o); } catch (e) { alert(e.message); render(); return; }
     const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
     if (i>=0) Object.assign(list[i], o); else list.push(o);
-    state.page=null; state.opAccount=null; commit(a.key); });
+    /* the mark, kept in Dismissed; a new credit of a marked amount is asked about */
+    let keys = false; if (p.tbr && !isTbr(o.id)) { addKey(TBR + o.id); keys = true; } else if (!p.tbr && isTbr(o.id)) { dropTbr(o.id); keys = true; }
+    state.page=null; state.opAccount=null;
+    const asked = i < 0 && askReimb([o.id]);
+    if (keys) commit(a.key, 'Dismissed'); else commit(a.key); if (asked) state.page.fresh=false; });
   document.querySelectorAll('[data-opclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
     readOp();
@@ -6132,7 +6236,8 @@ function wire(){
     if (p.id && closedGuard(opDateById(p.id))) return;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.ops[a.key] = opsOf(a.key).filter((x)=>x.id!==el.dataset.opdelete);
-    state.page=null; state.opAccount=null; commit(a.key); });
+    const marked = isTbr(el.dataset.opdelete) || reimbUsed(el.dataset.opdelete); dropTbr(el.dataset.opdelete);
+    state.page=null; state.opAccount=null; if (marked) commit(a.key, 'Dismissed'); else commit(a.key); });
 
   /* budgets */
   /* bills */
