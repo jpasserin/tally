@@ -28,6 +28,8 @@
   /* The name is a button: it opens the About widget. */
   header h1{font-size:20px;margin:0;letter-spacing:.3px;cursor:pointer;user-select:none;-webkit-user-select:none}
   header h1 .dot{color:var(--accent)}
+  .lastup{display:flex;flex-direction:column;line-height:1.15;margin-left:10px;font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+  .lastup b{font-size:11.5px;color:var(--txt);font-weight:600;letter-spacing:0;text-transform:none}
   /* The year: first operation to last, stepped from the top bar. */
   .ystep{display:flex;align-items:center;gap:2px}
   .ystep button{background:none;border:1px solid var(--line);color:var(--muted);border-radius:8px;width:26px;height:26px;
@@ -342,16 +344,16 @@
 </head>
 <body>
 <div class="wrap">
-  <header><h1 id="appTitle"></h1>
+  <header><div style="display:flex;align-items:center;min-width:0"><h1 id="appTitle"></h1><div class="lastup" id="lastUp"></div></div>
     <div class="ystep" id="yearStep"></div>
     <div class="hdrright"><span class="curtog" id="curTog"></span><span id="setBtn"></span></div></header>
   <div id="tabs"></div>
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=188"></script>
+<script src="backend.js?v=189"></script>
 <script>
-const APP_VERSION="188";
+const APP_VERSION="189";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -854,6 +856,7 @@ function configTab(){
       .concat((store.names||[]).map((n)=>row({ Kind:'name', Name:n.name, Tags:n.tags.join(', ') })))
       .concat((store.ibond||[]).map((r)=>row({ Kind:'ibond', Name:r.month, Rate:r.inflation, Amount:r.fixed })))
       .concat(closedYear()!=null ? [row({ Kind:'closed', Name:String(closedYear()), Type: store.lockClosed ? 'locked' : 'open' })] : [])
+      .concat(store.updatedAt ? [row({ Kind:'updated', Name:store.updatedAt })] : [])
       .concat(store.accounts.map((a)=>row({ Kind:'account', Name:a.key, Type:a.type, Currency:a.currency, Owners:a.owners.join(', '), Category:a.category, Opening:a.opening||0, Closed:isProp(a)&&/^\d{4}-\d{2}-\d{2}/.test(a.sold||'')?a.sold:(a.closed?'yes':''),
         Opened:isPel(a)?(a.opened||''):'', Rate:isPel(a)&&a.rate!=null?a.rate:'',
         Share:isProp(a)&&a.share!=null?a.share:'', Mortgage:isProp(a)&&a.mortgage?JSON.stringify(a.mortgage):'', Bought:isProp(a)?(a.bought||''):'',
@@ -992,7 +995,7 @@ function readOps(tab){
 const isDay = (v) => v instanceof Date || /^\d{4}-\d{2}-\d{2}/.test(String(v==null?'':v).trim());
 const dayOf = (v) => v instanceof Date ? v.toISOString().slice(0,10) : String(v==null?'':v).trim().slice(0,10);
 function readConfig(tab){
-  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[], sources=[], bills=[]; let closed = null, closedLocked = false;
+  const cats=[], people=[], accounts=[], budgets=[], names=[], ibond=[], insurance=[], sources=[], bills=[]; let closed = null, closedLocked = false, updated = '';
   const heads = ((tab && tab.headers) || CONFIG_HEADERS).map((h)=>String(h).trim());
   const col = (r, h) => { const i = heads.indexOf(h); return i<0 ? '' : String(r[i]==null?'':r[i]).trim(); };
   for (const r of (tab && tab.rows) || []) {
@@ -1003,6 +1006,7 @@ function readConfig(tab){
     if (kind==='name') names.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='ibond' && /^\d{4}-\d{2}/.test(name)) ibond.push({ month: name.slice(0,7), inflation: +col(r,'Rate')||0, fixed: +col(r,'Amount')||0 });
     if (kind==='closed' && /^\d{4}$/.test(name)) { closed = +name; closedLocked = type==='locked'; }
+    if (kind==='updated' && /^\d{4}-\d{2}-\d{2}$/.test(name)) updated = name;
     if (kind==='bill' && name) bills.push({ name, tags: splitTags(col(r,'Tags')) });
     if (kind==='source' && name) sources.push({ key:name, type: SOURCE_TYPES.includes(type) ? type : 'Funds', currency: CURRENCIES.includes(col(r,'Currency')) ? col(r,'Currency') : 'USD', owner: col(r,'Owners'), monthly: +col(r,'Amount')||0, account: col(r,'Account') });   /* before v155: no terms */
     if (kind==='insurance' && name) { let f = {}; try { f = JSON.parse(col(r,'Policy')||'{}') || {}; } catch (e) { f = {}; }
@@ -1025,7 +1029,7 @@ function readConfig(tab){
       amount: col(r,'Amount')!=='' && isFinite(num(col(r,'Amount'))) ? num(col(r,'Amount')) : null,
       created: /^\d{4}-\d{2}-\d{2}/.test(d) ? d.slice(0,10) : TODAY(), closed: col(r,'Closed')==='yes' }); }
   }
-  return { categories:cats, people, accounts, budgets, names, ibond, insurance, sources, bills, closed, closedLocked };
+  return { categories:cats, people, accounts, budgets, names, ibond, insurance, sources, bills, closed, closedLocked, updated };
 }
 /* A tally-import file (xlsx2tally.py): accounts and their operations.
    Accounts already here are kept as they are; operations merge by id, so
@@ -1174,6 +1178,7 @@ function importFile(j, mode){
   /* a clean-up file may name operations to take out - ones an earlier converter wrote under ids since retired */
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
+  if (ops) touchUpdated();
   return { accounts, ops, adjusted, names, rates, levels, srcs, buds, bills, removed, reset, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
@@ -1303,7 +1308,7 @@ async function pullNow(keep){
   const before = { budgets:store.budgets||[], bills:store.bills||[], sources:store.sources||[], insurance:store.insurance||[] };
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
-    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; store.sources=got.sources||[];
+    store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; if (got.updated) store.updatedAt = got.updated; store.sources=got.sources||[];
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   /* the tabs of their own where the sheet has them; else what Config still carries, sent on into the tabs */
@@ -2019,6 +2024,10 @@ function tabTransfers(){
       : `<div class="xrow lone">${r.d ? lone(r.d, true) : '<div class="xside"></div>'}${mid(r)}${r.c ? lone(r.c, false) : '<div class="xside xcredit"></div>'}</div>`).join('') : `<div class="hint" style="margin-top:0">Nothing in ${Y}.</div>`}
   </div>`;
 }
+/* The day the records were last added to - shown beside the name, kept in
+   Config (a row of kind updated) so every device shows the same. Stamped
+   when an operation is added: typed, imported from the bank, or from a file. */
+const touchUpdated = () => { const d = TODAY(); if (store.updatedAt !== d) { store.updatedAt = d; markDirty('Config'); } };
 /* ---------------------------------------------------------- reimbursements --
    A payment made for someone else is marked "to be reimbursed" in its widget
    (a key tbr|id in Dismissed, so every device agrees); it keeps its tag and
@@ -5436,6 +5445,7 @@ function render(){
   /* The name, which is the way into About. No version beside it any more:
      it is one tap away instead. */
   document.getElementById('appTitle').innerHTML = `<span data-about="1">Tally<span class="dot">.</span></span>`;
+  { const lu = document.getElementById('lastUp'); if (lu) lu.innerHTML = store.updatedAt ? `<span>Last update</span><b>${esc(store.updatedAt.replace(/-/g, '/'))}</b>` : ''; }
   /* Settings, in the corner beside the currency; the padlock in its place
      while the app is locked, as the bottom bar used to show. */
   document.getElementById('setBtn').innerHTML =
@@ -5841,7 +5851,7 @@ function wire(){
     readFop(); const p=state.page, a=acct(), f=fundNow(); if (!a || !f) return;
     if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     if (p.fkind===TO_CASH) { let plan; try { if (!/^\d{4}-\d{2}-\d{2}$/.test(p.date)) throw new Error('A date.'); plan = toCashRows(a, f, p); } catch (e) { alert(e.message); render(); return; }
-      opsOf(a.key).push(...plan.rows); state.page=null; commit(a.key); return; }
+      opsOf(a.key).push(...plan.rows); touchUpdated(); state.page=null; commit(a.key); return; }
     const inv = f.kind==='invested';
     const o = { id:p.id||uid(), date:p.date, fund:f.name, kind:p.fkind, amount: p.fkind==='Price' ? null : num(p.amount),
       shares: inv && String(p.shares).trim()!=='' ? num3(p.shares) : undefined, price: inv && String(p.price).trim()!=='' ? num4(p.price) : undefined,
@@ -5849,7 +5859,7 @@ function wire(){
     if (o.shares!==undefined && !isFinite(o.shares)) o.shares = undefined; if (o.price!==undefined && !isFinite(o.price)) o.price = undefined;
     try { checkFop(o, inv); } catch (e) { alert(e.message); render(); return; }
     const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
-    if (i>=0) { Object.assign(list[i], o); if (!o.src) delete list[i].src; } else list.push(o);
+    if (i>=0) { Object.assign(list[i], o); if (!o.src) delete list[i].src; } else { list.push(o); touchUpdated(); }
     state.page=null; commit(a.key); });
   document.querySelectorAll('[data-fopclose]').forEach((el)=>el.onclick=()=>{
     const p=state.page; const g=(id)=>{ const e=document.getElementById(id); return e?e.value:undefined; };
@@ -6210,7 +6220,7 @@ function wire(){
     for (const r of p.plan.news) { const name = String(r.name||'').trim();
       list.push({ id:uid(), date:r.date, name, amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:r.budget||'', oneoff:false });
       if (r.rule && name && r.tag) { learnName(name, r.tag); learned = true; } }      /* ticked: this name under this tag, known from now on */
-    state.page=null; if (learned) markDirty('Config');
+    state.page=null; if (learned) markDirty('Config'); if (p.plan.news.length) touchUpdated();
     const asked = askReimb(list.slice(list.length - p.plan.news.length).map((o)=>o.id));
     commit(a.key); if (asked) state.page.fresh=false; });
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
@@ -6220,7 +6230,7 @@ function wire(){
       splits: p.splits.map((sp)=>({ tag:sp.tag, amount:num(sp.amount), ...(sp.budget ? { budget:sp.budget } : {}), ...(String(sp.name||'').trim() ? { name:String(sp.name).trim() } : {}) })), budget:p.budget||'', oneoff:false };
     try { checkOp(o); } catch (e) { alert(e.message); render(); return; }
     const list = opsOf(a.key); const i = list.findIndex((x)=>x.id===o.id);
-    if (i>=0) Object.assign(list[i], o); else list.push(o);
+    if (i>=0) Object.assign(list[i], o); else { list.push(o); touchUpdated(); }
     /* the mark, kept in Dismissed; a new credit of a marked amount is asked about */
     let keys = false; if (p.tbr && !isTbr(o.id)) { addKey(TBR + o.id); keys = true; } else if (!p.tbr && isTbr(o.id)) { dropTbr(o.id); keys = true; }
     state.page=null; state.opAccount=null;
