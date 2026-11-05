@@ -351,9 +351,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=191"></script>
+<script src="backend.js?v=192"></script>
 <script>
-const APP_VERSION="191";
+const APP_VERSION="192";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -552,18 +552,28 @@ const propValueAt = (a, end) => { let v = null; for (const o of opsOf(a.key)) if
 /* Months paid by `end`: one payment on each month's anniversary of the start. */
 /* `project` looks past today (the schedule); otherwise nothing is known
    beyond today. Before the first payment nothing is owed yet. */
+/* `from` (optional): the day the money was lent - all of it is owed from
+   then, before the first payment. `lead` (optional): an interest-only
+   payment on the start day (the days between `from` and `start`), counted in
+   what is paid and its interest. */
 function mortgageAt(m, end, project){
   if (!m || !(m.principal > 0) || !(m.years > 0) || !/^\d{4}-\d{2}-\d{2}$/.test(m.start||'')) return null;
   const r = (+m.rate||0)/1200, n = Math.round(m.years*12), P = r ? m.principal*r/(1-Math.pow(1+r,-n)) : m.principal/n;
   const d = project || end <= TODAY() ? end : TODAY();
-  const fin = addMonths(m.start, n);
-  if (d < m.start) return { payment:r2(P), months:0, of:n, owed:0, paid:0, repaid:0, interest:0, end:fin, before:true };
+  const fin = addMonths(m.start, n), lead = +m.lead > 0 ? +m.lead : 0;
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(m.from||'') && m.from < m.start ? m.from : m.start;
+  if (d < from) return { payment:r2(P), months:0, of:n, owed:0, paid:0, repaid:0, interest:0, end:fin, before:true };
+  if (d < m.start) return { payment:r2(P), months:0, of:n, owed:r2(m.principal), paid:0, repaid:0, interest:0, end:fin };
   let k = (+d.slice(0,4)-+m.start.slice(0,4))*12 + (+d.slice(5,7)-+m.start.slice(5,7)) - (+d.slice(8,10) < +m.start.slice(8,10) ? 1 : 0);
   k = Math.max(0, Math.min(n, k));
   const owed = r ? m.principal*Math.pow(1+r,k) - P*(Math.pow(1+r,k)-1)/r : m.principal - P*k;
-  const paid = P*k, repaid = m.principal - owed;
+  const paid = P*k + lead, repaid = m.principal - owed;
   return { payment:r2(P), months:k, of:n, owed:r2(Math.max(0, owed)), paid:r2(paid), repaid:r2(repaid), interest:r2(paid-repaid), end:fin };
 }
+/* A mortgage as the import and the widget keep it: the four figures, and the optional lent day and first interest. */
+const mortOf = (x) => { if (!x || !(+x.principal > 0)) return null;
+  const m = { principal:+x.principal, rate:+x.rate||0, years:+x.years||0, start:String(x.start||'') };
+  if (/^\d{4}-\d{2}-\d{2}$/.test(x.from||'')) m.from = x.from.slice(0,10); if (+x.lead > 0) m.lead = r2(+x.lead); return m; };
 const addMonths = (d, n) => { const y = +d.slice(0,4) + Math.floor((+d.slice(5,7)-1+n)/12), mo = ((+d.slice(5,7)-1+n)%12+12)%12+1; return y+'-'+String(mo).padStart(2,'0')+d.slice(7); };
 const propOwedAt = (a, end) => { const m = mortgageAt(a.mortgage, end); return m ? m.owed : 0; };
 /* Your part of what it is worth less what is owed. */
@@ -1096,7 +1106,7 @@ function importFile(j, mode){
       if (a.type==='PEL') { known.opened = /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : ''; known.rate = isFinite(+a.rate) ? +a.rate : null; }
       if (a.type==='Life' || a.type==='Options') known.policy = a.policy && typeof a.policy==='object' ? a.policy : null;
       if (a.type==='Property') { known.share = isFinite(+a.share) && +a.share > 0 ? +a.share : 100; known.bought = /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '';
-        known.mortgage = a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null;
+        known.mortgage = mortOf(a.mortgage);
         if (/^\d{4}-\d{2}-\d{2}/.test(a.sold||'')) { known.sold = a.sold.slice(0,10); known.closed = true; } }
       store.ops[known.key] = opsOf(known.key).filter((o)=>!/-opening$/.test(o.id));
       touched.add('Config'); touched.add(known.key);
@@ -1118,7 +1128,7 @@ function importFile(j, mode){
         ...(a.type==='PEL' ? { opened: /^\d{4}-\d{2}-\d{2}/.test(a.opened||'') ? a.opened.slice(0,10) : '', rate: isFinite(+a.rate) ? +a.rate : null } : {}),
         ...(a.type==='Life' || a.type==='Options' ? { policy: a.policy && typeof a.policy==='object' ? a.policy : null } : {}),
         ...(a.type==='Property' ? { share: isFinite(+a.share) && +a.share > 0 ? +a.share : 100, bought: /^\d{4}-\d{2}-\d{2}/.test(a.bought||'') ? a.bought.slice(0,10) : '', sold: /^\d{4}-\d{2}-\d{2}/.test(a.sold||'') ? a.sold.slice(0,10) : '',
-          mortgage: a.mortgage && +a.mortgage.principal > 0 ? { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') } : null } : {}) });
+          mortgage: mortOf(a.mortgage) } : {}) });
       accounts++;
     } else if (isPel(known)) {
       /* a plan's terms, when the book names them and the app does not know them yet */
@@ -1129,7 +1139,10 @@ function importFile(j, mode){
     } else if (isProp(known)) {
       /* a house's terms, the same way */
       if (!known.bought && /^\d{4}-\d{2}-\d{2}/.test(a.bought||'')) known.bought = a.bought.slice(0,10);
-      if (!known.mortgage && a.mortgage && +a.mortgage.principal > 0) known.mortgage = { principal:+a.mortgage.principal, rate:+a.mortgage.rate||0, years:+a.mortgage.years||0, start:String(a.mortgage.start||'') };
+      if (!known.mortgage && a.mortgage && +a.mortgage.principal > 0) known.mortgage = mortOf(a.mortgage);
+      /* the same loan, the file knowing its lent day or first interest: those come in */
+      else if (known.mortgage && a.mortgage) { const f = mortOf(a.mortgage), k = known.mortgage;
+        if (f && +f.principal===+k.principal && f.start===k.start) { if (f.from && !k.from) { k.from = f.from; touched.add('Config'); } if (f.lead && !k.lead) { k.lead = f.lead; touched.add('Config'); } } }
       if (/^\d{4}-\d{2}-\d{2}/.test(a.sold||'')) { known.sold = a.sold.slice(0,10); known.closed = true; }
     }
     const acc = store.accounts.find((x)=>same(x.key, a.key)); const key = acc.key;
@@ -3364,7 +3377,7 @@ function propMortgage(a, Y){
   <div class="card">
     <h2>Mortgage <button class="gbtn ghost" data-pmortedit="1"${LK()}>Edit</button></h2>
     <div class="hero">${money(now.owed, a.currency)}</div>
-    <div class="herosub">still owed · ${money(m.principal, a.currency)} at ${m.rate}% over ${m.years} years from ${dLabel(m.start)} to ${dLabel(now.end)}</div>
+    <div class="herosub">still owed · ${money(m.principal, a.currency)} at ${m.rate}% over ${m.years} years from ${dLabel(m.start)} to ${dLabel(now.end)}${m.from && m.from < m.start ? ' · lent ' + dLabel(m.from) : ''}${+m.lead > 0 ? ' · first interest ' + money(m.lead, a.currency) : ''}</div>
     <div class="kpis" style="margin-top:8px">${box('Payment', money(now.payment, a.currency)+'/mo')}${box('Paid so far', money(now.paid, a.currency))}${box('Of it interest', money(now.interest, a.currency))}</div>
     <div class="kpis" style="margin-top:6px">${box('Repaid', money(now.repaid, a.currency))}${box('Payments', now.months+' / '+now.of)}${box('Your part owed', money(r2(now.owed*propShare(a)), a.currency))}</div>
   </div>
@@ -3448,6 +3461,10 @@ function pmortSheet(p, a){
       <div class="btnrow">
         <div class="field" style="flex:1"><label>Years</label><input id="pmYears" inputmode="decimal" value="${esc(p.years)}" style="text-align:right"></div>
         <div class="field" style="flex:1"><label>Started · paid monthly from the month after</label><input id="pmStart" type="date" value="${esc(p.start)}"></div>
+      </div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Lent on · owed from</label><input id="pmFrom" type="date" value="${esc(p.from)}"></div>
+        <div class="field" style="flex:1"><label>First interest ${esc(SYM[a.currency]||a.currency)}</label><input id="pmLead" inputmode="decimal" value="${esc(p.lead)}" style="text-align:right"></div>
       </div>
       ${a.mortgage?`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-pmortdelete="1">${p.delArm?'Remove?':'Remove'}</button>`:''}
       <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-pmortclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-pmortsave="1">Save</button></div>
@@ -5903,7 +5920,7 @@ function wire(){
   document.querySelectorAll('[data-pcview]').forEach((el)=>el.onclick=()=>{ state.pcView=el.dataset.pcview; render(); });
   document.querySelectorAll('[data-pmview]').forEach((el)=>el.onclick=()=>{ state.pmView=el.dataset.pmview; render(); });
   const readP = (ids) => { const p=state.page; for (const [id,k] of ids) { const e=document.getElementById(id); if (e) p[k]=e.value; } p.closeArm=false; p.delArm=false; };
-  const PV = [['pvDate','date'],['pvAmount','amount'],['pvNote','note']], PE = [['peDate','date'],['peAmount','amount'],['peName','name'],['peNote','note']], PM = [['pmPrincipal','principal'],['pmRate','rate'],['pmYears','years'],['pmStart','start']];
+  const PV = [['pvDate','date'],['pvAmount','amount'],['pvNote','note']], PE = [['peDate','date'],['peAmount','amount'],['peName','name'],['peNote','note']], PM = [['pmPrincipal','principal'],['pmRate','rate'],['pmYears','years'],['pmStart','start'],['pmFrom','from'],['pmLead','lead']];
   const openP = (kind, cur, id) => { state.page={ kind, id, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   const dflt = () => theYear()===THIS_YEAR ? TODAY() : theYear()+'-12-31';
   document.querySelectorAll('[data-pvalnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked && !isClosedYear(theYear()) && prop()) openP('pval', { date:dflt(), amount:'', note:'' }, null); });
@@ -5912,11 +5929,11 @@ function wire(){
   document.querySelectorAll('[data-pexpedit]').forEach((el)=>el.onclick=()=>{ if (closedId(el.dataset.pexpedit)) return; const a=prop(); const o = a && opsOf(a.key).find((x)=>x.id===el.dataset.pexpedit); if (!store.locked && o) openP('pexp', { date:o.date, pkind:o.kind, amount:String(Math.abs(o.amount)), name:o.name||'', note:o.note||'' }, o.id); });
   document.querySelectorAll('[data-pexpkind]').forEach((el)=>el.onclick=()=>{ readP(PE); state.page.pkind=el.dataset.pexpkind; render(); });
   document.querySelectorAll('[data-pmortedit]').forEach((el)=>el.onclick=()=>{ const a=prop(); if (!a || store.locked) return; const m=a.mortgage||{};
-    openP('pmort', { principal:m.principal!=null?String(m.principal):'', rate:m.rate!=null?String(m.rate):'', years:m.years!=null?String(m.years):'', start:m.start||'' }, null); });
+    openP('pmort', { principal:m.principal!=null?String(m.principal):'', rate:m.rate!=null?String(m.rate):'', years:m.years!=null?String(m.years):'', start:m.start||'', from:m.from||'', lead:m.lead!=null?String(m.lead):'' }, null); });
   if (state.page && ['pval','pexp','pmort'].includes(state.page.kind)) for (const [id] of PV.concat(PE, PM)) { const e=document.getElementById(id); if (e) e.oninput=e.onchange=()=>{ state.page.closeArm=false; state.page.delArm=false; }; }
   const closeP = (ids, keys, attr) => document.querySelectorAll('['+attr+']').forEach((el)=>el.onclick=()=>{ const p=state.page; for (const [id,k] of ids) { const e=document.getElementById(id); if (e) p[k]=e.value; }
     if (pDirty(p, keys) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; } state.page=null; render(); });
-  closeP(PV, ['date','amount','note'], 'data-pvalclose'); closeP(PE, ['date','pkind','amount','name','note'], 'data-pexpclose'); closeP(PM, ['principal','rate','years','start'], 'data-pmortclose');
+  closeP(PV, ['date','amount','note'], 'data-pvalclose'); closeP(PE, ['date','pkind','amount','name','note'], 'data-pexpclose'); closeP(PM, ['principal','rate','years','start','from','lead'], 'data-pmortclose');
   document.querySelectorAll('[data-pvalsave]').forEach((el)=>el.onclick=()=>{ readP(PV); const p=state.page, a=prop(); if (!a) return; if (closedGuard(p.date, p.id && opDateById(p.id))) return;
     const o = { id:p.id||uid(), date:p.date, name:'Valuation', kind:'Value', amount:num(p.amount), note:p.note.trim(), tag:'', splits:[], budget:'', oneoff:false };
     if (!/^\d{4}-\d{2}-\d{2}$/.test(o.date)) { alert('A date.'); render(); return; } if (!(o.amount > 0)) { alert('What it is worth.'); render(); return; }
@@ -5930,6 +5947,10 @@ function wire(){
     state.page=null; commit(a.key); });
   document.querySelectorAll('[data-pmortsave]').forEach((el)=>el.onclick=()=>{ readP(PM); const p=state.page, a=prop(); if (!a) return;
     const m = { principal:num(p.principal), rate:num4(p.rate), years:num4(p.years), start:String(p.start||'').trim() };
+    const fromDay = String(p.from||'').trim(), lead = String(p.lead||'').trim()==='' ? 0 : num(p.lead);
+    if (fromDay && !/^\d{4}-\d{2}-\d{2}$/.test(fromDay)) { alert('The day it was lent, or nothing.'); render(); return; }
+    if (!(lead >= 0)) { alert('The first interest, or nothing.'); render(); return; }
+    if (fromDay) m.from = fromDay; if (lead > 0) m.lead = r2(lead);
     if (!(m.principal > 0)) { alert('The amount borrowed.'); render(); return; } if (!(m.rate >= 0)) { alert('A rate.'); render(); return; }
     if (!(m.years > 0)) { alert('The duration, in years.'); render(); return; } if (!/^\d{4}-\d{2}-\d{2}$/.test(m.start)) { alert('The day of the first payment.'); render(); return; }
     a.mortgage = m; state.page=null; commit('Config'); });
