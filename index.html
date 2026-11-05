@@ -28,7 +28,7 @@
   /* The name is a button: it opens the About widget. */
   header h1{font-size:20px;margin:0;letter-spacing:.3px;cursor:pointer;user-select:none;-webkit-user-select:none}
   header h1 .dot{color:var(--accent)}
-  .lastup{display:flex;flex-direction:column;line-height:1.15;margin-left:10px;font-size:9.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.4px;white-space:nowrap}
+  .lastup{display:flex;flex-direction:column;line-height:1.15;margin-left:10px;font-size:10px;color:var(--muted);white-space:nowrap}
   .lastup b{font-size:11.5px;color:var(--txt);font-weight:600;letter-spacing:0;text-transform:none}
   /* The year: first operation to last, stepped from the top bar. */
   .ystep{display:flex;align-items:center;gap:2px}
@@ -351,9 +351,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=189"></script>
+<script src="backend.js?v=190"></script>
 <script>
-const APP_VERSION="189";
+const APP_VERSION="190";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2027,6 +2027,12 @@ function tabTransfers(){
 /* The day the records were last added to - shown beside the name, kept in
    Config (a row of kind updated) so every device shows the same. Stamped
    when an operation is added: typed, imported from the bank, or from a file. */
+/* before the first stamp: the newest operation dated today or earlier */
+const lastUpdated = () => { if (store.updatedAt) return store.updatedAt; const t = TODAY(); let d = '';
+  for (const k of Object.keys(store.ops||{})) for (const o of store.ops[k]||[]) if (o && o.date && o.date <= t && o.date > d) d = o.date;
+  return d.slice(0,10); };
+/* 2026-11-05 -> 2026/11/5 */
+const dayShort = (d) => { const [y,m,dd] = String(d).split('-'); return y + '/' + (+m) + '/' + (+dd); };
 const touchUpdated = () => { const d = TODAY(); if (store.updatedAt !== d) { store.updatedAt = d; markDirty('Config'); } };
 /* ---------------------------------------------------------- reimbursements --
    A payment made for someone else is marked "to be reimbursed" in its widget
@@ -5445,7 +5451,7 @@ function render(){
   /* The name, which is the way into About. No version beside it any more:
      it is one tap away instead. */
   document.getElementById('appTitle').innerHTML = `<span data-about="1">Tally<span class="dot">.</span></span>`;
-  { const lu = document.getElementById('lastUp'); if (lu) lu.innerHTML = store.updatedAt ? `<span>Last update</span><b>${esc(store.updatedAt.replace(/-/g, '/'))}</b>` : ''; }
+  { const lu = document.getElementById('lastUp'); const d = lastUpdated(); if (lu) lu.innerHTML = d ? `<span>last updated</span><b>${esc(dayShort(d))}</b>` : ''; }
   /* Settings, in the corner beside the currency; the padlock in its place
      while the app is locked, as the bottom bar used to show. */
   document.getElementById('setBtn').innerHTML =
