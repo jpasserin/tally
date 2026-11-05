@@ -351,9 +351,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=190"></script>
+<script src="backend.js?v=191"></script>
 <script>
-const APP_VERSION="190";
+const APP_VERSION="191";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1233,6 +1233,19 @@ async function syncLocked(){
   catch (e) { state.sync={ msg:e.message, bad:true }; }
   render();
 }
+/* Sync, unlocked: the sheet is read first - every tab this device has no
+   edits waiting on comes down, so what another device sent (an account
+   imported there) arrives here - then everything goes up. A tab the sheet
+   does not have yet stays as this device holds it. Nothing is written when
+   the read fails. */
+async function syncNow(){
+  if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
+  if (store.locked) return syncLocked();
+  state.sync={ msg:'Reading…' }; render();
+  try { await pullNow(dirty(), true); }
+  catch (e) { state.sync={ msg:e.message + ' · nothing written', bad:true }; render(); return; }
+  return pushNow(true);
+}
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
@@ -1299,11 +1312,16 @@ async function liveNow(quiet){
   } catch (e) { if (quiet) return; state.sync={ msg:e.message, bad:true }; }
   render();
 }
-async function pullNow(keep){
-  keep = keep || [];
+async function pullNow(keep, keepMissing){
+  keep = (keep || []).slice();
   const j = await BK.pull(store.backend);
   if (!j.tabs) throw new Error('The sheet answered with no tabs.');
   const tab = (n) => j.tabs.find((t)=>t.name===n);
+  /* Sync's read: what the sheet does not have yet is this device's to send, not to lose */
+  if (keepMissing) { if (!tab('Config')) keep.push('Config'); for (const a of store.accounts) if (!tab(a.key) && !keep.includes(a.key)) keep.push(a.key); }
+  /* Config kept (edits waiting here): accounts only the sheet knows (made on another device) still come in */
+  if (keepMissing && keep.includes('Config') && tab('Config')) { const theirs = readConfig(tab('Config')).accounts || [];
+    for (const a of theirs) if (!store.accounts.some((x)=>same(x.key, a.key))) store.accounts.push(a); }
   /* the lists this device holds, before Config is read over them: what goes back up if the sheet's tab is gone or emptied */
   const before = { budgets:store.budgets||[], bills:store.bills||[], sources:store.sources||[], insurance:store.insurance||[] };
   let got = null;
@@ -5654,7 +5672,7 @@ function wire(){
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     store.people.splice(+el.dataset.persondelete, 1); state.page=null; commit(); });
 
-  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>store.locked ? syncLocked() : pushNow(true));
+  document.querySelectorAll('[data-bksync]').forEach((el)=>el.onclick=()=>store.locked ? syncLocked() : syncNow());
   document.querySelectorAll('[data-bklive]').forEach((el)=>el.onclick=()=>liveNow(false));
   /* Locked: the app reads the sheet and never writes it. Edits stay here and
      go out when the lock comes off. */
