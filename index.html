@@ -351,9 +351,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=192"></script>
+<script src="backend.js?v=193"></script>
 <script>
-const APP_VERSION="192";
+const APP_VERSION="193";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -1259,9 +1259,34 @@ async function syncNow(){
   catch (e) { state.sync={ msg:e.message + ' · nothing written', bad:true }; render(); return; }
   return pushNow(true);
 }
+/* Accounts only the sheet's Config lists - made or imported on another
+   device - join this device's list, so a Config sent from here carries them
+   too. One deleted here (and not yet sent) stays deleted. withOps: their
+   operations come from their tabs now (the push's read; Sync's reads them
+   with the rest). Returns how many came. */
+function takeSheetAccounts(tabs, withOps){
+  const cfg = (tabs||[]).find((t)=>t.name==='Config'); if (!cfg) return 0;
+  const gone = store.goneAccounts || [];
+  let n = 0;
+  for (const a of readConfig(cfg).accounts || []) {
+    if (store.accounts.some((x)=>same(x.key, a.key)) || gone.some((k)=>same(k, a.key))) continue;
+    store.accounts.push(a); n++;
+    if (withOps) store.ops[a.key] = readOps((tabs||[]).find((t)=>t.name===a.key));
+  }
+  if (n) save();
+  return n;
+}
 async function pushNow(everything){
   if (!connected()) { state.sync={ msg:'Not connected.', bad:true }; render(); return; }
   if (store.locked) { state.sync={ msg:'Locked — nothing is written.', bad:true }; render(); return; }
+  /* Config going up on its own (an edit, a rate, the day's stamp) replaces
+     the sheet's whole tab: the sheet is read first, so an account another
+     device made is not taken off it. A failed read writes nothing; the edits
+     wait for the next try. */
+  if (!everything && dirty().includes('Config')) {
+    try { const j = await BK.pull(store.backend); if (!j.tabs) throw new Error('The sheet answered with no tabs.'); takeSheetAccounts(j.tabs, true); }
+    catch (e) { state.sync={ msg:e.message + ' · nothing written', bad:true }; render(); return; }
+  }
   const lists = { Budgets:store.budgets, Bills:store.bills, Sources:store.sources, Insurance:store.insurance };
   const names = everything ? ['Config','Dismissed'].concat(Object.keys(lists).filter((n)=>(lists[n]||[]).length || dirty().includes(n))).concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
@@ -1272,6 +1297,7 @@ async function pushNow(everything){
   try {
     const j = await BK.push(store.backend, tabs);
     store.dirty = dirty().filter((n)=>!names.includes(n));
+    if (names.includes('Config')) store.goneAccounts = [];     /* the sheet's list no longer has them */
     store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
     state.sync={ msg:'Synced '+new Date().toTimeString().slice(0,5) };
   } catch (e) { state.sync={ msg:e.message, bad:true }; }
@@ -1333,13 +1359,19 @@ async function pullNow(keep, keepMissing){
   /* Sync's read: what the sheet does not have yet is this device's to send, not to lose */
   if (keepMissing) { if (!tab('Config')) keep.push('Config'); for (const a of store.accounts) if (!tab(a.key) && !keep.includes(a.key)) keep.push(a.key); }
   /* Config kept (edits waiting here): accounts only the sheet knows (made on another device) still come in */
-  if (keepMissing && keep.includes('Config') && tab('Config')) { const theirs = readConfig(tab('Config')).accounts || [];
-    for (const a of theirs) if (!store.accounts.some((x)=>same(x.key, a.key))) store.accounts.push(a); }
+  if (keepMissing && keep.includes('Config')) takeSheetAccounts(j.tabs, false);
+  /* the accounts this device holds, before the sheet's Config is read over them */
+  const mineAccounts = store.accounts.slice();
   /* the lists this device holds, before Config is read over them: what goes back up if the sheet's tab is gone or emptied */
   const before = { budgets:store.budgets||[], bills:store.bills||[], sources:store.sources||[], insurance:store.insurance||[] };
   let got = null;
   if (!keep.includes('Config')) { got = readConfig(tab('Config'));
     store.categories=got.categories; store.people=got.people; store.accounts=got.accounts; store.budgets=got.budgets; store.names=got.names||[]; store.ibond=got.ibond||[]; store.insurance=got.insurance||[]; store.bills=got.bills||[]; store.closedYear=got.closed||null; store.lockClosed=!!got.closedLocked; if (got.updated) store.updatedAt = got.updated; store.sources=got.sources||[];
+    /* Sync's read: an account this device holds that the sheet's Config does not list stays, with its operations, and
+       goes back up - a Config sent from a device that never had it must not take it away here too */
+    if (keepMissing) { let back = 0;
+      for (const a of mineAccounts) if (!store.accounts.some((x)=>same(x.key, a.key))) { store.accounts.push(a); if (!keep.includes(a.key)) keep.push(a.key); back++; }
+      if (back) markDirty('Config'); }
     if (!store.locked && tidyCategories()) { markDirty('Config'); pushSoon(); } }
   if (!keep.includes('Dismissed')) store.dismissed = readDismissed(tab('Dismissed'));
   /* the tabs of their own where the sheet has them; else what Config still carries, sent on into the tabs */
@@ -5863,7 +5895,7 @@ function wire(){
     const p=state.page; const k=document.getElementById('aKey'); if (k) p.key=k.value;
     if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     const gone = store.accounts.splice(+el.dataset.accdelete, 1)[0];
-    if (gone) delete store.ops[gone.key];
+    if (gone) { delete store.ops[gone.key]; store.goneAccounts = (store.goneAccounts||[]).filter((k)=>!same(k, gone.key)).concat([gone.key]); }   /* the sheet still lists it until Config goes up: not to be taken back from there */
     state.account=null; state.page=null; commit(); });
 
   /* a fund's operations - the widget */
