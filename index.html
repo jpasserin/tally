@@ -224,6 +224,11 @@
   .bbox .bbtn .cap{margin:0}
   .bbox .bktl{left:auto;right:0;min-width:150px}
   .bkday{margin:12px 0 2px}
+  .bkpend{font-size:11px;font-weight:700;color:var(--warn);margin-left:6px}
+  .bksec{margin:16px 0 2px;font-size:12.5px;font-weight:700;color:var(--warn)}
+  .bksec .muted{font-weight:500;font-size:11px}
+  .bkfix{align-items:center}
+  .bkfn{flex:1;min-width:0;font-size:12.5px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .bkday .cap.dcap{font-size:12.5px;padding:2px 10px}
   .bkop.off .bkn input[type=text],.bkop.off .bkdesc>span:first-child,.bkop.off .bkt,.bkop.off .bkmore{opacity:.4}
   .bkon{flex:none;align-self:center;margin:0 2px 0 0}
@@ -381,9 +386,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=195"></script>
+<script src="backend.js?v=196"></script>
 <script>
-const APP_VERSION="195";
+const APP_VERSION="196";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -4196,16 +4201,57 @@ function bankTag(a, name){
   const count = (list) => { const c = {}; for (const o of list) if (o.tag && same(o.name, name)) c[o.tag] = (c[o.tag]||0) + 1; const best = Object.keys(c).sort((x,y)=>c[y]-c[x])[0]; return best || ''; };
   return count(opsOf(a.key)) || count(store.accounts.flatMap((b)=>opsOf(b.key)));
 }
+/* The day a card payment names in its wording - CARTE X4157 09/11, PAIEMENT
+   CARTE DU 13/11, CARTE RETRAIT DAB ... 15/11 - as "dd/mm", '' when none. It
+   stays with the payment while the bank moves it (pending, then posted on a
+   later day in other words), and tells two payments of one amount apart. */
+const cardDay = (t) => { const m = /\bCARTE\b(.*)$/.exec(String(t||'')); if (!m) return ''; const d = /(?:^|[^\d\/])(\d{2}\/\d{2})(?![\d\/])/.exec(m[1]); return d ? d[1] : ''; };
+/* the bank's wording of a card payment not posted yet */
+const pendingWording = (t) => /^\s*PAIEMENT CARTE DU /i.test(String(t||''));
+/* the merchant's words (four letters or more) after the card day */
+const merchantWords = (t) => new Set(String(t||'').toUpperCase().replace(/^.*?\d{2}\/\d{2}(?:\s+\d{2}[:H]\d{2})?/, '').split(/[^A-Z]+/).filter((w)=>w.length>=4));
+const sameMerchant = (x, y) => { const b = merchantWords(y); for (const w of merchantWords(x)) if (b.has(w)) return true; return false; };
+/* What the bank's file means for the account. Each bank row looks for the
+   operation already here: first one of the same amount whose wording names the
+   same card day (two weeks apart at most - the bank posts a pending payment
+   days later); then one of the same amount within three days, never one whose
+   wording names another card day (two payments of one amount at one shop). An
+   operation found on another day, or still in the pending wording, is MOVED to
+   the bank's day and wording. Here but no longer at the bank, inside the days
+   the file covers for sure (after its first day, cut short by "Afficher plus",
+   up to its last): when a new row is the same card day and shop, the bank
+   CHANGED its amount; else it is GONE - offered for taking out, unticked.
+   Rows under a day after the file was printed are PENDING: the bank's balance
+   does not count them yet. */
 function bankPlan(a, parsed){
-  const used = new Set(), list = opsOf(a.key);
-  const match = (r) => { let best = null;
-    for (const o of list) { if (used.has(o.id) || Math.abs((o.amount||0) - r.amount) > 0.005) continue; const d = daysApart(o.date, r.date); if (d <= 3 && (!best || d < best.d)) best = { o, d }; }
+  const used = new Set(), list = opsOf(a.key), asOf = (parsed.bank && parsed.bank.asOf) || '';
+  const same$ = (o, r) => isFinite(o.amount) && o.amount!==null && Math.abs((o.amount||0) - r.amount) <= 0.005;
+  const pick = (r, ok, within) => { let best = null;
+    for (const o of list) { if (used.has(o.id) || !same$(o, r) || !ok(o)) continue; const d = daysApart(o.date, r.date); if (d <= within && (!best || d < best.d)) best = { o, d }; }
     if (best) used.add(best.o.id); return best ? best.o : null; };
-  const rows = parsed.rows.slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0).map((r)=>{ const have = match(r); const name = bankName(r);
-    return { ...r, have, name, tag: have ? '' : bankTag(a, name), note: r.detail.slice(0, 160), name0:name, tag0: have ? '' : bankTag(a, name) }; });
-  const news = rows.filter((r)=>!r.have);
-  const now = r2(valueAt(a, '2999-12-31'));
-  return { rows, news, now, after: r2(now + news.reduce((t,r)=>t+r.amount, 0)), bank: parsed.bank };
+  const sorted = parsed.rows.slice().sort((x,y)=>x.date<y.date?-1:x.date>y.date?1:0), have = new Map();
+  for (const r of sorted) { const cd = cardDay(r.detail); if (cd) { const o = pick(r, (o)=>cardDay(o.note)===cd, 14); if (o) have.set(r, o); } }
+  for (const r of sorted) if (!have.has(r)) { const cd = cardDay(r.detail); const o = pick(r, (o)=>{ const oc = cardDay(o.note); return !cd || !oc || oc===cd; }, 3); if (o) have.set(r, o); }
+  const rows = sorted.map((r)=>{ const o = have.get(r) || null, name = bankName(r), tag = o ? '' : bankTag(a, name);
+    return { ...r, have:o, name, tag, note: r.detail.slice(0, 160), name0:name, tag0:tag, pending: !!asOf && r.date > asOf }; });
+  /* only what came from the bank moves - its wording names the card day, or is the bank's own; a row typed by hand keeps its day */
+  const fromBank = (o, r) => (cardDay(o.note) && cardDay(o.note)===cardDay(r.detail)) || (!!o.note && o.note===r.detail.slice(0, 160));
+  const moves = rows.filter((r)=>r.have && fromBank(r.have, r) && (r.have.date!==r.date || (pendingWording(r.have.note) && !pendingWording(r.detail)))).map((r)=>({ o:r.have, r, on:true }));
+  const days = rows.map((r)=>r.date), from = days[0] || '', to = days[days.length-1] || '';
+  let gone = list.filter((o)=>!used.has(o.id) && o.date > from && o.date <= to && o.amount!=null && !/-opening$/.test(o.id));
+  const news = rows.filter((r)=>!r.have), changes = [];
+  for (const o of gone.slice()) { const oc = cardDay(o.note); if (!oc) continue;
+    const r = news.find((x)=>!x.change && cardDay(x.detail)===oc && Math.sign(x.amount)===Math.sign(o.amount) && sameMerchant(x.detail, o.note));
+    if (r) { r.change = o; changes.push({ o, r, on:true }); gone = gone.filter((x)=>x!==o); } }
+  const pend = rows.filter((r)=>r.pending);
+  return { rows, news: news.filter((r)=>!r.change), changes, moves, gone: gone.map((o)=>({ o, on:false })),
+    now: r2(valueAt(a, '2999-12-31')), pending: { n: pend.length, sum: r2(pend.reduce((t,r)=>t+r.amount, 0)) }, bank: parsed.bank };
+}
+/* The balance once the ticked rows are applied - and as the bank counts it, pending rows left out. */
+function bankAfter(pl){
+  const after = r2(pl.now + pl.news.filter((r)=>r.on!==false).reduce((t,r)=>t+r.amount, 0)
+    + pl.changes.filter((c)=>c.on).reduce((t,c)=>t+c.r.amount-c.o.amount, 0) - pl.gone.filter((g)=>g.on).reduce((t,g)=>t+g.o.amount, 0));
+  return { after, counted: r2(after - pl.pending.sum) };
 }
 /* the tags whose name starts with what was typed, then the ones containing it */
 const tagHits = (q) => { q = String(q||'').trim().toLowerCase(); if (!q) return []; const all = allTags();
@@ -4282,8 +4328,17 @@ function copySheet(p, a){
 function bankSheet(p, a){
   const pl = p.plan, n = pl.news.filter((r)=>r.on!==false).length;
   /* a row unticked is left out: of the count, of the balance after */
-  const after = r2(pl.after - pl.news.filter((r)=>r.on===false).reduce((t,r)=>t+r.amount, 0));
-  const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - after) < 0.005 : null;
+  const { after, counted } = bankAfter(pl);
+  const agree = pl.bank && pl.bank.cur===a.currency ? Math.abs(pl.bank.balance - counted) < 0.005 : null;
+  const k = pl.changes.filter((c)=>c.on).length + pl.moves.filter((m)=>m.on).length, g = pl.gone.filter((x)=>x.on).length;
+  const acts = [n ? 'Add ' + n + ' operation' + (n===1?'':'s') : '', k ? 'update ' + k : '', g ? 'take out ' + g : ''].filter(Boolean);
+  const col = (v) => `color:var(--${v<0?'bad':'good'})`;
+  const fixRow = (kind, x, i, amt, sub) => `
+      <div class="bkop${x.on?'':' off'}">
+        <div class="bkn bkfix"><span class="ck bkon ${x.on?'on':''}" data-bkfix="${kind}|${i}">${x.on?'✓':''}</span><span class="bkfn">${esc(x.o.name||'—')}</span><span class="bkamt">${amt}</span></div>
+        <div class="bkdesc"><span>${esc(x.r ? x.r.detail : x.o.note||'')}</span><span class="muted" style="white-space:nowrap;font-size:11px">${sub}</span></div>
+      </div>`;
+  const section = (title, hint, items) => items ? `<div class="bksec">${title} <span class="muted">${hint}</span></div>${items}` : '';
   const days = []; pl.news.forEach((r,i)=>{ const g = days.find((d)=>d.date===r.date); if (g) g.items.push(i); else days.push({ date:r.date, items:[i] }); });
   return `
   <div class="sheetwrap">
@@ -4292,11 +4347,16 @@ function bankSheet(p, a){
       <h3>From the bank <span class="muted" style="font-size:12px;font-weight:600">${esc(p.file)}</span></h3>
       <div class="rows">
         <div class="row"><span class="k">New operations</span><span class="v">${n}/${pl.rows.length}</span></div>
-        <div class="row"><span class="k">End balance</span><span class="v" style="color:${agree===null?'var(--txt)':agree?'var(--good)':'var(--bad)'}">${money(after, a.currency)}</span></div>
+        ${pl.changes.length ? `<div class="row"><span class="k">Changed by the bank</span><span class="v">${pl.changes.length}</span></div>` : ''}
+        ${pl.moves.length ? `<div class="row"><span class="k">Moved by the bank</span><span class="v">${pl.moves.length}</span></div>` : ''}
+        ${pl.gone.length ? `<div class="row"><span class="k">No longer at the bank</span><span class="v">${pl.gone.length}</span></div>` : ''}
+        ${pl.pending.n ? `<div class="row"><span class="k">Pending at the bank (${pl.pending.n})</span><span class="v">${money(pl.pending.sum, a.currency)}</span></div>` : ''}
+        <div class="row"><span class="k">End balance</span><span class="v" style="color:${pl.pending.n || agree===null?'var(--txt)':agree?'var(--good)':'var(--bad)'}">${money(after, a.currency)}</span></div>
+        ${pl.pending.n ? `<div class="row"><span class="k">Without the pending</span><span class="v" style="color:${agree===null?'var(--txt)':agree?'var(--good)':'var(--bad)'}">${money(counted, a.currency)}</span></div>` : ''}
         ${agree===false ? `<div class="row"><span class="k">The bank on ${dLabel(pl.bank.asOf)}</span><span class="v">${money(pl.bank.balance, pl.bank.cur)}</span></div>` : ''}
       </div>
       ${pl.news.length ? days.map((d)=>`
-      <div class="bkday"><span class="cap dcap">${dLabel(d.date)}</span></div>
+      <div class="bkday"><span class="cap dcap">${dLabel(d.date)}</span>${pl.bank && pl.bank.asOf && d.date > pl.bank.asOf ? ' <span class="bkpend">pending</span>' : ''}</div>
       ${d.items.map((i)=>{ const r = pl.news[i]; return `
       <div class="bkop${r.on===false?' off':''}">
         <div class="bkn"><span class="ck bkon ${r.on===false?'':'on'}" data-bkon="${i}">${r.on===false?'':'✓'}</span><input id="bkName${i}" type="text" value="${esc(r.name)}"><div class="bkt">${tagBox('bkTag'+i, r.tag)}</div></div>
@@ -4304,9 +4364,12 @@ function bankSheet(p, a){
         <div class="bkn bkmore" style="margin-top:4px;align-items:center;padding-left:26px"><div style="flex:3;display:flex;min-width:0">${budgetBox('bkBud'+i, r.budget||'')}</div>
           <div class="bkt" style="align-items:center">${r.tag0 ? '' : `<label class="switch mini" style="margin:0;justify-content:flex-start;gap:6px"><input type="checkbox" id="bkRule${i}"${r.rule?' checked':''}><span class="track"></span><span>Make rule</span></label>`}</div></div>
       </div>`; }).join('')}`).join('') : `<div class="hint">Nothing new.</div>`}
+      ${section('Changed by the bank', 'the same card payment, another amount', pl.changes.map((c,i)=>fixRow('changes', c, i, `<span style="${col(c.o.amount)};opacity:.6;text-decoration:line-through">${money(c.o.amount, a.currency)}</span> <span style="${col(c.r.amount)}">${money(c.r.amount, a.currency)}</span>`, dLabel(c.o.date) + (c.o.date!==c.r.date ? ' → ' + dLabel(c.r.date) : ''))).join(''))}
+      ${section('Moved by the bank', 'another day or posted', pl.moves.map((m,i)=>fixRow('moves', m, i, `<span style="${col(m.o.amount)}">${money(m.o.amount, a.currency)}</span>`, dLabel(m.o.date) + (m.o.date!==m.r.date ? ' → ' + dLabel(m.r.date) : ' · posted'))).join(''))}
+      ${section('No longer at the bank', 'tick to take out', pl.gone.map((x,i)=>fixRow('gone', x, i, `<span style="${col(x.o.amount)}">${money(x.o.amount, a.currency)}</span>`, dLabel(x.o.date))).join(''))}
       <div class="foot">
         <button class="btn close ${p.closeArm?'arm':''}" data-bankclose="1">${p.closeArm?'Close?':'Close'}</button>
-        ${pl.news.length ? `<button class="btn primary" data-bankgo="1"${n?'':' disabled'}>Add ${n} operation${n===1?'':'s'}</button>` : ''}
+        ${pl.news.length || pl.changes.length || pl.moves.length || pl.gone.length ? `<button class="btn primary" data-bankgo="1"${acts.length?'':' disabled'}>${acts.length ? acts.join(' · ') : 'Nothing ticked'}</button>` : ''}
       </div>
     </div>
   </div>`;
@@ -4319,6 +4382,7 @@ function readBank(){
     if (nm) r.name = nm.value; if (tg) { const t = tagResolve(tg.value); r.tag = t==null ? tg.value.trim() : t; r.badTag = t==null; }
     if (bd) r.budget = bd.value || ''; if (rl) r.rule = !!rl.checked;
     if (r.name !== r.name0 || r.tag !== r.tag0 || r.budget || r.rule || r.on===false) dirty = true; });
+  if (p.plan.changes.some((c)=>!c.on) || p.plan.moves.some((m)=>!m.on) || p.plan.gone.some((x)=>x.on)) dirty = true;
   return dirty;
 }
 function accountPage(a){
@@ -6338,16 +6402,23 @@ function wire(){
     state.page=null; render(); });
   document.querySelectorAll('[data-bkon]').forEach((el)=>el.onclick=()=>{ readBank(); const p = state.page; if (!p || p.kind!=='bank') return;
     const r = p.plan.news[+el.dataset.bkon]; if (!r) return; r.on = r.on===false; render(); });
+  document.querySelectorAll('[data-bkfix]').forEach((el)=>el.onclick=()=>{ readBank(); const p = state.page; if (!p || p.kind!=='bank') return;
+    const [kind, i] = el.dataset.bkfix.split('|'), x = (p.plan[kind]||[])[+i]; if (!x) return; x.on = !x.on; render(); });
   document.querySelectorAll('[data-bankgo]').forEach((el)=>el.onclick=()=>{
     readBank(); const p = state.page, a = acct(); if (!p || !a) return;
-    const take = p.plan.news.filter((r)=>r.on!==false); if (!take.length) return;
+    const take = p.plan.news.filter((r)=>r.on!==false), fix = p.plan.changes.filter((c)=>c.on), mv = p.plan.moves.filter((m)=>m.on), out = p.plan.gone.filter((x)=>x.on);
+    if (!take.length && !fix.length && !mv.length && !out.length) return;
     const bad = take.filter((r)=>r.badTag).map((r)=>r.tag); if (bad.length) { alert('No tag called ' + bad.map((t)=>'"'+t+'"').join(', ') + '.'); return; }
     const list = opsOf(a.key); let learned = false;
     for (const r of take) { const name = String(r.name||'').trim();
       list.push({ id:uid(), date:r.date, name, amount:r.amount, note:r.note||'', tag:r.tag||'', splits:[], budget:r.budget||'', oneoff:false });
       if (r.rule && name && r.tag) { learnName(name, r.tag); learned = true; } }      /* ticked: this name under this tag, known from now on */
+    /* the bank's own changes: a new amount, a new day, the posted wording; the ones it no longer has, taken out */
+    for (const c of fix) Object.assign(c.o, { amount:c.r.amount, date:c.r.date, note:c.r.note });
+    for (const m of mv) { m.o.date = m.r.date; if (pendingWording(m.o.note) && !pendingWording(m.r.detail)) m.o.note = m.r.note; }
+    if (out.length) { const ids = new Set(out.map((x)=>x.o.id)); for (let j = list.length - 1; j >= 0; j--) if (ids.has(list[j].id)) list.splice(j, 1); }
     state.page=null; if (learned) markDirty('Config'); touchUpdated();
-    const asked = askReimb(list.slice(list.length - take.length).map((o)=>o.id));
+    const asked = take.length ? askReimb(list.slice(list.length - take.length).map((o)=>o.id)) : false;
     commit(a.key); if (asked) state.page.fresh=false; });
   document.querySelectorAll('[data-opsave]').forEach((el)=>el.onclick=()=>{
     readOp(); const p=state.page, a=acct(); if (!a) return;
