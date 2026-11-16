@@ -236,6 +236,7 @@
   .bkdesc>span:first-child{color:var(--muted);font-size:11px;line-height:1.3;overflow-wrap:anywhere;min-width:0}
   .bkamt{white-space:nowrap;font-weight:700;font-size:13px;font-variant-numeric:tabular-nums}
   .bkn .bbox .bbtn{height:30px;font-size:11px}
+  .bkmore .bbox .bktl{left:0;right:auto}     /* the button sits at the row's left here: the list opens rightwards, inside the sheet */
   .bkn .switch.mini{font-size:11px}
   .bkop{font-size:12px;padding:6px 0;border-bottom:1px solid var(--line)}
   .bkd{display:flex;justify-content:space-between;gap:8px;align-items:baseline}
@@ -386,9 +387,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=196"></script>
+<script src="backend.js?v=197"></script>
 <script>
-const APP_VERSION="196";
+const APP_VERSION="197";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
