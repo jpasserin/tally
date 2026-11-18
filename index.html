@@ -387,9 +387,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=199"></script>
+<script src="backend.js?v=200"></script>
 <script>
-const APP_VERSION="199";
+const APP_VERSION="200";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2817,11 +2817,30 @@ function gasChart(pts, key, label, fmt){
     : `<div class="hint" style="margin-top:0">${key==='per' ? 'Three fill-ups draw the line: the first only marks where the odometer started.' : 'Two fill-ups draw the line.'}</div>`;
 }
 const dShort = (d) => +d.slice(8,10) + ' ' + MON[+d.slice(5,7)-1];
+/* Month by month, what the car burned rather than when the tank was paid: a
+   fill-up pays for the days since the one before (the day after it to its
+   own day), so its cost, km and litres are spread evenly over them. Only the
+   months those days cover from the 1st to the last count - before the second
+   fill-up or after the last one nothing is known. Newest first. */
+function gasMonths(){
+  const list = fuelSorted(), by = {}, DAY = 864e5;
+  const ymd = (t) => new Date(t).toISOString().slice(0,10);
+  for (let i = 1; i < list.length; i++) {
+    const a = list[i-1], b = list[i], t0 = Date.parse(a.date), t1 = Date.parse(b.date), days = Math.round((t1 - t0) / DAY);
+    if (!(days > 0)) continue;
+    const cost = b.amount / days, km = (b.km - a.km) / days, l = fuelLitres(b) / days;
+    for (let k = 1; k <= days; k++) { const m = ymd(t0 + k*DAY).slice(0,7), x = by[m] || (by[m] = { cost:0, km:0, litres:0 }); x.cost += cost; x.km += km; x.litres += l; }
+  }
+  if (list.length < 2) return [];
+  const from = list[0].date, to = list[list.length-1].date;
+  return Object.keys(by).filter((m)=>{ const last = new Date(Date.UTC(+m.slice(0,4), +m.slice(5,7), 0)).toISOString().slice(0,10); return m + '-01' > from && last <= to; })
+    .sort().reverse().map((m)=>{ const x = by[m]; return { m, cost: r2(x.cost), km: Math.round(x.km), litres: r2(x.litres), per100: x.km > 0 ? r2(x.cost / x.km * 100) : 0 }; });
+}
 function gasPage(){
   const all = fuelRows(), rows = all.slice().reverse(), s = fuelSummary(), cur = (s && s.cur) || 'EUR';
   const perPts = all.filter((r)=>r.per!=null).map((r)=>({ label:dShort(r.f.date), values:{ per:r.per } }));
   const pricePts = all.map((r)=>({ label:dShort(r.f.date), values:{ price:r.f.price } }));
-  const prices = all.map((r)=>r.f.price), pers = perPts.map((p)=>p.values.per);
+  const prices = all.map((r)=>r.f.price), pers = perPts.map((p)=>p.values.per), months = gasMonths();
   /* the unit, then the lowest and highest, in one label beside the title */
   const span = (unit, v, f) => `<span class="muted" style="text-transform:none;letter-spacing:0">${unit}${v.length > 1 ? ' · ' + f(Math.min(...v)) + ' – ' + f(Math.max(...v)) : ''}</span>`;
   return `
@@ -2839,6 +2858,13 @@ function gasPage(){
   <div class="card">
     <h2><span>Price a litre ${span(esc(SYM[cur]||cur), prices, (v)=>v.toFixed(3))}</span></h2>
     ${gasChart(pricePts, 'price', 'Price a litre', (v)=>v.toFixed(3))}
+  </div>
+  <div class="card">
+    <h2><span>By month <span class="muted" style="text-transform:none;letter-spacing:0">${esc(SYM[cur]||cur)}</span></span></h2>
+    ${months.length ? `<table class="fx"><thead><tr><th>Month</th><th>Km</th><th>Cost</th><th>A 100 km</th></tr></thead>
+      <tbody>${months.map((x)=>`<tr><td>${esc(mLabel(x.m))}</td><td>${kmFmt(x.km)}</td><td><b>${money(x.cost, cur)}</b></td><td>${money(x.per100, cur)}</td></tr>`).join('')}</tbody></table>
+    <div class="hint" style="margin:4px 0 0">What was burned in the month: each fill-up's cost and km spread day by day since the one before. Only the months the fill-ups cover from start to end.</div>`
+      : `<div class="hint" style="margin-top:0">A month shows once fill-ups cover it from start to end.</div>`}
   </div>
   <div class="card">
     <h2>Fill-ups <span class="muted" style="text-transform:none;letter-spacing:0">${rows.length}</span></h2>
