@@ -387,16 +387,16 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=197"></script>
+<script src="backend.js?v=198"></script>
 <script>
-const APP_VERSION="197";
+const APP_VERSION="198";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
    Everything this device remembers, in one localStorage key. */
 const KEY = 'tally-v1';
 function loadStore(){ try { return JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) { return {}; } }
-const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], bills:[], live:null, cur:'USD',
+const store = Object.assign({ backend:{ url:'', token:'' }, backendVersion:null, locked:false, categories:[], people:[], accounts:[], ops:{}, budgets:[], dismissed:[], names:[], rates:[], ibond:[], insurance:[], indices:[], sources:[], previsions:[], bills:[], fuel:[], live:null, cur:'USD',
   fxFrom:2013, fxTo:new Date().getFullYear() }, loadStore());
 const save = () => { warnMemo = null; rateMemo = new Map(); seriesMemo = new Map(); try { localStorage.setItem(KEY, JSON.stringify(store)); } catch (e) { /* private mode */ } };
 
@@ -953,6 +953,18 @@ function readInsurance(tab){
     out.push(x); }
   return out;
 }
+/* The car's fill-ups, in a tab of their own (v198): a row each - the day, the
+   odometer, the price of a litre and what was paid. The litres are worked out
+   (paid / price) and written beside them for reading; they are not read back. */
+const FUEL_HEADERS = ['Id','Date','Km','Price','Amount','Currency','Litres'];
+function fuelTab(){ return { name:'Fuel', headers:FUEL_HEADERS, rows:fuelSorted().map((f)=>[f.id, f.date, f.km, f.price, f.amount, f.currency||'EUR', fuelLitres(f)]) }; }
+function readFuel(tab){
+  const col = tabCol(tab, FUEL_HEADERS), out = [];
+  for (const r of (tab && tab.rows) || []) { const date = dayOf(col(r,'Date')), km = +col(r,'Km'), price = num3(col(r,'Price')), amount = num(col(r,'Amount'));
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(km > 0) || !(price > 0) || !(amount > 0)) continue;
+    out.push({ id: String(col(r,'Id')).trim() || uid(), date, km: Math.round(km), price, amount, currency: CURRENCIES.includes(col(r,'Currency')) ? col(r,'Currency') : 'EUR' }); }
+  return out;
+}
 /* the sheet has the tab already (the old Budgets mirror, a list of operations, had no Color column) */
 const ownTab = (tab, name) => !!(tab && Array.isArray(tab.headers) && tab.headers.length && (name!=='Budgets' || tab.headers.map((h)=>String(h).trim()).includes('Color')));
 /* The findings marked correct, in a tab of their own - there may be many.
@@ -1083,12 +1095,12 @@ function readConfig(tab){
 /* What a file holds, before anything is touched: each account, its
    operation count, and whether it is already here. */
 function previewImport(j){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills) && !Array.isArray(j.fuel))) throw new Error('Not a Tally import file.');
   return (j.accounts||[]).filter((a)=>a.key).map((a)=>({ key:a.key, currency:a.currency, n:((j.ops&&j.ops[a.key])||[]).length,
     exists: store.accounts.some((x)=>same(x.key, a.key)) }));
 }
 function importFile(j, mode){
-  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills))) throw new Error('Not a Tally import file.');
+  if (!j || j.kind!=='tally-import' || (!Array.isArray(j.accounts) && !Array.isArray(j.names) && !Array.isArray(j.retire) && !Array.isArray(j.ibond) && !Array.isArray(j.indices) && !Array.isArray(j.sources) && !Array.isArray(j.budgets) && !Array.isArray(j.bills) && !Array.isArray(j.fuel))) throw new Error('Not a Tally import file.');
   if (j.needs && +j.needs > +APP_VERSION) throw new Error('This file needs Tally v' + j.needs + '; this is v' + APP_VERSION + '. Reload to update, then import again.');
   if (+j.year && isClosedYear(+j.year)) throw new Error(j.year + ' is closed: nothing imported.');
   j.accounts = Array.isArray(j.accounts) ? j.accounts : [];
@@ -1112,6 +1124,12 @@ function importFile(j, mode){
   for (const b of (Array.isArray(j.bills) ? j.bills : [])) { if (!b || !b.name) continue;
     const clean = { name:String(b.name).trim(), tags:(Array.isArray(b.tags) ? b.tags : []).map((t)=>String(t).trim()).filter(Boolean) };
     store.bills = store.bills || []; const have = store.bills.find((x)=>same(x.name, clean.name)); if (have) Object.assign(have, clean); else store.bills.push(clean); bills++; touched.add('Bills'); }
+  /* fill-ups: one of the same day and odometer is the same one, the file's figures winning */
+  let fills = 0;
+  for (const f of (Array.isArray(j.fuel) ? j.fuel : [])) { const date = String((f && f.date) || '').slice(0,10), km = Math.round(+(f && f.km)), price = num3(f && f.price), amount = num(f && f.amount);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !(km > 0) || !(price > 0) || !(amount > 0)) continue;
+    const clean = { date, km, price, amount, currency: CURRENCIES.includes(f.currency) ? f.currency : 'EUR' };
+    const have = fuel().find((x)=>x.date===date && x.km===km); if (have) Object.assign(have, clean); else fuel().push({ id: uid(), ...clean }); fills++; touched.add('Fuel'); }
   let srcs = 0;
   for (const k of (Array.isArray(j.dropSources) ? j.dropSources : [])) { const before = (store.sources||[]).length; store.sources = (store.sources||[]).filter((y)=>y.key!==String(k).trim().toUpperCase()); if (store.sources.length !== before) { srcs++; touched.add('Sources'); } }
   for (const x of (Array.isArray(j.sources) ? j.sources : [])) { if (!x || !x.key) continue;
@@ -1228,7 +1246,7 @@ function importFile(j, mode){
   for (const id of (Array.isArray(j.retire) ? j.retire : [])) for (const acc of store.accounts) { const list = opsOf(acc.key), i = list.findIndex((o)=>o.id===String(id));
     if (i>=0) { list.splice(i, 1); touched.add(acc.key); } }
   if (ops) touchUpdated();
-  return { accounts, ops, adjusted, names, rates, levels, srcs, buds, bills, removed, reset, touched:[...touched] };
+  return { accounts, ops, adjusted, names, rates, levels, srcs, buds, bills, fills, removed, reset, touched:[...touched] };
 }
 /* The books' openings against what the app holds: the oldest book sets the
    account's opening; every later book gets an adjustment where it opens at
@@ -1324,9 +1342,9 @@ async function pushNow(everything){
     catch (e) { state.sync={ msg:e.message + ' · nothing written', bad:true }; render(); return; }
   }
   const lists = { Budgets:store.budgets, Bills:store.bills, Sources:store.sources, Insurance:store.insurance };
-  const names = everything ? ['Config','Dismissed'].concat(Object.keys(lists).filter((n)=>(lists[n]||[]).length || dirty().includes(n))).concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
+  const names = everything ? ['Config','Dismissed'].concat(Object.keys(lists).filter((n)=>(lists[n]||[]).length || dirty().includes(n))).concat((store.indices||[]).length ? ['Indices'] : []).concat((store.previsions||[]).length ? ['Prevision'] : []).concat((store.fuel||[]).length ? ['Fuel'] : []).concat(store.accounts.map((a)=>a.key)) : dirty().slice();
   if (!names.length) { state.sync={ msg:'Nothing to send.' }; render(); return; }
-  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : n==='Budgets' ? budgetsTab() : n==='Bills' ? billsTab() : n==='Sources' ? sourcesTab() : n==='Insurance' ? insuranceTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
+  const tabs = names.map((n)=> n==='Config' ? configTab() : n==='Dismissed' ? dismissedTab() : n==='Indices' ? indicesTab() : n==='Prevision' ? previsionTab() : n==='Budgets' ? budgetsTab() : n==='Bills' ? billsTab() : n==='Sources' ? sourcesTab() : n==='Insurance' ? insuranceTab() : n==='Fuel' ? fuelTab() : (store.accounts.find((a)=>a.key===n) ? opsTab(store.accounts.find((a)=>a.key===n)) : null)).filter(Boolean);
   /* The Budgets mirror rides along whenever anything it reflects changed. */
   if (store.budgets.length || names.some((n)=>n!=='Config')) tabs.push(budgetOpsTab());
   state.sync={ msg:'Syncing…' }; render();
@@ -1424,6 +1442,8 @@ async function pullNow(keep, keepMissing){
   store.rates = rateRows(tab('Rates'));
   if (tab('Indices')) store.indices = readIndices(tab('Indices'));
   if (tab('Prevision') && !keep.includes('Prevision')) store.previsions = readPrevision(tab('Prevision'));
+  /* fill-ups: the sheet's, unless this device's wait to go up; Sync against a sheet with no Fuel tab sends this device's */
+  if (!keep.includes('Fuel')) { if (tab('Fuel')) store.fuel = readFuel(tab('Fuel')); else if (keepMissing && (store.fuel||[]).length && !store.locked) { markDirty('Fuel'); pushSoon(); } }
   store.backendVersion=j.backend; store.syncedAt=new Date().toISOString(); save();
   /* what the script fetched since: taken in, and sent on to the record tabs */
   const took = absorbLive(readLive(tab('Live')));
@@ -2743,7 +2763,7 @@ const BILL_COLOR = '#3b82f6';
 const blSeries = (b) => [{ key:'v', label:b.name, color:BILL_COLOR, money:true }];
 function tabBills(){
   const p = state.page;
-  const widget = p && p.kind==='bill' ? billSheet(p) : p && p.kind==='op' ? opSheet(p, opAcct()) : '';
+  const widget = p && p.kind==='bill' ? billSheet(p) : p && p.kind==='fuel' ? fuelSheet(p) : p && p.kind==='op' ? opSheet(p, opAcct()) : '';
   const cur = state.bill && billOf(state.bill);
   if (cur) return widget + billPage(cur);
   state.bill = null;
@@ -2756,6 +2776,68 @@ function tabBills(){
       <thead><tr><th></th>${ys.map((y)=>`<th>${y}</th>`).join('')}</tr></thead>
       <tbody>${list.map((b)=>`<tr class="tap" data-billopen="${esc(b.name)}"><td><b>${esc(b.name)}</b></td>${ys.map((y)=>{ const v = billAvg(b, y); return `<td>${v ? money(v, store.cur) : '<span class="muted">—</span>'}</td>`; }).join('')}</tr>`).join('')}</tbody>
     </table></div><div class="hint" style="margin:4px 0 0">A month, on average.</div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>` + fuelCard();
+}
+/* ------------------------------------------------------------------- gas --
+   The car's fill-ups, each one filling the tank: what it took is what the
+   distance since the one before burned, so a fill-up's L/100 km is its litres
+   over the km since the last. The first one only marks where the odometer
+   started. Each fill-up stays in its own currency (EUR unless said). */
+const fuel = () => store.fuel || (store.fuel = []);
+const fuelSorted = () => fuel().slice().sort((x,y)=> x.date<y.date ? -1 : x.date>y.date ? 1 : x.km-y.km);
+const fuelLitres = (f) => Math.round(f.amount / f.price * 100) / 100;
+/* each fill-up with the km since the one before and its L/100 km */
+function fuelRows(){
+  const list = fuelSorted();
+  return list.map((f, i)=>{ const prev = list[i-1], dist = prev ? f.km - prev.km : 0, l = fuelLitres(f);
+    return { f, l, dist, per: dist > 0 ? Math.round(l / dist * 1000) / 10 : null }; });
+}
+/* over every fill-up after the first: L/100 km, cost a 100 km, km and cost a month */
+function fuelSummary(){
+  const rows = fuelRows(); if (rows.length < 2) return null;
+  const first = rows[0].f, last = rows[rows.length-1].f, dist = last.km - first.km;
+  if (!(dist > 0)) return null;
+  const after = rows.slice(1), litres = after.reduce((t,r)=>t+r.l, 0), paid = after.reduce((t,r)=>t+r.f.amount, 0);
+  const days = Math.max(1, (Date.parse(last.date) - Date.parse(first.date)) / 864e5), month = 365.25 / 12;
+  return { per: Math.round(litres / dist * 1000) / 10, cost100: r2(paid / dist * 100), kmMonth: Math.round(dist / days * month), costMonth: r2(paid / days * month), dist, litres: r2(litres), paid: r2(paid), cur: last.currency || 'EUR' };
+}
+const fuelPrice = (v, cur) => (SYM[cur]||'') + v.toFixed(3);
+const kmFmt = (v) => Math.round(v).toLocaleString('en-US');
+function fuelCard(){
+  const rows = fuelRows().reverse(), s = fuelSummary();
+  return `
+  <div class="card">
+    <h2>Gas <button class="gbtn" data-fuelnew="1"${LK()}>+</button></h2>
+    ${s ? `<div class="hero">${s.per.toFixed(1)} <span style="font-size:15px;font-weight:600">L/100 km</span></div>
+    <div class="herosub">${money(s.cost100, s.cur)} a 100 km · ${kmFmt(s.kmMonth)} km and ${money(s.costMonth, s.cur)} a month</div>` : ''}
+    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
+      <thead><tr><th>Date</th><th>Km</th><th>Litres</th><th>Price</th><th>Paid</th><th>L/100</th></tr></thead>
+      <tbody>${rows.map((r)=>`<tr class="tap" data-fueledit="${esc(r.f.id)}"><td>${esc(dLabel(r.f.date))}</td><td>${kmFmt(r.f.km)}${r.dist ? `<div class="muted" style="font-size:11px">+${kmFmt(r.dist)}</div>` : ''}</td><td>${r.l.toFixed(2)}</td><td>${fuelPrice(r.f.price, r.f.currency)}</td><td>${money(r.f.amount, r.f.currency)}</td><td>${r.per!=null ? '<b>' + r.per.toFixed(1) + '</b>' : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody>
+    </table></div><div class="hint" style="margin:4px 0 0">Fill the tank each time: a fill-up's L/100 km is its litres over the km since the one before.</div>`
+    : `<div class="hint" style="margin-top:0">Nothing yet. + adds a fill-up: the day, the odometer, the price of a litre and what you paid.</div>`}
+  </div>`;
+}
+const fuelDirty = (p) => JSON.stringify([p.date, String(p.km), String(p.price), String(p.amount)]) !== JSON.stringify([p.was.date, String(p.was.km), String(p.was.price), String(p.was.amount)]);
+const fuelPreview = (p) => { const pr = num3(p.price), am = num(p.amount); return pr > 0 && am > 0 ? (Math.round(am / pr * 100) / 100).toFixed(2) + ' L' : '—'; };
+function fuelSheet(p){
+  const isNew = p.index==null;
+  return `
+  <div class="sheetwrap">
+    <div class="scrim" data-fuelclose="1"></div>
+    <div class="sheet${p.fresh?' enter':''}">
+      <h3>${isNew?'New fill-up':'Fill-up of ' + esc(dLabel(p.was.date))}</h3>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Date</label><input id="fuDate" type="date" value="${esc(p.date)}"></div>
+        <div class="field" style="flex:1"><label>Odometer (km)</label><input id="fuKm" inputmode="numeric" value="${esc(p.km)}" placeholder="20844"></div>
+      </div>
+      <div class="btnrow">
+        <div class="field" style="flex:1"><label>Price a litre (${esc(SYM[p.currency]||p.currency)})</label><input id="fuPrice" inputmode="decimal" value="${esc(p.price)}" placeholder="2.037"></div>
+        <div class="field" style="flex:1"><label>Paid (${esc(SYM[p.currency]||p.currency)})</label><input id="fuAmt" inputmode="decimal" value="${esc(p.amount)}" placeholder="95.05"></div>
+      </div>
+      <div class="hint" style="margin-top:0">Litres: <b id="fuL">${fuelPreview(p)}</b></div>
+      ${isNew?'':`<button class="btn danger ${p.delArm?'arm':''}" style="width:100%" data-fueldelete="${esc(p.id)}">${p.delArm?'Delete?':'Delete'}</button>`}
+      <div class="foot"><button class="btn close ${p.closeArm?'arm':''}" data-fuelclose="1">${p.closeArm?'Close?':'Close'}</button><button class="btn primary" data-fuelsave="1">Save</button></div>
+    </div>
   </div>`;
 }
 function billPage(b){
@@ -5543,7 +5625,7 @@ function settingsData(){
     ${state.pending.files.length>1?`<div class="sub" style="margin:8px 0 2px;font-size:11px;text-transform:uppercase;letter-spacing:.6px;color:var(--muted)">${esc(f.name)}</div>`:''}
     <div class="rows">${f.list.map((a)=>`
       <div class="row"><span class="k"><b>${esc(a.key)}</b> <span class="muted" style="font-size:11.5px">${esc(a.currency)}${a.exists?' · already here':''}</span></span>
-        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':Array.isArray(f.file.sources)?f.file.sources.length+' retirement sources':Array.isArray(f.file.budgets)||Array.isArray(f.file.bills)?(f.file.budgets||[]).length+' budgets, '+(f.file.bills||[]).length+' bills':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
+        <span class="v">${a.n}</span></div>`).join('')}${f.list.length?'':`<div class="hint" style="margin:0">${Array.isArray(f.file.ibond)?f.file.ibond.length+' rate announcements':Array.isArray(f.file.indices)?f.file.indices.length+' index levels':Array.isArray(f.file.sources)?f.file.sources.length+' retirement sources':Array.isArray(f.file.fuel)&&!Array.isArray(f.file.budgets)&&!Array.isArray(f.file.bills)?f.file.fuel.length+' fill-ups':Array.isArray(f.file.budgets)||Array.isArray(f.file.bills)?(f.file.budgets||[]).length+' budgets, '+(f.file.bills||[]).length+' bills':(f.file.names||[]).length+' known names'}</div>`}</div>`).join('') + `
     <div style="margin-top:8px"><button class="chip" data-importmode="${state.importMode==='all'?'figures':'all'}" style="padding:2px 9px;font-size:11.5px"${LK()}>${state.importMode==='all'?'The book wins':'Keep my edits'}</button></div>
     <div class="btnrow" style="margin-top:8px">
       <button class="btn" data-importcancel="1" style="flex:0 0 auto;min-width:92px">Cancel</button>
@@ -5870,9 +5952,9 @@ function wire(){
     const pend=state.pending; if (!pend) return;
     try {
       const got = { accounts:0, ops:0, adjusted:0, names:0, removed:0, reset:0, touched:new Set() };
-      for (const f of pend.files) { const r = importFile(f.file, state.importMode); got.accounts+=r.accounts; got.removed+=r.removed||0; got.reset+=r.reset||0; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); got.buds=(got.buds||0)+(r.buds||0); got.bills=(got.bills||0)+(r.bills||0); for (const t of r.touched) got.touched.add(t); }
+      for (const f of pend.files) { const r = importFile(f.file, state.importMode); got.accounts+=r.accounts; got.removed+=r.removed||0; got.reset+=r.reset||0; got.ops+=r.ops; got.adjusted+=r.adjusted; got.names+=r.names; got.rates=(got.rates||0)+r.rates; got.levels=(got.levels||0)+(r.levels||0); got.srcs=(got.srcs||0)+(r.srcs||0); got.buds=(got.buds||0)+(r.buds||0); got.bills=(got.bills||0)+(r.bills||0); got.fills=(got.fills||0)+(r.fills||0); for (const t of r.touched) got.touched.add(t); }
       state.pending=null;
-      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.removed?', '+got.removed+' taken out':'')+(got.reset?', '+got.reset+' reset to the book':'')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'')+(got.buds?', '+got.buds+' budget'+(got.buds===1?'':'s'):'')+(got.bills?', '+got.bills+' bill'+(got.bills===1?'':'s'):'') };
+      state.imp={ msg:'Imported '+(pend.files.length>1?pend.files.length+' files: ':'')+got.accounts+' account'+(got.accounts===1?'':'s')+', '+got.ops+' operation'+(got.ops===1?'':'s')+(got.removed?', '+got.removed+' taken out':'')+(got.reset?', '+got.reset+' reset to the book':'')+(got.adjusted?', '+got.adjusted+' opening adjustment'+(got.adjusted===1?'':'s'):'')+(got.names?', '+got.names+' known name'+(got.names===1?'':'s'):'')+(got.rates?', '+got.rates+' rate announcement'+(got.rates===1?'':'s'):'')+(got.levels?', '+got.levels+' index level'+(got.levels===1?'':'s'):'')+(got.srcs?', '+got.srcs+' retirement source'+(got.srcs===1?'':'s'):'')+(got.buds?', '+got.buds+' budget'+(got.buds===1?'':'s'):'')+(got.bills?', '+got.bills+' bill'+(got.bills===1?'':'s'):'')+(got.fills?', '+got.fills+' fill-up'+(got.fills===1?'':'s'):'') };
       commit(...got.touched);
     } catch (e) { state.pending=null; state.imp={ msg:e.message, bad:true }; render(); } });
 
@@ -6477,6 +6559,30 @@ function wire(){
     state.page=null; commit('Bills'); });
   document.querySelectorAll('[data-billdelete]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
     bills().splice(+el.dataset.billdelete, 1); state.bill=null; state.page=null; commit('Bills'); });
+  /* gas: fill-ups */
+  const FU_FIELDS = [['fuDate','date'], ['fuKm','km'], ['fuPrice','price'], ['fuAmt','amount']];
+  const readFuelForm = () => { for (const [id, k] of FU_FIELDS) { const n = document.getElementById(id); if (n) state.page[k] = n.value; } };
+  const openFuel = (id) => { const i = id==null ? -1 : fuel().findIndex((f)=>f.id===id), f = i<0 ? null : fuel()[i], last = fuelSorted().slice(-1)[0];
+    const cur = f ? { date:f.date, km:String(f.km), price:String(f.price), amount:String(f.amount) } : { date:TODAY(), km:'', price:'', amount:'' };
+    state.page={ kind:'fuel', index: f ? i : null, id: f ? f.id : null, currency: f ? (f.currency||'EUR') : (last && last.currency) || 'EUR', ...cur, was:{ ...cur }, closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
+  document.querySelectorAll('[data-fuelnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFuel(null); });
+  document.querySelectorAll('[data-fueledit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openFuel(el.dataset.fueledit); });
+  if (state.page && state.page.kind==='fuel') for (const [id, k] of FU_FIELDS) { const n = document.getElementById(id); if (n) n.oninput=()=>{ state.page[k]=n.value; state.page.closeArm=false; state.page.delArm=false; const l = document.getElementById('fuL'); if (l) l.textContent = fuelPreview(state.page); }; }
+  document.querySelectorAll('[data-fuelclose]').forEach((el)=>el.onclick=()=>{ readFuelForm(); const p=state.page; if (fuelDirty(p) && !p.closeArm) { p.closeArm=true; p.delArm=false; render(); return; } state.page=null; render(); });
+  document.querySelectorAll('[data-fuelsave]').forEach((el)=>el.onclick=()=>{ readFuelForm(); const p=state.page;
+    const date = String(p.date||'').slice(0,10), km = Math.round(+String(p.km).replace(/[\s,]/g, '')), price = num3(p.price), amount = num(p.amount);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) { alert('A date.'); render(); return; }
+    if (!(km > 0)) { alert('The odometer, in km.'); render(); return; }
+    if (!(price > 0)) { alert('The price of a litre.'); render(); return; }
+    if (!(amount > 0)) { alert('What you paid.'); render(); return; }
+    const others = fuel().filter((f)=>f.id!==p.id), before = others.filter((f)=>f.date<date).sort((x,y)=>y.km-x.km)[0], after = others.filter((f)=>f.date>date).sort((x,y)=>x.km-y.km)[0];
+    if (others.some((f)=>f.date===date && f.km===km)) { alert('That fill-up is here already.'); render(); return; }
+    if ((before && km <= before.km) || (after && km >= after.km)) { alert('The odometer must read more than the fill-up before (' + (before ? kmFmt(before.km) : '—') + ' km) and less than the one after (' + (after ? kmFmt(after.km) : '—') + ' km).'); render(); return; }
+    const f = { id: p.id || uid(), date, km, price, amount, currency: p.currency || 'EUR' };
+    if (p.index==null) fuel().push(f); else fuel()[p.index] = f;
+    state.page=null; commit('Fuel'); });
+  document.querySelectorAll('[data-fueldelete]').forEach((el)=>el.onclick=()=>{ const p=state.page; if (!p.delArm) { p.delArm=true; p.closeArm=false; render(); return; }
+    store.fuel = fuel().filter((f)=>f.id!==el.dataset.fueldelete); state.page=null; commit('Fuel'); });
 
   /* previsions */
   const pvCur = () => state.prev && prevById(state.prev);
