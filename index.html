@@ -387,9 +387,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=198"></script>
+<script src="backend.js?v=199"></script>
 <script>
-const APP_VERSION="198";
+const APP_VERSION="199";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -2767,16 +2767,21 @@ function tabBills(){
   const cur = state.bill && billOf(state.bill);
   if (cur) return widget + billPage(cur);
   state.bill = null;
+  if (state.gas) return widget + gasPage();
   const Y = theYear(), ys = [Y-2, Y-1, Y];
-  const list = bills().slice().sort((x,y)=>x.name.localeCompare(y.name));
+  const cell = (v) => `<td>${v ? money(v, store.cur) : '<span class="muted">—</span>'}</td>`;
+  /* the bills and Gas, one row each, by name */
+  const list = bills().map((b)=>({ name:b.name, html:`<tr class="tap" data-billopen="${esc(b.name)}"><td><b>${esc(b.name)}</b></td>${ys.map((y)=>cell(billAvg(b, y))).join('')}</tr>` }))
+    .concat([{ name:'Gas', html:`<tr class="tap" data-gasopen="1"><td><b>Gas</b></td>${ys.map((y)=>cell(gasAvg(y))).join('')}</tr>` }])
+    .sort((x,y)=>x.name.localeCompare(y.name));
   return widget + `
   <div class="card">
     <h2>Bills <button class="gbtn" data-billnew="1"${LK()}>+</button></h2>
-    ${list.length ? `<div style="overflow-x:auto"><table class="fx">
+    <div style="overflow-x:auto"><table class="fx">
       <thead><tr><th></th>${ys.map((y)=>`<th>${y}</th>`).join('')}</tr></thead>
-      <tbody>${list.map((b)=>`<tr class="tap" data-billopen="${esc(b.name)}"><td><b>${esc(b.name)}</b></td>${ys.map((y)=>{ const v = billAvg(b, y); return `<td>${v ? money(v, store.cur) : '<span class="muted">—</span>'}</td>`; }).join('')}</tr>`).join('')}</tbody>
-    </table></div><div class="hint" style="margin:4px 0 0">A month, on average.</div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
-  </div>` + fuelCard();
+      <tbody>${list.map((r)=>r.html).join('')}</tbody>
+    </table></div><div class="hint" style="margin:4px 0 0">A month, on average.</div>
+  </div>`;
 }
 /* ------------------------------------------------------------------- gas --
    The car's fill-ups, each one filling the tank: what it took is what the
@@ -2803,19 +2808,47 @@ function fuelSummary(){
 }
 const fuelPrice = (v, cur) => (SYM[cur]||'') + v.toFixed(3);
 const kmFmt = (v) => Math.round(v).toLocaleString('en-US');
-function fuelCard(){
-  const rows = fuelRows().reverse(), s = fuelSummary();
+/* what the fill-ups of a year cost a month, in the shown currency, the way a bill's is read */
+const gasAvg = (year) => r2(fuel().filter((f)=>f.date.slice(0,4)===String(year)).reduce((t,f)=>t + (conv(f.amount, f.currency||'EUR', store.cur, f.date.slice(0,7)) || 0), 0) / monthsIn(year));
+const GAS_COLORS = { per:'#4ade80', price:'#fbbf24' };
+/* a line through the fill-ups, one point each, in time order */
+function gasChart(pts, key, label, fmt){
+  return pts.length > 1 ? rangePlot(pts, [{ key, label, color:GAS_COLORS[key], fmt }], 0, pts.length-1)
+    : `<div class="hint" style="margin-top:0">${key==='per' ? 'Three fill-ups draw the line: the first only marks where the odometer started.' : 'Two fill-ups draw the line.'}</div>`;
+}
+const dShort = (d) => +d.slice(8,10) + ' ' + MON[+d.slice(5,7)-1];
+function gasPage(){
+  const all = fuelRows(), rows = all.slice().reverse(), s = fuelSummary(), cur = (s && s.cur) || 'EUR';
+  const perPts = all.filter((r)=>r.per!=null).map((r)=>({ label:dShort(r.f.date), values:{ per:r.per } }));
+  const pricePts = all.map((r)=>({ label:dShort(r.f.date), values:{ price:r.f.price } }));
+  const prices = all.map((r)=>r.f.price), pers = perPts.map((p)=>p.values.per);
+  /* the unit, then the lowest and highest, in one label beside the title */
+  const span = (unit, v, f) => `<span class="muted" style="text-transform:none;letter-spacing:0">${unit}${v.length > 1 ? ' · ' + f(Math.min(...v)) + ' – ' + f(Math.max(...v)) : ''}</span>`;
   return `
   <div class="card">
-    <h2>Gas <button class="gbtn" data-fuelnew="1"${LK()}>+</button></h2>
+    <h2><span style="text-transform:none;letter-spacing:0;font-size:14px;color:var(--txt)"><b>Gas</b></span>
+      <button class="gbtn" data-fuelnew="1"${LK()}>+</button></h2>
     ${s ? `<div class="hero">${s.per.toFixed(1)} <span style="font-size:15px;font-weight:600">L/100 km</span></div>
-    <div class="herosub">${money(s.cost100, s.cur)} a 100 km · ${kmFmt(s.kmMonth)} km and ${money(s.costMonth, s.cur)} a month</div>` : ''}
-    ${rows.length ? `<div style="overflow-x:auto"><table class="fx">
+    <div class="herosub">${money(s.cost100, s.cur)} a 100 km · ${kmFmt(s.kmMonth)} km and ${money(s.costMonth, s.cur)} a month</div>`
+      : `<div class="hint" style="margin-top:0">${rows.length ? 'One more fill-up and the consumption shows.' : 'Nothing yet. + adds a fill-up: the day, the odometer, the price of a litre and what you paid.'}</div>`}
+  </div>
+  ${rows.length ? `<div class="card">
+    <h2><span>Consumption ${span('L/100 km', pers, (v)=>v.toFixed(1))}</span></h2>
+    ${gasChart(perPts, 'per', 'L/100 km', (v)=>v.toFixed(1))}
+  </div>
+  <div class="card">
+    <h2><span>Price a litre ${span(esc(SYM[cur]||cur), prices, (v)=>v.toFixed(3))}</span></h2>
+    ${gasChart(pricePts, 'price', 'Price a litre', (v)=>v.toFixed(3))}
+  </div>
+  <div class="card">
+    <h2>Fill-ups <span class="muted" style="text-transform:none;letter-spacing:0">${rows.length}</span></h2>
+    <div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>Date</th><th>Km</th><th>Litres</th><th>Price</th><th>Paid</th><th>L/100</th></tr></thead>
       <tbody>${rows.map((r)=>`<tr class="tap" data-fueledit="${esc(r.f.id)}"><td>${esc(dLabel(r.f.date))}</td><td>${kmFmt(r.f.km)}${r.dist ? `<div class="muted" style="font-size:11px">+${kmFmt(r.dist)}</div>` : ''}</td><td>${r.l.toFixed(2)}</td><td>${fuelPrice(r.f.price, r.f.currency)}</td><td>${money(r.f.amount, r.f.currency)}</td><td>${r.per!=null ? '<b>' + r.per.toFixed(1) + '</b>' : '<span class="muted">—</span>'}</td></tr>`).join('')}</tbody>
-    </table></div><div class="hint" style="margin:4px 0 0">Fill the tank each time: a fill-up's L/100 km is its litres over the km since the one before.</div>`
-    : `<div class="hint" style="margin-top:0">Nothing yet. + adds a fill-up: the day, the odometer, the price of a litre and what you paid.</div>`}
-  </div>`;
+    </table></div><div class="hint" style="margin:4px 0 0">Fill the tank each time: a fill-up's L/100 km is its litres over the km since the one before.</div>
+  </div>` : ''}
+  <div style="height:56px"></div>
+  <div class="closebar"><button class="btn" data-gasback="1">Close</button></div>`;
 }
 const fuelDirty = (p) => JSON.stringify([p.date, String(p.km), String(p.price), String(p.amount)]) !== JSON.stringify([p.was.date, String(p.was.km), String(p.was.price), String(p.was.amount)]);
 const fuelPreview = (p) => { const pr = num3(p.price), am = num(p.amount); return pr > 0 && am > 0 ? (Math.round(am / pr * 100) / 100).toFixed(2) + ' L' : '—'; };
@@ -6537,8 +6570,10 @@ function wire(){
     state.page={ kind:'bill', index, ...cur, was:JSON.parse(JSON.stringify(cur)), closeArm:false, delArm:false, fresh:true }; render(); state.page.fresh=false; };
   document.querySelectorAll('[data-billnew]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBill(null); });
   document.querySelectorAll('[data-billedit]').forEach((el)=>el.onclick=()=>{ if (!store.locked) openBill(bills().findIndex((b)=>same(b.name, el.dataset.billedit))); });
-  document.querySelectorAll('[data-billopen]').forEach((el)=>el.onclick=()=>{ state.bill=el.dataset.billopen; state.blView='year'; state.blLo=state.blHi=null; state.page=null; render(); });
+  document.querySelectorAll('[data-billopen]').forEach((el)=>el.onclick=()=>{ state.gas=false; state.bill=el.dataset.billopen; state.blView='year'; state.blLo=state.blHi=null; state.page=null; render(); });
   document.querySelectorAll('[data-billback]').forEach((el)=>el.onclick=()=>{ state.bill=null; state.page=null; render(); });
+  document.querySelectorAll('[data-gasopen]').forEach((el)=>el.onclick=()=>{ state.gas=true; state.bill=null; state.page=null; render(); });
+  document.querySelectorAll('[data-gasback]').forEach((el)=>el.onclick=()=>{ state.gas=false; state.page=null; render(); });
   document.querySelectorAll('[data-blview]').forEach((el)=>el.onclick=()=>{ state.blView=el.dataset.blview; state.blLo=state.blHi=null; render(); });
   if (state.tab==='report' && state.bill && state.blView==='history') { const b = billOf(state.bill);
     if (b) wireRangeChart('bl', billMonths(b), blSeries(b), ()=>({ lo:state.blLo, hi:state.blHi }), (lo,hi)=>{ state.blLo=lo; state.blHi=hi; }); }
