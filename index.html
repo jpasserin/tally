@@ -387,9 +387,9 @@
 </div>
 <nav id="nav"></nav>
 
-<script src="backend.js?v=200"></script>
+<script src="backend.js?v=201"></script>
 <script>
-const APP_VERSION="200";
+const APP_VERSION="201";
 const BK = window.TallyBackend;
 
 /* ------------------------------------------------------------------ store --
@@ -3732,15 +3732,15 @@ function lifeSummary(a, Y){
   const dates = [...new Set([...g.map((x)=>x[0]), ...ill.map((x)=>x[0])])].sort();
   return `
   <div class="card">
-    <h2>Policy</h2>
-    ${rows.length ? `<div class="rows">${rows.map(([k,v])=>`<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No policy details yet.</div>`}
-  </div>
-  <div class="card">
     <h2>By year <span class="muted" style="text-transform:none;letter-spacing:0">${esc(a.currency)}</span></h2>
     ${years.length ? `<div style="overflow-x:auto"><table class="fx">
       <thead><tr><th>Year</th><th>Paid in</th><th>Cash value</th><th>Growth</th><th>Death benefit</th></tr></thead>
       <tbody>${years.map(yrow).map((r)=>`<tr><td>${r.y}</td><td>${money(r.paid, a.currency)}</td><td><b>${money(r.cash, a.currency)}</b></td><td style="color:${r.growth<0?'var(--bad)':'var(--good)'}">${money(r.growth, a.currency)}</td><td>${r.benefit?money(r.benefit, a.currency):'—'}</td></tr>`).join('')}</tbody>
     </table></div>` : `<div class="hint" style="margin-top:0">Nothing yet.</div>`}
+  </div>
+  <div class="card">
+    <h2>Policy</h2>
+    ${rows.length ? `<div class="rows">${rows.map(([k,v])=>`<div class="row" style="display:block"><div class="sub" style="text-transform:uppercase;letter-spacing:.4px;font-size:10px">${esc(k)}</div><div class="k" style="white-space:normal">${esc(v)}</div></div>`).join('')}</div>` : `<div class="hint" style="margin-top:0">No policy details yet.</div>`}
   </div>
   ${g.length ? `
   <div class="card">
